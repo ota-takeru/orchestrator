@@ -79,6 +79,7 @@ func runBootstrap(ctx context.Context, args []string, stdout io.Writer) int {
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
 	adapter := fs.String("adapter", "fake", "fake or codex")
+	profile := fs.String("profile", "", "single-environment, windows-primary, wsl-primary, or hybrid")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -119,6 +120,17 @@ func runBootstrap(ctx context.Context, args []string, stdout io.Writer) int {
 	if err := db.SaveToolchainReport(ctx, project.ID, toolchainReport); err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
 	}
+	var runProfile any
+	if strings.TrimSpace(*profile) != "" {
+		mode, err := parsePlatformMode(*profile)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+		}
+		runProfile, err = db.ConfigureFakeRunProfile(ctx, project.ID, mode, initResult.ProjectRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
+		}
+	}
 
 	records, err := generateBootstrapArtifacts(ctx, db, project.ID, initResult.ProjectRoot)
 	if err != nil {
@@ -156,6 +168,7 @@ func runBootstrap(ctx context.Context, args []string, stdout io.Writer) int {
 	}
 	result := map[string]any{
 		"project":     project,
+		"profile":     runProfile,
 		"artifacts":   records,
 		"tasks":       tasks,
 		"run":         runResult,
@@ -681,6 +694,8 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", env.ID, env.OSFamily, env.Shell, env.ProjectRoot)
 		return 0
+	case "profile":
+		return runPlatformProfile(ctx, args[1:], stdout, stderr)
 	case "doctor":
 		fs := flag.NewFlagSet("platform doctor", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -710,6 +725,88 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 	}
 }
 
+func runPlatformProfile(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing platform profile subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "set":
+		fs := flag.NewFlagSet("platform profile set", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("profile mode is required"))
+		}
+		mode, err := parsePlatformMode(fs.Arg(0))
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_profile", err)
+		}
+		db, projectID, root, errCode, err := openMigratedProjectDBWithRoot(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "profile_set_failed", err)
+		}
+		defer db.Close()
+		profile, err := db.ConfigureFakeRunProfile(ctx, projectID, mode, root)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "profile_set_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, profile, 0)
+		}
+		fmt.Fprintf(stdout, "Profile active: %s\n", profile.Name)
+		return 0
+	case "list":
+		fs := flag.NewFlagSet("platform profile list", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "profile_list_failed", err)
+		}
+		defer db.Close()
+		profiles, err := db.ListRunProfiles(ctx, projectID)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "profile_list_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, map[string]any{"profiles": profiles}, 0)
+		}
+		for _, profile := range profiles {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", profile.Name, profile.Mode, profile.Status, profile.PrimaryEnvironmentID)
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown platform profile subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func parsePlatformMode(input string) (platform.PlatformMode, error) {
+	switch strings.TrimSpace(input) {
+	case "single-environment", "single_environment":
+		return platform.PlatformModeSingleEnvironment, nil
+	case "windows-primary", "windows_primary":
+		return platform.PlatformModeWindowsPrimary, nil
+	case "wsl-primary", "wsl_primary":
+		return platform.PlatformModeWSLPrimary, nil
+	case "hybrid":
+		return platform.PlatformModeHybrid, nil
+	default:
+		return "", fmt.Errorf("unknown platform profile: %s", input)
+	}
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  devos init [--project-root PATH] [--data-root PATH] [--json] CONCEPT")
@@ -720,13 +817,15 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
-	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] [CONCEPT]")
+	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
+	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
 }
 

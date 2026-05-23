@@ -210,6 +210,22 @@ func TestEnvStatusCLI(t *testing.T) {
 	}
 }
 
+func TestVerifyCLIWithFakeAdapter(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Verify workflow")
+	seedCLIVerifyingTask(t, ctx, dataRoot, projectRoot)
+	out := runCLI(t, "verify", "--project-root", projectRoot, "--data-root", dataRoot, "--adapter", "fake", "--json", "TASK-VERIFY")
+	var result storage.VerifyTaskResult
+	decodeJSON(t, out, &result)
+	if result.TaskStatus != "ready_for_human_review" || result.VerificationRun == "" {
+		t.Fatalf("verify result = %#v", result)
+	}
+}
+
 func TestPlatformMapAddCLI(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()
@@ -442,6 +458,25 @@ INSERT INTO verification_results(
 		Evidence: map[string]any{"run_id": "RUN-001"},
 	}}
 	if err := db.SaveGateResults(ctx, projectID, ptr("TASK-001"), "RUN-001", gates); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedCLIVerifyingTask(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO tasks(
+  id, project_id, status, title, base_branch, created_at, updated_at
+) VALUES ('TASK-VERIFY', ?, 'verifying', 'Verify CLI workflow', 'main', ?, ?)`,
+		projectID, now, now,
+	); err != nil {
 		t.Fatal(err)
 	}
 }

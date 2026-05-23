@@ -155,6 +155,10 @@ func insertCommandEvent(ctx context.Context, tx *sql.Tx, projectID string, runID
 	if err != nil {
 		return err
 	}
+	detectedRisks, err := json.Marshal(result.DetectedRisks)
+	if err != nil {
+		return err
+	}
 	if commandKind == "" {
 		commandKind = "verification"
 	}
@@ -183,10 +187,10 @@ INSERT INTO command_events(
   id, project_id, run_id, environment_id, command_kind, runner, cwd, argv_json,
   shell_invocation, network_policy, exit_code, status, detected_risks_json,
   stdout_artifact_id, stderr_artifact_id, created_at, updated_at, started_at, completed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		commandEventID, projectID, runID, command.EnvironmentID, commandKind, command.Runner, command.WorkingDir,
 		string(argv), boolInt(command.Runner != "direct"), command.NetworkPolicy, result.ExitCode, status,
-		stdoutValue, stderrValue, now, now, startedAt, completedAt,
+		string(detectedRisks), stdoutValue, stderrValue, now, now, startedAt, completedAt,
 	)
 	return err
 }

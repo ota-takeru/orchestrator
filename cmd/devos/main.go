@@ -53,6 +53,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runTasks(ctx, args[1:], stdout, stderr)
 	case "run":
 		return runTaskCommand(ctx, args[1:], stdout)
+	case "verify":
+		return runVerify(ctx, args[1:], stdout)
 	case "bootstrap":
 		return runBootstrap(ctx, args[1:], stdout)
 	case "platform":
@@ -264,6 +266,40 @@ func runTaskCommand(ctx context.Context, args []string, stdout io.Writer) int {
 	default:
 		return writeError(stdout, *jsonOut, exitValidation, "unsupported_adapter", fmt.Errorf("unsupported adapter: %s", *adapter))
 	}
+}
+
+func runVerify(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	adapter := fs.String("adapter", "local", "local or fake")
+	environmentID := fs.String("env", "", "execution environment id")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "verify_failed", err)
+	}
+	defer db.Close()
+	result, err := db.VerifyTask(ctx, projectID, fs.Arg(0), storage.VerifyTaskInput{
+		Adapter:       *adapter,
+		EnvironmentID: *environmentID,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "verify_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Verification complete: %s -> %s\n", result.TaskID, result.TaskStatus)
+	fmt.Fprintf(stdout, "Run: %s\n", result.VerificationRun)
+	return 0
 }
 
 func runTasks(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -1553,6 +1589,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos verify [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos inbox approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] INBOX_ID")

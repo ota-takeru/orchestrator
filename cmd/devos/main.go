@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/preflight"
+	"github.com/ota-takeru/orchestrator/internal/storage"
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
 
@@ -57,6 +59,7 @@ func runInit(ctx context.Context, args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -66,11 +69,40 @@ func runInit(ctx context.Context, args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "init_failed", err)
 	}
+	toolchainReport := toolchains.RunDoctor(ctx, result.PreflightReport.Environment, toolchains.Options{IncludeCodex: false})
+	db, dbPath, err := openProjectDB(ctx, result.ProjectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "storage_open_failed", err)
+	}
+	defer db.Close()
+	migrations, err := storage.RegisteredMigrations()
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "migration_registry_failed", err)
+	}
+	if err := db.Migrate(ctx, migrations); err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "migration_failed", err)
+	}
+	projectRecord, err := db.SaveProjectInit(ctx, storage.ProjectInitInput{
+		RootPath:        result.ProjectRoot,
+		Environment:     result.PreflightReport.Environment,
+		PreflightReport: result.PreflightReport,
+		ToolchainReport: &toolchainReport,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "project_save_failed", err)
+	}
 	if *jsonOut {
-		return writeJSON(stdout, result, exitFromPreflight(result.PreflightReport))
+		return writeJSON(stdout, map[string]any{
+			"project":          projectRecord,
+			"database_path":    dbPath,
+			"init_result":      result,
+			"toolchain_report": toolchainReport,
+		}, exitFromPreflight(result.PreflightReport))
 	}
 
 	fmt.Fprintf(stdout, "Project initialized: %s\n", result.ProjectRoot)
+	fmt.Fprintf(stdout, "Project record: %s\n", projectRecord.ID)
+	fmt.Fprintf(stdout, "Database: %s\n", dbPath)
 	for _, path := range result.CreatedPaths {
 		fmt.Fprintf(stdout, "created: %s\n", path)
 	}
@@ -154,7 +186,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
-	fmt.Fprintln(w, "  devos init [--project-root PATH] [--json] CONCEPT")
+	fmt.Fprintln(w, "  devos init [--project-root PATH] [--data-root PATH] [--json] CONCEPT")
 	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
@@ -181,6 +213,21 @@ func exitFromToolchainDoctor(report toolchains.Report) int {
 		return exitPolicy
 	}
 	return 0
+}
+
+func openProjectDB(ctx context.Context, projectRoot string, dataRoot string) (*storage.DB, string, error) {
+	if strings.TrimSpace(dataRoot) == "" {
+		dataRoot = filepath.Join(projectRoot, "orchestrator-data")
+	}
+	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
+		return nil, "", err
+	}
+	dbPath := filepath.Join(dataRoot, "devos.sqlite")
+	db, err := storage.Open(ctx, dbPath)
+	if err != nil {
+		return nil, "", err
+	}
+	return db, dbPath, nil
 }
 
 func writeJSON(w io.Writer, v any, code int) int {

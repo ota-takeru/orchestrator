@@ -22,7 +22,7 @@
 | 0 | Canonical Docs and Authority | 100% | 完了 | `474b591`, `8413a1d`, `7fad1c4` | context builderを実ワークフローへ接続する |
 | 0.25 | Platform Model Docs | 100% | 完了 | `474b591` | platform modelを実装sliceでDB / runner contractへ反映する |
 | 0.5 | Project Trust / Platform-aware Preflight | 65% | 進行中 | `c77f689`, `11603b3`, `b4129d6` | preflight結果とtoolchain doctor結果の永続化、setup card projectionへ進む |
-| 1 | Core Storage, Platform Tables, State Machines | 25% | 進行中 | `c77f689`, `ff4e1bb` | SQLite driver接続、repository transaction、Go enum/state machineとDB CHECKの整合テストを追加する |
+| 1 | Core Storage, Platform Tables, State Machines | 30% | 進行中 | `c77f689`, `ff4e1bb`, `90d6cb0` | SQLite driver接続、repository transaction、DB CHECKの実行時検証を追加する |
 | 1.5 | Schema Registry and Validation | 0% | 未着手 | なし | Slice 1のDB基盤後に着手する |
 | 2 | Artifact Lifecycle + Approval | 0% | 未着手 | なし | artifact versioningとapproval source of truthを実装する |
 | 2.25 | Runner and Platform Foundation | 40% | 進行中 | `019d1a9`, `f2309f3` | command_events保存、verification_results永続化、platform doctorとの統合へ進む |

@@ -1229,7 +1229,9 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		fs := flag.NewFlagSet("platform doctor", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
 		includeCodex := fs.Bool("include-codex", false, "include real Codex adapter preflight")
+		save := fs.Bool("save", false, "save toolchain requirements and setup cards")
 		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 		if err := fs.Parse(args[1:]); err != nil {
 			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -1240,6 +1242,16 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		}
 		env := platform.DetectHostEnvironment(root)
 		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: *includeCodex})
+		if *save {
+			db, projectID, errCode, err := openMigratedProjectDB(ctx, root, *dataRoot)
+			if err != nil {
+				return writeError(stdout, *jsonOut, errCode, "platform_doctor_save_failed", err)
+			}
+			defer db.Close()
+			if err := db.SaveToolchainReport(ctx, projectID, report); err != nil {
+				return writeError(stdout, *jsonOut, exitStorage, "platform_doctor_save_failed", err)
+			}
+		}
 		if *jsonOut {
 			return writeJSON(stdout, report, exitFromToolchainDoctor(report))
 		}
@@ -1421,7 +1433,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform map add [--project-root PATH] [--data-root PATH] --from-root PATH --to-root PATH --mode MODE [--write-owner ENV_ID] [--json] FROM_ENV TO_ENV")
-	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
+	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--data-root PATH] [--include-codex] [--save] [--json]")
 }
 
 func printFindings(w io.Writer, report preflight.Report) {

@@ -151,7 +151,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos platform set-primary` | `ENV_ID` | projectのprimary_environment変更 | 未解決runやopen worktreeがある場合は拒否 |
 | `devos platform profile list` | `--json` | なし | read-only |
 | `devos platform profile set` | `windows-primary|wsl-primary|hybrid` | canonical_operationsを含むproject_run_profileをactive/default化 | profile snapshotが同じならno-op |
-| `devos platform doctor` | `--env ENV_ID`, `--json` | toolchain_requirements検査、setup card projection | 同じ検査結果ならno-op |
+| `devos platform doctor` | `--env ENV_ID`, `--save`, `--json` | toolchain_requirements検査、setup card projection | 同じ検査結果ならno-op |
 | `devos platform map add` | `FROM_ENV`, `TO_ENV`, `--from-root`, `--to-root`, `--mode` | path_mappings作成 | validation failureなら保存しない |
 | `devos platform map list` | `--json` | なし | read-only |
 

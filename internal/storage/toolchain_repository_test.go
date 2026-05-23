@@ -82,3 +82,38 @@ func TestSaveToolchainReportIsIdempotentForOpenSetupCard(t *testing.T) {
 		t.Fatalf("inbox count = %d, want 1", inboxCount)
 	}
 }
+
+func TestSaveToolchainReportResolvesDetectedSetupCard(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	missing := toolchains.Report{
+		EnvironmentID: "linux-main",
+		Requirements: []toolchains.Requirement{
+			{
+				ToolchainKey:     "bubblewrap",
+				RequiredFor:      toolchains.RequiredForImplementation,
+				RequiredForMerge: false,
+				Status:           toolchains.StatusMissing,
+				Message:          "bwrap executable not found",
+			},
+		},
+	}
+	if err := db.SaveToolchainReport(ctx, "PROJECT-001", missing); err != nil {
+		t.Fatal(err)
+	}
+	detected := missing
+	detected.Requirements[0].Status = toolchains.StatusDetected
+	detected.Requirements[0].Message = "bwrap detected"
+	if err := db.SaveToolchainReport(ctx, "PROJECT-001", detected); err != nil {
+		t.Fatal(err)
+	}
+	var openCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE item_type = 'toolchain_setup' AND status = 'open'").Scan(&openCount); err != nil {
+		t.Fatal(err)
+	}
+	if openCount != 0 {
+		t.Fatalf("open setup card count = %d", openCount)
+	}
+}

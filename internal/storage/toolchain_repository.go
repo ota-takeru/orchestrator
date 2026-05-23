@@ -38,6 +38,8 @@ func (db *DB) SaveToolchainReport(ctx context.Context, projectID string, report 
 			if err := upsertToolchainInboxItem(ctx, tx, projectID, requirementID, report.EnvironmentID, requirement, now); err != nil {
 				return err
 			}
+		} else if err := resolveToolchainInboxItem(ctx, tx, projectID, requirementID, now); err != nil {
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -88,6 +90,16 @@ ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
 		itemID, projectID, requirementID, dedupeKey,
 		projectID+":toolchain_setup:"+requirement.ToolchainKey,
 		toolchainPriority(requirement), title, body, now, now,
+	)
+	return err
+}
+
+func resolveToolchainInboxItem(ctx context.Context, tx *sql.Tx, projectID string, requirementID string, now string) error {
+	_, err := tx.ExecContext(ctx, `
+UPDATE inbox_items
+SET status = 'resolved', updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND source_type = 'toolchain_requirement' AND source_id = ? AND status = 'open'`,
+		now, now, projectID, requirementID,
 	)
 	return err
 }

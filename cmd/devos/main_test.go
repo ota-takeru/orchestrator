@@ -218,6 +218,30 @@ func TestPlatformMapAddCLI(t *testing.T) {
 	}
 }
 
+func TestPlatformDoctorSaveCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Platform doctor save workflow")
+	runCLI(t, "platform", "doctor", "--project-root", projectRoot, "--data-root", dataRoot, "--save", "--json")
+
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	var count int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM toolchain_requirements WHERE project_id = ?", projectID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("expected saved toolchain requirements")
+	}
+}
+
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

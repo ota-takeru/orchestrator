@@ -12,14 +12,14 @@
 | --- | ---: | --- |
 | Documentation baseline | 100% | 完了 |
 | Codex implementation operating docs | 100% | 完了 |
-| Product implementation code | 18% | 着手 |
+| Product implementation code | 19% | 着手 |
 | Initial Complete Scope end-to-end workflow | 0% | 未着手 |
 
 ## Slice Progress
 
 | Slice | Scope | Progress | Status | Evidence | Next |
 | --- | --- | ---: | --- | --- | --- |
-| 0 | Canonical Docs and Authority | 100% | 完了 | `474b591`, `8413a1d` | 実装開始後、context builderが非正規docsを除外することをテストで固定する |
+| 0 | Canonical Docs and Authority | 100% | 完了 | `474b591`, `8413a1d`, `7fad1c4` | context builderを実ワークフローへ接続する |
 | 0.25 | Platform Model Docs | 100% | 完了 | `474b591` | platform modelを実装sliceでDB / runner contractへ反映する |
 | 0.5 | Project Trust / Platform-aware Preflight | 65% | 進行中 | `c77f689`, `11603b3`, `b4129d6` | preflight結果とtoolchain doctor結果の永続化、setup card projectionへ進む |
 | 1 | Core Storage, Platform Tables, State Machines | 25% | 進行中 | `c77f689`, `ff4e1bb` | SQLite driver接続、repository transaction、Go enum/state machineとDB CHECKの整合テストを追加する |
@@ -37,7 +37,7 @@
 
 ## Current Focus
 
-現在の実装対象は Slice 0.5、Slice 1、Slice 2.25、Slice 3 の入口です。Go module、`devos` CLI入口、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundationを追加済みです。次はSQLite driver接続、repository transaction、preflight/toolchain report、command event、verification resultの保存へ進みます。
+現在の実装対象は Slice 0.5、Slice 1、Slice 2.25、Slice 3 の入口です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundationを追加済みです。次はSQLite driver接続、repository transaction、preflight/toolchain report、command event、verification resultの保存へ進みます。
 
 ## Commit Policy
 

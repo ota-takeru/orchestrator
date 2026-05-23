@@ -147,6 +147,33 @@ func TestApproveDecisionCLI(t *testing.T) {
 	}
 }
 
+func TestInboxApproveDecisionCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Inbox approve workflow")
+	insertCLIDecisionWithInbox(t, ctx, dataRoot, projectRoot)
+	out := runCLI(t, "inbox", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--option", "A", "--json", "INBOX-DEC-001")
+	var result storage.InboxApprovalResult
+	decodeJSON(t, out, &result)
+	if result.SourceType != "decision" || result.Decision == nil || result.Decision.Status != "approved" {
+		t.Fatalf("inbox approval = %#v", result)
+	}
+
+	inboxOut := runCLI(t, "inbox", "--project-root", projectRoot, "--data-root", dataRoot, "--status", "open", "--json")
+	var inbox struct {
+		Items []storage.InboxItem `json:"items"`
+	}
+	decodeJSON(t, inboxOut, &inbox)
+	for _, item := range inbox.Items {
+		if item.SourceType == "decision" && item.SourceID == "DEC-001" {
+			t.Fatalf("decision inbox remained open: %#v", item)
+		}
+	}
+}
+
 func TestEnvStatusCLI(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()

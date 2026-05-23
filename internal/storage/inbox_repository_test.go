@@ -46,6 +46,29 @@ func TestListInboxItemsOrdersByPriority(t *testing.T) {
 	}
 }
 
+func TestApproveInboxItemDispatchesDecisionSource(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertOpenDecisionWithInbox(t, db, "PROJECT-001", "DEC-001")
+
+	result, err := db.ApproveInboxItem(ctx, InboxApprovalInput{
+		ProjectID: "PROJECT-001",
+		InboxID:   "INBOX-DEC-001",
+		Option:    "A",
+		Notes:     "approve via inbox",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SourceType != "decision" || result.SourceID != "DEC-001" || result.Decision == nil {
+		t.Fatalf("inbox approval = %#v", result)
+	}
+	if result.Decision.Status != "approved" || result.Decision.SelectedOption != "A" {
+		t.Fatalf("decision = %#v", result.Decision)
+	}
+}
+
 func TestValidateInboxStatusRejectsUnknown(t *testing.T) {
 	if err := ValidateInboxStatus("open"); err != nil {
 		t.Fatal(err)

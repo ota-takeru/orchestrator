@@ -25,7 +25,7 @@ func (db *DB) RunMergeGitDryRun(ctx context.Context, projectID string, entryID s
 	if err != nil {
 		return GitDryRunResult{}, err
 	}
-	env, err := db.primaryEnvironment(ctx, projectID)
+	env, err := db.ResolveCanonicalGitEnvironment(ctx, projectID)
 	if err != nil {
 		return GitDryRunResult{}, err
 	}

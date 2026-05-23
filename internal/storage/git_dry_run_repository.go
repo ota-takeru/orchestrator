@@ -17,6 +17,7 @@ type GitDryRunResult struct {
 	TaskID            string   `json:"task_id"`
 	RunID             string   `json:"run_id"`
 	Status            string   `json:"status"`
+	Classification    string   `json:"classification"`
 	Blockers          []string `json:"blockers,omitempty"`
 }
 
@@ -47,6 +48,7 @@ func (db *DB) RunMergeGitDryRun(ctx context.Context, projectID string, entryID s
 	localRunner := runners.NewLocalRunner(env)
 	results := make([]runners.RunCommandResult, 0, len(commands))
 	blockers := []string{}
+	classification := "clean"
 	for _, command := range commands {
 		result, err := localRunner.RunCommand(ctx, runners.RunCommandRequest{
 			EnvironmentID:     command.EnvironmentID,
@@ -67,19 +69,25 @@ func (db *DB) RunMergeGitDryRun(ctx context.Context, projectID string, entryID s
 		results = append(results, result)
 		if result.Status != runners.CommandSucceeded {
 			blockers = append(blockers, command.ID+" failed")
+			if command.ID == "git-verify-base" || command.ID == "git-verify-head" {
+				classification = "missing_commit"
+			} else if classification == "clean" {
+				classification = "git_error"
+			}
 		}
 		if command.ID == "git-status" && strings.TrimSpace(result.Stdout) != "" {
 			blockers = append(blockers, "worktree has uncommitted changes")
+			classification = "dirty_worktree"
 		}
 	}
 	runStatus := "succeeded"
 	if len(blockers) > 0 {
 		runStatus = "failed"
 	}
-	if err := db.saveGitDryRun(ctx, projectID, entry, runID, attemptNo, runStatus, commands, results, blockers); err != nil {
+	if err := db.saveGitDryRun(ctx, projectID, entry, runID, attemptNo, runStatus, classification, commands, results, blockers); err != nil {
 		return GitDryRunResult{}, err
 	}
-	return GitDryRunResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, RunID: runID, Status: runStatus, Blockers: blockers}, nil
+	return GitDryRunResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, RunID: runID, Status: runStatus, Classification: classification, Blockers: blockers}, nil
 }
 
 func gitDryRunCommand(id string, environmentID string, cwd string, args ...string) verifier.Command {
@@ -111,7 +119,7 @@ func (db *DB) nextRunAttempt(ctx context.Context, projectID string, taskID strin
 	return int(attempt.Int64), nil
 }
 
-func (db *DB) saveGitDryRun(ctx context.Context, projectID string, entry MergeQueueEntry, runID string, attemptNo int, runStatus string, commands []verifier.Command, results []runners.RunCommandResult, blockers []string) error {
+func (db *DB) saveGitDryRun(ctx context.Context, projectID string, entry MergeQueueEntry, runID string, attemptNo int, runStatus string, classification string, commands []verifier.Command, results []runners.RunCommandResult, blockers []string) error {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -148,6 +156,7 @@ func (db *DB) saveGitDryRun(ctx context.Context, projectID string, entry MergeQu
 		"merge_queue_entry_id": entry.ID,
 		"task_id":              entry.TaskID,
 		"status":               runStatus,
+		"classification":       classification,
 		"blockers":             blockers,
 	}, "", "  ")
 	if err != nil {
@@ -167,6 +176,7 @@ func (db *DB) saveGitDryRun(ctx context.Context, projectID string, entry MergeQu
 		"merge_queue_entry_id": entry.ID,
 		"run_id":               runID,
 		"status":               runStatus,
+		"classification":       classification,
 		"blockers":             blockers,
 	}, now); err != nil {
 		return err

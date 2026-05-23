@@ -199,7 +199,7 @@ func TestMergeQueueRealGitDryRunCLI(t *testing.T) {
 	gitDryRunOut := runCLI(t, "merge", "queue", "--project-root", projectRoot, "--data-root", dataRoot, "--dry-run-real-git", "--entry", queue.ID, "--json")
 	var result storage.GitDryRunResult
 	decodeJSON(t, gitDryRunOut, &result)
-	if result.Status != "succeeded" || len(result.Blockers) != 0 {
+	if result.Status != "succeeded" || result.Classification != "clean" || len(result.Blockers) != 0 {
 		t.Fatalf("real git dry-run = %#v", result)
 	}
 }

@@ -47,7 +47,7 @@ func TestRunMergeGitDryRunStoresGitEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "succeeded" || len(result.Blockers) != 0 {
+	if result.Status != "succeeded" || result.Classification != "clean" || len(result.Blockers) != 0 {
 		t.Fatalf("git dry-run result = %#v", result)
 	}
 	var commandCount, summaryCount int
@@ -101,7 +101,7 @@ func TestRunMergeGitDryRunReportsDirtyWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "failed" || len(result.Blockers) == 0 {
+	if result.Status != "failed" || result.Classification != "dirty_worktree" || len(result.Blockers) == 0 {
 		t.Fatalf("dirty git dry-run result = %#v", result)
 	}
 }

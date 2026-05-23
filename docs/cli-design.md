@@ -147,7 +147,8 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos patch status` | `TASK_ID`, `--json` | なし | read-only |
 | `devos patch mark-applied` | `TASK_ID`, `--commit SHA`, `--json` | `patch_applications(manually_applied)`、`manually_applied` | commit存在確認必須。approvalではなくhuman attestation |
 | `devos patch verify-applied` | `TASK_ID`, `--json` | `reverify` run、verification_results、gate_results、`applied`またはneeds_decision | 同じcommitなら再利用可 |
-| `devos cleanup` | `--dry-run`, `--merged`, `--applied`, `--older-than` | worktree cleanup plan、必要時削除 | default dry-run |
+| `devos cleanup` | `--dry-run`, `--merged`, `--applied`, `--older-than` | worktree cleanup plan | default dry-run |
+| `devos cleanup --execute` | `--merged`, `--applied`, `--older-than` | cleanup execute guard、worktree safety evidence | v1は実削除せず`actual_delete_enabled=false` |
 | `devos platform detect` | `--apply`, `--json` | Windows / WSL / Linux local environment候補 | `--apply`なしではDB更新しない |
 | `devos platform add` | `ENV_ID`, `--os`, `--project-root`, `--shell` | execution_environment作成または更新 | 同じENV_IDはupdate |
 | `devos platform set-primary` | `ENV_ID` | projectのprimary_environment変更 | 未解決runやopen worktreeがある場合は拒否 |
@@ -493,6 +494,7 @@ worktree cleanupは危険操作なので、defaultはdry-runです。
 
 ```text
 devos cleanup --dry-run
+devos cleanup --execute
 devos cleanup --merged
 devos cleanup --applied
 devos cleanup --older-than 14d
@@ -501,6 +503,7 @@ devos cleanup --older-than 14d
 削除条件:
 
 - `--dry-run` では削除予定だけを表示する。
+- `--execute` v1は削除せず、guard結果と `actual_delete_not_enabled` を証拠保存する。
 - 未merge diffがあるworktreeは削除しない。
 - 削除前に `diff.patch` がOrchestrator-owned artifactとして保存済みであることを確認する。
 - untracked filesがあるworktreeは、人間が明示しない限り削除しない。

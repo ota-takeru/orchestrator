@@ -854,12 +854,13 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 	cancelled := fs.Bool("cancelled", false, "include cancelled tasks")
 	failed := fs.Bool("failed", false, "include failed tasks")
 	olderThan := fs.String("older-than", "", "minimum age, for example 14d or 72h")
+	execute := fs.Bool("execute", false, "run cleanup execute guard without deleting")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
 	}
-	if !*dryRun {
-		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("cleanup deletion is not implemented; use --dry-run"))
+	if !*dryRun && !*execute {
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("cleanup deletion is not implemented; use --execute guard or --dry-run"))
 	}
 	age, err := parseCleanupAge(*olderThan)
 	if err != nil {
@@ -890,6 +891,21 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 			return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
 		}
 		record.WorktreeSafety = append(record.WorktreeSafety, safety)
+	}
+	if *execute {
+		guard, err := db.SaveCleanupExecuteGuardEvidence(ctx, projectID, record.Items, record.WorktreeSafety)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, map[string]any{"items": guard.Items, "run_id": guard.RunID, "worktree_safety": guard.WorktreeSafety, "execute": true, "status": guard.Status, "actual_delete_enabled": guard.ActualDeleteEnabled, "blockers": guard.Blockers}, 0)
+		}
+		fmt.Fprintf(stdout, "Cleanup execute guard: %s\n", guard.Status)
+		fmt.Fprintf(stdout, "Actual delete enabled: %t\n", guard.ActualDeleteEnabled)
+		for _, blocker := range guard.Blockers {
+			fmt.Fprintf(stdout, "blocker: %s\n", blocker)
+		}
+		return 0
 	}
 	if *jsonOut {
 		return writeJSON(stdout, map[string]any{"items": record.Items, "run_id": record.RunID, "worktree_safety": record.WorktreeSafety, "dry_run": true}, 0)
@@ -1552,7 +1568,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch status [--project-root PATH] [--data-root PATH] [--json] [TASK_ID]")
-	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--merged] [--applied] [--older-than AGE] [--json]")
+	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--merged] [--applied] [--older-than AGE] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")

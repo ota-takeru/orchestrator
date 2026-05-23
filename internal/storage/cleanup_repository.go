@@ -31,6 +31,15 @@ type CleanupDryRunRecord struct {
 	WorktreeSafety []WorktreeSafetyRecord `json:"worktree_safety,omitempty"`
 }
 
+type CleanupExecuteGuardRecord struct {
+	RunID               string                 `json:"run_id"`
+	Status              string                 `json:"status"`
+	ActualDeleteEnabled bool                   `json:"actual_delete_enabled"`
+	Items               []CleanupPlanItem      `json:"items"`
+	WorktreeSafety      []WorktreeSafetyRecord `json:"worktree_safety"`
+	Blockers            []string               `json:"blockers,omitempty"`
+}
+
 func (db *DB) BuildCleanupDryRunPlan(ctx context.Context, projectID string, options CleanupPlanOptions) ([]CleanupPlanItem, error) {
 	statuses := cleanupStatuses(options)
 	args := []any{projectID}
@@ -74,7 +83,6 @@ WHERE t.project_id = ? AND t.status IN (%s)`, strings.Join(placeholders, ","))
 		if !hasDiffArtifact {
 			item.Blockers = append(item.Blockers, "diff artifact is not saved")
 		}
-		item.Blockers = append(item.Blockers, "worktree deletion is not implemented; dry-run only")
 		item.Eligible = len(item.Blockers) == 0
 		plan = append(plan, item)
 	}
@@ -139,6 +147,99 @@ func (db *DB) SaveCleanupDryRunEvidence(ctx context.Context, projectID string, p
 	}
 	committed = true
 	return CleanupDryRunRecord{RunID: runID, Items: plan}, nil
+}
+
+func (db *DB) SaveCleanupExecuteGuardEvidence(ctx context.Context, projectID string, plan []CleanupPlanItem, safety []WorktreeSafetyRecord) (CleanupExecuteGuardRecord, error) {
+	attemptNo, err := db.nextProjectRunAttempt(ctx, projectID, "cleanup")
+	if err != nil {
+		return CleanupExecuteGuardRecord{}, err
+	}
+	blockers := cleanupExecuteBlockers(plan, safety)
+	status := "guard_passed"
+	if len(blockers) > 0 {
+		status = "blocked"
+	} else {
+		blockers = append(blockers, "actual_delete_not_enabled")
+	}
+	runID := "RUN-" + stableShortHash(projectID+"|cleanup-execute-guard|"+time.Now().UTC().Format(time.RFC3339Nano))
+	summary, err := json.MarshalIndent(map[string]any{
+		"execute":               true,
+		"status":                status,
+		"actual_delete_enabled": false,
+		"items":                 plan,
+		"worktree_safety":       safety,
+		"blockers":              blockers,
+	}, "", "  ")
+	if err != nil {
+		return CleanupExecuteGuardRecord{}, err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return CleanupExecuteGuardRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := insertRun(ctx, tx, SaveVerificationInput{
+		ProjectID:  projectID,
+		RunID:      runID,
+		RunType:    "cleanup",
+		AttemptNo:  attemptNo,
+		BaseCommit: "cleanup-execute-guard",
+	}, statusForCleanupGuardRun(status), now); err != nil {
+		return CleanupExecuteGuardRecord{}, err
+	}
+	if _, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        runID,
+		ArtifactType: "summary",
+		ArtifactKey:  "cleanup-execute-guard-summary.json",
+		Content:      summary,
+	}, now); err != nil {
+		return CleanupExecuteGuardRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "cleanup_execute_guard", map[string]any{"run_id": runID, "status": status, "item_count": len(plan), "blockers": blockers}, now); err != nil {
+		return CleanupExecuteGuardRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CleanupExecuteGuardRecord{}, err
+	}
+	committed = true
+	return CleanupExecuteGuardRecord{RunID: runID, Status: status, ActualDeleteEnabled: false, Items: plan, WorktreeSafety: safety, Blockers: blockers}, nil
+}
+
+func cleanupExecuteBlockers(plan []CleanupPlanItem, safety []WorktreeSafetyRecord) []string {
+	blockers := []string{}
+	if len(plan) == 0 {
+		blockers = append(blockers, "no cleanup candidates")
+	}
+	for _, item := range plan {
+		for _, blocker := range item.Blockers {
+			blockers = append(blockers, item.TaskID+": "+blocker)
+		}
+	}
+	for _, record := range safety {
+		if record.Status != "succeeded" {
+			for _, blocker := range record.Blockers {
+				blockers = append(blockers, record.TaskID+": "+blocker)
+			}
+			if len(record.Blockers) == 0 {
+				blockers = append(blockers, record.TaskID+": worktree safety failed")
+			}
+		}
+	}
+	return blockers
+}
+
+func statusForCleanupGuardRun(status string) string {
+	if status == "guard_passed" {
+		return "succeeded"
+	}
+	return "failed"
 }
 
 func cleanupStatuses(options CleanupPlanOptions) []string {

@@ -49,6 +49,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runPlan(ctx, args[1:], stdout)
 	case "artifacts":
 		return runArtifacts(ctx, args[1:], stdout, stderr)
+	case "tasks":
+		return runTasks(ctx, args[1:], stdout, stderr)
 	case "platform":
 		return runPlatform(ctx, args[1:], stdout, stderr)
 	case "inbox":
@@ -65,6 +67,65 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		printUsage(stderr)
 		return exitValidation
 	}
+}
+
+func runTasks(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "materialize" {
+		fs := flag.NewFlagSet("tasks materialize", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "tasks_materialize_failed", err)
+		}
+		defer db.Close()
+		tasks, err := db.MaterializeApprovedTasks(ctx, projectID)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "tasks_materialize_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, map[string]any{"tasks": tasks}, 0)
+		}
+		for _, task := range tasks {
+			fmt.Fprintf(stdout, "Task ready: %s %s\n", task.ID, task.Title)
+		}
+		return 0
+	}
+
+	fs := flag.NewFlagSet("tasks", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	status := fs.String("status", "", "task status")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "tasks_list_failed", err)
+	}
+	defer db.Close()
+	tasks, err := db.ListTasks(ctx, projectID, *status)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "tasks_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"tasks": tasks}, 0)
+	}
+	if len(tasks) == 0 {
+		fmt.Fprintln(stdout, "No tasks.")
+		return 0
+	}
+	for _, task := range tasks {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", task.ID, task.Status, task.Title)
+	}
+	return 0
 }
 
 func runSpec(ctx context.Context, args []string, stdout io.Writer) int {
@@ -486,6 +547,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos spec [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
+	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

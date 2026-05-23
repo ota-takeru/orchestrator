@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,37 @@ func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	}
 }
 
+func TestMergeQueueRealGitDryRunCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+	gitRun(t, projectRoot, "config", "user.email", "test@example.com")
+	gitRun(t, projectRoot, "config", "user.name", "Test User")
+	gitRun(t, projectRoot, "add", ".gitignore")
+	gitRun(t, projectRoot, "commit", "-m", "initial")
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Real git dry-run workflow")
+	gitRun(t, projectRoot, "add", ".devagent")
+	gitRun(t, projectRoot, "commit", "-m", "devagent init")
+	head := gitOutput(t, projectRoot, "rev-parse", "HEAD")
+	seedPatchCLIApprovalEvidence(t, ctx, dataRoot, projectRoot)
+	updateCLIRunEvidence(t, ctx, dataRoot, projectRoot, head, head)
+
+	runCLI(t, "review", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	runCLI(t, "merge", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	queueOut := runCLI(t, "merge", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	var queue storage.MergeQueueEntry
+	decodeJSON(t, queueOut, &queue)
+
+	gitDryRunOut := runCLI(t, "merge", "queue", "--project-root", projectRoot, "--data-root", dataRoot, "--dry-run-real-git", "--entry", queue.ID, "--json")
+	var result storage.GitDryRunResult
+	decodeJSON(t, gitDryRunOut, &result)
+	if result.Status != "succeeded" || len(result.Blockers) != 0 {
+		t.Fatalf("real git dry-run = %#v", result)
+	}
+}
+
 func initGitRepo(t *testing.T, root string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".env.*\n.devagent-worktrees/\norchestrator-data/\n"), 0o644); err != nil {
@@ -108,6 +140,26 @@ func initGitRepo(t *testing.T, root string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init failed: %v\n%s", err, string(out))
 	}
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v failed: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func runCLI(t *testing.T, args ...string) []byte {
@@ -172,6 +224,19 @@ INSERT INTO verification_results(
 		Evidence: map[string]any{"run_id": "RUN-001"},
 	}}
 	if err := db.SaveGateResults(ctx, projectID, ptr("TASK-001"), "RUN-001", gates); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func updateCLIRunEvidence(t *testing.T, ctx context.Context, dataRoot string, projectRoot string, baseCommit string, headCommit string) {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	if _, err := db.SQL().ExecContext(ctx, "UPDATE runs SET base_commit = ?, head_commit = ? WHERE project_id = ? AND id = 'RUN-001'", baseCommit, headCommit, projectID); err != nil {
 		t.Fatal(err)
 	}
 }

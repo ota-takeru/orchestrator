@@ -13,6 +13,7 @@ import (
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/preflight"
+	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
 
 const (
@@ -122,6 +123,29 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", env.ID, env.OSFamily, env.Shell, env.ProjectRoot)
 		return 0
+	case "doctor":
+		fs := flag.NewFlagSet("platform doctor", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		includeCodex := fs.Bool("include-codex", false, "include real Codex adapter preflight")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		root, err := preflight.ResolveProjectRoot(*projectRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "platform_doctor_failed", err)
+		}
+		env := platform.DetectHostEnvironment(root)
+		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: *includeCodex})
+		if *jsonOut {
+			return writeJSON(stdout, report, exitFromToolchainDoctor(report))
+		}
+		fmt.Fprintf(stdout, "Toolchain doctor: %s\n", report.EnvironmentID)
+		for _, req := range report.Requirements {
+			fmt.Fprintf(stdout, "[%s] %s: %s\n", req.Status, req.ToolchainKey, req.Message)
+		}
+		return exitFromToolchainDoctor(report)
 	default:
 		fmt.Fprintf(stderr, "unknown platform subcommand: %s\n", args[0])
 		return exitValidation
@@ -133,6 +157,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos init [--project-root PATH] [--json] CONCEPT")
 	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
 }
 
 func printFindings(w io.Writer, report preflight.Report) {
@@ -146,6 +171,13 @@ func printFindings(w io.Writer, report preflight.Report) {
 
 func exitFromPreflight(report preflight.Report) int {
 	if report.HasBlocks() {
+		return exitPolicy
+	}
+	return 0
+}
+
+func exitFromToolchainDoctor(report toolchains.Report) int {
+	if report.HasRequiredMergeFailure() {
 		return exitPolicy
 	}
 	return 0

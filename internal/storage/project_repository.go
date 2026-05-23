@@ -83,6 +83,9 @@ WHERE id = ?`,
 	if err := upsertEnvironment(ctx, tx, projectID, input.Environment, now); err != nil {
 		return ProjectRecord{}, err
 	}
+	if err := syncPreflightInboxItems(ctx, tx, projectID, input.Environment.ID, input.PreflightReport, now); err != nil {
+		return ProjectRecord{}, err
+	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "preflight_report_captured", input.PreflightReport, now); err != nil {
 		return ProjectRecord{}, err
 	}
@@ -125,6 +128,65 @@ ON CONFLICT(id) DO UPDATE SET
 		env.GitProvider, env.CodexAdapter, env.SandboxProfile, env.Status, now, now,
 	)
 	return err
+}
+
+func syncPreflightInboxItems(ctx context.Context, tx *sql.Tx, projectID string, environmentID string, report preflight.Report, now string) error {
+	for _, finding := range report.Findings {
+		dedupeKey := preflightInboxDedupeKey(projectID, environmentID, finding.ID)
+		switch finding.Severity {
+		case preflight.SeverityWarn, preflight.SeverityBlock:
+			if err := upsertPreflightInboxItem(ctx, tx, projectID, environmentID, dedupeKey, finding, now); err != nil {
+				return err
+			}
+		case preflight.SeverityPass:
+			if _, err := tx.ExecContext(ctx, `
+UPDATE inbox_items
+SET status = 'resolved', updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND dedupe_key = ? AND status = 'open'`,
+				now, now, projectID, dedupeKey,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func upsertPreflightInboxItem(ctx context.Context, tx *sql.Tx, projectID string, environmentID string, dedupeKey string, finding preflight.Finding, now string) error {
+	itemID := "INBOX-" + stableShortHash(dedupeKey)
+	body := finding.Message
+	if len(finding.Details) > 0 {
+		body += "\n" + strings.Join(finding.Details, "\n")
+	}
+	title := "Platform setup required: " + finding.ID
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id, dedupe_key,
+  batch_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, 'platform_setup', 'open', 'execution_environment', ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  status = 'open',
+  title = excluded.title,
+  body = excluded.body,
+  priority = excluded.priority,
+  resolved_at = NULL,
+  updated_at = excluded.updated_at`,
+		itemID, projectID, environmentID, dedupeKey,
+		projectID+":platform_setup:"+environmentID,
+		preflightInboxPriority(finding.Severity), title, body, now, now,
+	)
+	return err
+}
+
+func preflightInboxDedupeKey(projectID string, environmentID string, findingID string) string {
+	return strings.Join([]string{projectID, environmentID, "platform_setup", findingID}, ":")
+}
+
+func preflightInboxPriority(severity preflight.Severity) int {
+	if severity == preflight.SeverityBlock {
+		return 90
+	}
+	return 30
 }
 
 func insertWorkflowEvent(ctx context.Context, tx *sql.Tx, projectID string, eventType string, evidence any, now string) error {

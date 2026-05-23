@@ -78,3 +78,66 @@ func TestSaveProjectInitIsIdempotentForProjectAndEnvironment(t *testing.T) {
 		t.Fatalf("counts project=%d env=%d", projectCount, envCount)
 	}
 }
+
+func TestSaveProjectInitProjectsPreflightFindingsToInbox(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	env := platform.DetectHostEnvironment("/repo")
+	env.ID = "linux-main"
+	report := preflight.Report{
+		ProjectRoot: "/repo",
+		Environment: env,
+		Findings: []preflight.Finding{
+			{ID: "gitattributes", Severity: preflight.SeverityWarn, Message: ".gitattributes is missing"},
+			{ID: "git_repository", Severity: preflight.SeverityBlock, Message: "git repository is unavailable"},
+		},
+	}
+
+	record, err := db.SaveProjectInit(ctx, ProjectInitInput{RootPath: "/repo", Environment: env, PreflightReport: report})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := db.ListInboxItems(ctx, record.ID, "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %#v", items)
+	}
+	if items[0].ItemType != "platform_setup" || items[0].Priority < items[1].Priority {
+		t.Fatalf("unexpected platform setup ordering: %#v", items)
+	}
+}
+
+func TestSaveProjectInitResolvesPassedPreflightInboxItems(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	env := platform.DetectHostEnvironment("/repo")
+	env.ID = "linux-main"
+	warnReport := preflight.Report{
+		ProjectRoot: "/repo",
+		Environment: env,
+		Findings: []preflight.Finding{
+			{ID: "gitattributes", Severity: preflight.SeverityWarn, Message: ".gitattributes is missing"},
+		},
+	}
+	record, err := db.SaveProjectInit(ctx, ProjectInitInput{RootPath: "/repo", Environment: env, PreflightReport: warnReport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passReport := warnReport
+	passReport.Findings = []preflight.Finding{
+		{ID: "gitattributes", Severity: preflight.SeverityPass, Message: ".gitattributes exists"},
+	}
+	if _, err := db.SaveProjectInit(ctx, ProjectInitInput{RootPath: "/repo", Environment: env, PreflightReport: passReport}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := db.ListInboxItems(ctx, record.ID, "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("open items = %#v", items)
+	}
+}

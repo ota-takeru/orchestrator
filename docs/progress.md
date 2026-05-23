@@ -12,8 +12,8 @@
 | --- | ---: | --- |
 | Documentation baseline | 100% | 完了 |
 | Codex implementation operating docs | 100% | 完了 |
-| Product implementation code | 73% | 着手 |
-| Initial Complete Scope end-to-end workflow | 40% | 進行中 |
+| Product implementation code | 75% | 着手 |
+| Initial Complete Scope end-to-end workflow | 43% | 進行中 |
 
 ## Slice Progress
 
@@ -30,13 +30,13 @@
 | 2.5 | Environment-aware Git / Worktree / Patch Foundation | 42% | 進行中 | `642dbc0`, `37c10c2`, `06dd2ca`, `9840a43`, `6a87f34` | worktree safetyのmerge前接続、path mapping validationの拡張へ進む |
 | 4 | Environment-aware Verification / Baseline / Gate | 15% | 進行中 | `f2309f3`, `bb9e6e1`, `8f8d83e` | baseline classification、required_for_merge failure policy、GateResultからTaskStatusへの写像へ進む |
 | 5 | Human Inbox + Approval Sources + Toolchain Setup | 66% | 進行中 | `dfe3fdf`, `a98622b`, `ab22a6f`, `5d52d90`, `02be517`, `6d02ed6`, `46ea815`, `f1a3a0f`, `7c82bb3`, `bf80a4e`, `9840a43`, `6a87f34`, `47aace5`, `7a0ab49`, `df52592` | waiver Decision flow、setup card action拡張へ進む |
-| 6 | Merge Queue + Reverify | 87% | 進行中 | `63132bf`, `acd52bc`, `1fd2c5e`, `0bbd6e9`, `c79bd76`, `d77433c`, `989becc`, `31c099a`, `dd44f1b`, `117b6cc`, `1bf94f1`, `642dbc0`, `27cac3e`, `37c10c2` | worktree safety証跡、real dry-runからのmerge conflict分類へ進む |
+| 6 | Merge Queue + Reverify | 91% | 進行中 | `63132bf`, `acd52bc`, `1fd2c5e`, `0bbd6e9`, `c79bd76`, `d77433c`, `989becc`, `31c099a`, `dd44f1b`, `117b6cc`, `1bf94f1`, `642dbc0`, `27cac3e`, `37c10c2`, `82b63f1` | real merge前verification接続、pushは後続判断 |
 | 7 | Real Codex Windows / WSL Execution | 18% | 進行中 | `d4e790a` | Linux/current env real-codex後のverification接続、Windows/WSLは後続判断 |
-| 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 2% | 着手 | `dd44f1b` | cleanup実削除前のworktree safety証跡、UIは初期縦断workflow後に扱う |
+| 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 4% | 着手 | `dd44f1b`, `1a5af75` | cleanup quarantineまたは恒久削除は後続判断、UIは初期縦断workflow後に扱う |
 
 ## Current Focus
 
-現在の実装対象は Slice 0.5、Slice 1、Slice 2、Slice 2.25、Slice 2.5、Slice 3、Slice 4、Slice 5、Slice 6、Slice 7 です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、artifact versioning / approval、`devos artifacts`、approved artifactからのtask materialize、toolchain setup card projection、toolchain setup card解消同期、Toolchain Setup Card手順表示/mark-installed、preflight platform setup card projection、path mapping issue projection、`devos inbox`、`devos inbox approve`、`devos decisions`、`devos env status`、Human Approval source、`devos review reject`、`devos approve`、merge queue entrypoint、Runner interfaceとfake Windows/WSL/Linux runner、LocalRunner、複数environment対応のverification runner foundation、command output artifact保存、command event / verification result永続化、GateResult evaluator / 永続化、fake implementation run、Linux/current env限定のReal Codex Adapter v1、fake merge queue worker、`devos bootstrap --adapter fake`、`TestBootstrapFakeTaskMerges`、manual patch application repository、`devos patch export/status/mark-applied/verify-applied`、`runs.reverify_context_*` 保存、fake merge conflict handling、`devos merge --dry-run`、`devos merge queue --dry-run-real-git`、`devos platform doctor --save`、`devos platform map add`、DB-backed PathMappingService、`devos cleanup --dry-run` plan、worktree safety証跡、real dry-run分類、merge conflict retry/cancel、manual patch needs_decision復帰を追加済みです。次はlocal-only/ff-only real merge、Real Codex後のverification接続、cleanup quarantine/execute guardへ進みます。
+現在の実装対象は Slice 0.5、Slice 1、Slice 2、Slice 2.25、Slice 2.5、Slice 3、Slice 4、Slice 5、Slice 6、Slice 7 です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、artifact versioning / approval、`devos artifacts`、approved artifactからのtask materialize、toolchain setup card projection、toolchain setup card解消同期、Toolchain Setup Card手順表示/mark-installed、preflight platform setup card projection、path mapping issue projection、`devos inbox`、`devos inbox approve`、`devos decisions`、`devos env status`、Human Approval source、`devos review reject`、`devos approve`、merge queue entrypoint、Runner interfaceとfake Windows/WSL/Linux runner、LocalRunner、複数environment対応のverification runner foundation、command output artifact保存、command event / verification result永続化、GateResult evaluator / 永続化、fake implementation run、Linux/current env限定のReal Codex Adapter v1、fake merge queue worker、`devos bootstrap --adapter fake`、`TestBootstrapFakeTaskMerges`、manual patch application repository、`devos patch export/status/mark-applied/verify-applied`、`runs.reverify_context_*` 保存、fake merge conflict handling、`devos merge --dry-run`、`devos merge queue --dry-run-real-git`、local-only/ff-only/no-pushの`devos merge queue --process-real-git --execute`、`devos platform doctor --save`、`devos platform map add`、DB-backed PathMappingService、`devos cleanup --dry-run` plan、`devos cleanup --execute` guard、worktree safety証跡、real dry-run分類、merge conflict retry/cancel、manual patch needs_decision復帰を追加済みです。次はReal Codex後のverification接続、cleanup quarantine、またはpush/permanent delete/Windows adapter方針の判断が必要です。
 
 ## Commit Policy
 

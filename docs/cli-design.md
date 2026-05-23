@@ -150,6 +150,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos patch verify-applied` | `TASK_ID`, `--json` | `reverify` run、verification_results、gate_results、`applied`またはneeds_decision | 同じcommitなら再利用可 |
 | `devos cleanup` | `--dry-run`, `--merged`, `--applied`, `--older-than` | worktree cleanup plan | default dry-run |
 | `devos cleanup --execute` | `--merged`, `--applied`, `--older-than` | cleanup execute guard、worktree safety evidence | v1は実削除せず`actual_delete_enabled=false` |
+| `devos cleanup --quarantine --execute` | `--merged`, `--applied`, `--older-than`, `--quarantine-root` | cleanup quarantine evidence、worktree safety evidence、eligible worktreeの隔離移動 | `git worktree move` でDevOS管理下のquarantineへ移し、恒久削除はしない |
 | `devos platform detect` | `--apply`, `--json` | Windows / WSL / Linux local environment候補 | `--apply`なしではDB更新しない |
 | `devos platform add` | `ENV_ID`, `--os`, `--project-root`, `--shell` | execution_environment作成または更新 | 同じENV_IDはupdate |
 | `devos platform set-primary` | `ENV_ID` | projectのprimary_environment変更 | 未解決runやopen worktreeがある場合は拒否 |

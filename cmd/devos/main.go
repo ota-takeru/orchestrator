@@ -43,6 +43,12 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runInit(ctx, args[1:], stdout)
 	case "preflight":
 		return runPreflight(ctx, args[1:], stdout)
+	case "spec":
+		return runSpec(ctx, args[1:], stdout)
+	case "plan":
+		return runPlan(ctx, args[1:], stdout)
+	case "artifacts":
+		return runArtifacts(ctx, args[1:], stdout, stderr)
 	case "platform":
 		return runPlatform(ctx, args[1:], stdout, stderr)
 	case "inbox":
@@ -57,6 +63,117 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		printUsage(stderr)
+		return exitValidation
+	}
+}
+
+func runSpec(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("spec", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, root, errCode, err := openMigratedProjectDBWithRoot(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "spec_failed", err)
+	}
+	defer db.Close()
+	concept, err := os.ReadFile(filepath.Join(root, ".devagent", "concept.md"))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "spec_failed", err)
+	}
+	content := []byte("# PRD\n\n" + strings.TrimSpace(string(concept)) + "\n\n## Acceptance Criteria\n\n- Bootstrap workflow evidence is saved.\n")
+	record, err := writeArtifactAndSave(ctx, db, projectID, root, ".devagent/prd.md", storage.ArtifactPRD, content)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "spec_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, record, 0)
+	}
+	fmt.Fprintf(stdout, "PRD artifact proposed: %s v%d\n", record.ArtifactID, record.Version)
+	return 0
+}
+
+func runPlan(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, root, errCode, err := openMigratedProjectDBWithRoot(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "plan_failed", err)
+	}
+	defer db.Close()
+	records := make([]storage.ArtifactVersionRecord, 0, 3)
+	artifacts := []struct {
+		path    string
+		typ     storage.ArtifactType
+		content []byte
+	}{
+		{".devagent/architecture.md", storage.ArtifactArchitecture, []byte("# Architecture\n\nLocal-first Go CLI/Core with SQLite evidence store.\n")},
+		{".devagent/roadmap.yaml", storage.ArtifactRoadmap, []byte("slices:\n  - id: TASK-001\n    title: Bootstrap fake workflow\n")},
+		{".devagent/tasks/TASK-001.yaml", storage.ArtifactTaskYAML, []byte("id: TASK-001\ntitle: Bootstrap fake workflow\nstatus: proposed\nbase_branch: main\n")},
+	}
+	for _, artifact := range artifacts {
+		record, err := writeArtifactAndSave(ctx, db, projectID, root, artifact.path, artifact.typ, artifact.content)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "plan_failed", err)
+		}
+		records = append(records, record)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"artifacts": records}, 0)
+	}
+	for _, record := range records {
+		fmt.Fprintf(stdout, "Artifact proposed: %s v%d %s\n", record.ArtifactID, record.Version, record.Path)
+	}
+	return 0
+}
+
+func runArtifacts(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing artifacts subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "approve":
+		fs := flag.NewFlagSet("artifacts approve", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		version := fs.Int("version", 1, "artifact version")
+		status := fs.String("status", "approved", "approved, approved_with_notes, or rejected")
+		notes := fs.String("notes", "", "approval notes or rejected reason")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("artifact id is required"))
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "artifact_approve_failed", err)
+		}
+		defer db.Close()
+		record, err := db.ApproveArtifactVersion(ctx, projectID, fs.Arg(0), *version, *status, *notes)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "artifact_approve_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, record, 0)
+		}
+		fmt.Fprintf(stdout, "Artifact reviewed: %s v%d %s\n", record.ArtifactID, record.Version, record.Status)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown artifacts subcommand: %s\n", args[0])
 		return exitValidation
 	}
 }
@@ -366,6 +483,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  devos init [--project-root PATH] [--data-root PATH] [--json] CONCEPT")
 	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos spec [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos plan [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
@@ -414,24 +534,46 @@ func openProjectDB(ctx context.Context, projectRoot string, dataRoot string) (*s
 }
 
 func openMigratedProjectDB(ctx context.Context, projectRoot string, dataRoot string) (*storage.DB, string, int, error) {
+	db, projectID, _, code, err := openMigratedProjectDBWithRoot(ctx, projectRoot, dataRoot)
+	return db, projectID, code, err
+}
+
+func openMigratedProjectDBWithRoot(ctx context.Context, projectRoot string, dataRoot string) (*storage.DB, string, string, int, error) {
 	root, err := preflight.ResolveProjectRoot(projectRoot)
 	if err != nil {
-		return nil, "", exitValidation, err
+		return nil, "", "", exitValidation, err
 	}
 	db, _, err := openProjectDB(ctx, root, dataRoot)
 	if err != nil {
-		return nil, "", exitStorage, err
+		return nil, "", "", exitStorage, err
 	}
 	migrations, err := storage.RegisteredMigrations()
 	if err != nil {
 		_ = db.Close()
-		return nil, "", exitStorage, err
+		return nil, "", "", exitStorage, err
 	}
 	if err := db.Migrate(ctx, migrations); err != nil {
 		_ = db.Close()
-		return nil, "", exitStorage, err
+		return nil, "", "", exitStorage, err
 	}
-	return db, storage.ProjectIDForRoot(root), 0, nil
+	return db, storage.ProjectIDForRoot(root), root, 0, nil
+}
+
+func writeArtifactAndSave(ctx context.Context, db *storage.DB, projectID string, root string, relPath string, artifactType storage.ArtifactType, content []byte) (storage.ArtifactVersionRecord, error) {
+	absPath := filepath.Join(root, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		return storage.ArtifactVersionRecord{}, err
+	}
+	if err := os.WriteFile(absPath, content, 0o644); err != nil {
+		return storage.ArtifactVersionRecord{}, err
+	}
+	return db.SaveArtifactVersion(ctx, storage.ArtifactVersionInput{
+		ProjectID:    projectID,
+		ArtifactType: artifactType,
+		Path:         filepath.ToSlash(relPath),
+		Content:      content,
+		Status:       "proposed",
+	})
 }
 
 func writeJSON(w io.Writer, v any, code int) int {

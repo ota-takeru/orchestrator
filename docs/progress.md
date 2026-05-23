@@ -31,7 +31,7 @@
 | 4 | Environment-aware Verification / Baseline / Gate | 34% | 進行中 | `f2309f3`, `bb9e6e1`, `8f8d83e`, `862ffe5`, `6fb1fd7`, `49ce487` | baseline classification、task YAML由来のverification_commandsへ進む |
 | 5 | Human Inbox + Approval Sources + Toolchain Setup | 69% | 進行中 | `dfe3fdf`, `a98622b`, `ab22a6f`, `5d52d90`, `02be517`, `6d02ed6`, `46ea815`, `f1a3a0f`, `7c82bb3`, `bf80a4e`, `9840a43`, `6a87f34`, `47aace5`, `7a0ab49`, `df52592`, `6fb1fd7` | waiver Decision flow、setup card action拡張へ進む |
 | 6 | Merge Queue + Reverify | 95% | 進行中 | `63132bf`, `acd52bc`, `1fd2c5e`, `0bbd6e9`, `c79bd76`, `d77433c`, `989becc`, `31c099a`, `dd44f1b`, `117b6cc`, `1bf94f1`, `642dbc0`, `27cac3e`, `37c10c2`, `82b63f1`, `862ffe5`, `e2fd3c4` | pushは後続判断。real mergeの失敗分類とrollback evidenceをさらに強化する |
-| 7 | Real Codex Windows / WSL Execution | 26% | 進行中 | `d4e790a`, `862ffe5`, `750c16a` | Linux/current env real-codex後のlocal verification接続を縦断テストへ拡張、Windows/WSLは後続判断 |
+| 7 | Real Codex Windows / WSL Execution | 27% | 進行中 | `d4e790a`, `862ffe5`, `750c16a`, `580bf87` | Windows/WSL adapterは後続判断。Linux/current env real-codexのfailure分類と再実行flowを強化する |
 | 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 6% | 着手 | `dd44f1b`, `1a5af75`, `f983158` | cleanup恒久削除は後続判断、UIは初期縦断workflow後に扱う |
 
 ## Current Focus

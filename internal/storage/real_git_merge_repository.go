@@ -4,9 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/decisions"
+	"github.com/ota-takeru/orchestrator/internal/platform"
+	"github.com/ota-takeru/orchestrator/internal/runners"
+	"github.com/ota-takeru/orchestrator/internal/verifier"
 )
 
 type RealGitMergeInput struct {
@@ -22,6 +28,7 @@ type RealGitMergeResult struct {
 	TaskID            string   `json:"task_id"`
 	Status            string   `json:"status"`
 	RunID             string   `json:"run_id"`
+	ReverifyRunID     string   `json:"reverify_run_id,omitempty"`
 	Target            string   `json:"target"`
 	PreMainOID        string   `json:"pre_main_oid"`
 	CandidateOID      string   `json:"candidate_oid"`
@@ -67,6 +74,23 @@ func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input R
 		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: []string{"candidate is not a fast-forward descendant of target"}}, nil
 	}
 
+	reverifyRunID, reverifyBlockers, err := db.reverifyRealMergeCandidate(ctx, projectID, entry, env, preMain, candidate)
+	if err != nil {
+		return RealGitMergeResult{}, err
+	}
+	if len(reverifyBlockers) > 0 {
+		return RealGitMergeResult{
+			MergeQueueEntryID: entry.ID,
+			TaskID:            entry.TaskID,
+			Status:            "blocked",
+			ReverifyRunID:     reverifyRunID,
+			Target:            input.Target,
+			PreMainOID:        preMain,
+			CandidateOID:      candidate,
+			Blockers:          reverifyBlockers,
+		}, nil
+	}
+
 	runID := "RUN-" + stableShortHash(entry.TaskID+"|real-git-merge|"+time.Now().UTC().Format(time.RFC3339Nano))
 	attemptNo, err := db.nextRunAttempt(ctx, projectID, entry.TaskID, "merge")
 	if err != nil {
@@ -101,7 +125,64 @@ func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input R
 	if err := db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "succeeded", nil); err != nil {
 		return RealGitMergeResult{}, err
 	}
-	return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "succeeded", RunID: runID, Target: input.Target, PreMainOID: preMain, CandidateOID: candidate}, nil
+	return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "succeeded", RunID: runID, ReverifyRunID: reverifyRunID, Target: input.Target, PreMainOID: preMain, CandidateOID: candidate}, nil
+}
+
+func (db *DB) reverifyRealMergeCandidate(ctx context.Context, projectID string, entry MergeQueueEntry, env platform.ExecutionEnvironment, preMain string, candidate string) (string, []string, error) {
+	tempRoot, err := os.MkdirTemp("", "devos-real-merge-reverify-*")
+	if err != nil {
+		return "", nil, err
+	}
+	worktreeAdded := false
+	defer func() {
+		if worktreeAdded {
+			if err := runGit(context.Background(), env.ProjectRoot, "worktree", "remove", "--force", tempRoot); err != nil {
+				_ = os.RemoveAll(tempRoot)
+				_ = runGit(context.Background(), env.ProjectRoot, "worktree", "prune")
+			}
+			return
+		}
+		_ = os.RemoveAll(tempRoot)
+	}()
+	if err := runGit(ctx, env.ProjectRoot, "worktree", "add", "--detach", tempRoot, candidate); err != nil {
+		return "", []string{"integration worktree creation failed"}, nil
+	}
+	worktreeAdded = true
+
+	verifyEnv := env
+	verifyEnv.ProjectRoot = tempRoot
+	runID := "RUN-" + stableShortHash(entry.TaskID+"|real-merge-reverify|"+time.Now().UTC().Format(time.RFC3339Nano))
+	attemptNo, err := db.nextRunAttempt(ctx, projectID, entry.TaskID, "reverify")
+	if err != nil {
+		return "", nil, err
+	}
+	commands := defaultLocalVerificationCommands(ctx, verifyEnv)
+	report, err := verifier.Run(ctx, runID, verifier.StaticRunnerRegistry{verifyEnv.ID: runners.NewLocalRunner(verifyEnv)}, commands)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
+		ProjectID:           projectID,
+		TaskID:              &entry.TaskID,
+		RunID:               runID,
+		RunType:             "reverify",
+		AttemptNo:           attemptNo,
+		BaseCommit:          preMain,
+		ReverifyContextType: "merge_queue_entry",
+		ReverifyContextID:   entry.ID,
+		Commands:            commands,
+		Report:              report,
+	}); err != nil {
+		return "", nil, err
+	}
+	gates := decisions.EvaluateVerification(report)
+	if err := db.SaveGateResults(ctx, projectID, &entry.TaskID, runID, gates); err != nil {
+		return "", nil, err
+	}
+	if taskStatusFromGateResults(gates) != "ready_for_human_review" {
+		return runID, []string{"merge reverification did not pass"}, nil
+	}
+	return runID, nil, nil
 }
 
 func (db *DB) unresolvedMergeBlockers(ctx context.Context, projectID string) ([]string, error) {

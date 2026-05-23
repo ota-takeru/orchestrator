@@ -60,7 +60,7 @@ func TestProcessRealGitMergeFastForwardsLocalMain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "succeeded" || result.CandidateOID != candidate {
+	if result.Status != "succeeded" || result.CandidateOID != candidate || result.ReverifyRunID == "" {
 		t.Fatalf("result = %#v", result)
 	}
 	if got := gitOutput(t, repo, "rev-parse", "refs/heads/main"); got != candidate {
@@ -75,6 +75,13 @@ func TestProcessRealGitMergeFastForwardsLocalMain(t *testing.T) {
 	}
 	if taskStatus != "merged" || queueStatus != "merged" {
 		t.Fatalf("task=%s queue=%s", taskStatus, queueStatus)
+	}
+	var reverifyCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE id = ? AND run_type = 'reverify'", result.ReverifyRunID).Scan(&reverifyCount); err != nil {
+		t.Fatal(err)
+	}
+	if reverifyCount != 1 {
+		t.Fatalf("reverify count = %d", reverifyCount)
 	}
 }
 

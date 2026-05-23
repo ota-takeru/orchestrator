@@ -115,7 +115,13 @@ func initStorageGitRepo(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repo, "add", "README.md")
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/testrepo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte("package testrepo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "README.md", "go.mod", "main.go")
 	gitRun(t, repo, "commit", "-m", "initial")
 	gitRun(t, repo, "branch", "-M", "main")
 	return repo

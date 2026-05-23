@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
@@ -104,6 +105,53 @@ func TestApprovalRequiresGateEvidence(t *testing.T) {
 	}
 }
 
+func TestApproveHumanApprovalApprovesOpenSourceAndResolvesInbox(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	evidenceJSON := approvalEvidenceJSON(t, db, ctx)
+	insertOpenHumanApprovalWithInbox(t, db, "PROJECT-001", "APPROVAL-FINAL", "TASK-001", ApprovalFinalReview, evidenceJSON)
+
+	result, err := db.ApproveHumanApproval(ctx, "PROJECT-001", "APPROVAL-FINAL", "approved from inbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "APPROVAL-FINAL" || result.TaskStatus != "ready_for_human_review" || result.ApprovedForMerge {
+		t.Fatalf("approval result = %#v", result)
+	}
+	var approvalStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM human_approvals WHERE id = 'APPROVAL-FINAL'").Scan(&approvalStatus); err != nil {
+		t.Fatal(err)
+	}
+	var openInbox int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE source_type = 'human_approval' AND source_id = 'APPROVAL-FINAL' AND status = 'open'").Scan(&openInbox); err != nil {
+		t.Fatal(err)
+	}
+	if approvalStatus != "approved" || openInbox != 0 {
+		t.Fatalf("approval=%s open_inbox=%d", approvalStatus, openInbox)
+	}
+}
+
+func TestApproveHumanMergeApprovalMovesTaskWhenFinalReviewApproved(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	evidenceJSON := approvalEvidenceJSON(t, db, ctx)
+	insertOpenHumanApprovalWithInbox(t, db, "PROJECT-001", "APPROVAL-FINAL", "TASK-001", ApprovalFinalReview, evidenceJSON)
+	insertOpenHumanApprovalWithInbox(t, db, "PROJECT-001", "APPROVAL-MERGE", "TASK-001", ApprovalMerge, evidenceJSON)
+
+	if _, err := db.ApproveHumanApproval(ctx, "PROJECT-001", "APPROVAL-FINAL", ""); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.ApproveHumanApproval(ctx, "PROJECT-001", "APPROVAL-MERGE", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "approved_for_merge" || !result.ApprovedForMerge {
+		t.Fatalf("merge approval result = %#v", result)
+	}
+}
+
 func seedApprovalTaskEvidence(t *testing.T, db *DB, ctx context.Context) {
 	t.Helper()
 	insertProject(t, db.SQL(), "PROJECT-001")
@@ -118,6 +166,43 @@ func seedApprovalTaskEvidence(t *testing.T, db *DB, ctx context.Context) {
 		Evidence: map[string]any{"run_id": "RUN-001"},
 	}}
 	if err := db.SaveGateResults(ctx, "PROJECT-001", ptr("TASK-001"), "RUN-001", gates); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func approvalEvidenceJSON(t *testing.T, db *DB, ctx context.Context) string {
+	t.Helper()
+	tx, err := db.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	evidence, err := collectApprovalEvidence(ctx, tx, "PROJECT-001", "TASK-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func insertOpenHumanApprovalWithInbox(t *testing.T, db *DB, projectID string, approvalID string, taskID string, approvalType ApprovalType, evidenceJSON string) {
+	t.Helper()
+	if _, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO human_approvals(
+  id, project_id, task_id, approval_type, status, evidence_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)`,
+		approvalID, projectID, taskID, approvalType, evidenceJSON, now(), now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id, dedupe_key,
+  priority, title, body, created_at, updated_at
+) VALUES (?, ?, ?, 'approval', 'open', 'human_approval', ?, ?, 70, 'Approval required', 'Approve source evidence', ?, ?)`,
+		"INBOX-"+approvalID, projectID, taskID, approvalID, "human-approval-"+approvalID, now(), now()); err != nil {
 		t.Fatal(err)
 	}
 }

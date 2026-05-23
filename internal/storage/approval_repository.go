@@ -179,6 +179,117 @@ func (db *DB) RejectTaskFinalReview(ctx context.Context, input ApprovalInput) (A
 	return ApprovalRecord{ID: approvalID, TaskStatus: "needs_decision"}, nil
 }
 
+func (db *DB) ApproveHumanApproval(ctx context.Context, projectID string, approvalID string, notes string) (ApprovalRecord, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return ApprovalRecord{}, fmt.Errorf("project id is required")
+	}
+	if strings.TrimSpace(approvalID) == "" {
+		return ApprovalRecord{}, fmt.Errorf("approval id is required")
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var taskID sql.NullString
+	var approvalType, status, evidenceJSON string
+	if err := tx.QueryRowContext(ctx, `
+SELECT task_id, approval_type, status, evidence_json
+FROM human_approvals
+WHERE project_id = ? AND id = ?`, projectID, approvalID).Scan(
+		&taskID,
+		&approvalType,
+		&status,
+		&evidenceJSON,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return ApprovalRecord{}, fmt.Errorf("human approval not found: %s", approvalID)
+		}
+		return ApprovalRecord{}, err
+	}
+	if status != "open" {
+		return ApprovalRecord{}, fmt.Errorf("human approval %s is not open: %s", approvalID, status)
+	}
+	if !taskID.Valid || strings.TrimSpace(taskID.String) == "" {
+		return ApprovalRecord{}, fmt.Errorf("human approval %s has no task scope", approvalID)
+	}
+	if approvalType != string(ApprovalFinalReview) && approvalType != string(ApprovalMerge) {
+		return ApprovalRecord{}, fmt.Errorf("unsupported human approval type: %s", approvalType)
+	}
+	taskStatus, err := taskStatusForUpdate(ctx, tx, projectID, taskID.String)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	if taskStatus != "ready_for_human_review" && taskStatus != "approved_for_merge" {
+		return ApprovalRecord{}, fmt.Errorf("task %s is not ready for approval: %s", taskID.String, taskStatus)
+	}
+	if approvalType == string(ApprovalMerge) {
+		if ok, err := matchingApprovalExists(ctx, tx, projectID, taskID.String, ApprovalFinalReview, evidenceJSON); err != nil {
+			return ApprovalRecord{}, err
+		} else if !ok {
+			return ApprovalRecord{}, fmt.Errorf("merge approval requires matching final review approval")
+		}
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+UPDATE human_approvals
+SET status = 'approved', notes = ?, updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND id = ? AND status = 'open'`,
+		strings.TrimSpace(notes), now, now, projectID, approvalID,
+	); err != nil {
+		return ApprovalRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE inbox_items
+SET status = 'resolved', updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND source_type = 'human_approval' AND source_id = ? AND status = 'open'`,
+		now, now, projectID, approvalID,
+	); err != nil {
+		return ApprovalRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "human_approval_approved", map[string]any{
+		"task_id":       taskID.String,
+		"approval_id":   approvalID,
+		"approval_type": approvalType,
+	}, now); err != nil {
+		return ApprovalRecord{}, err
+	}
+
+	approvedForMerge := false
+	if taskStatus == "ready_for_human_review" {
+		if ok, err := bothApprovalsExist(ctx, tx, projectID, taskID.String, evidenceJSON); err != nil {
+			return ApprovalRecord{}, err
+		} else if ok {
+			if err := statemachine.Task.ValidateTransition("ready_for_human_review", "approved_for_merge"); err != nil {
+				return ApprovalRecord{}, err
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'approved_for_merge', updated_at = ? WHERE id = ? AND project_id = ?", now, taskID.String, projectID); err != nil {
+				return ApprovalRecord{}, err
+			}
+			if err := insertWorkflowEvent(ctx, tx, projectID, "task_approved_for_merge", map[string]any{
+				"task_id": taskID.String,
+			}, now); err != nil {
+				return ApprovalRecord{}, err
+			}
+			taskStatus = "approved_for_merge"
+			approvedForMerge = true
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ApprovalRecord{}, err
+	}
+	committed = true
+	return ApprovalRecord{ID: approvalID, TaskStatus: taskStatus, ApprovedForMerge: approvedForMerge}, nil
+}
+
 func taskStatusForUpdate(ctx context.Context, tx *sql.Tx, projectID string, taskID string) (string, error) {
 	var status string
 	if err := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = ? AND project_id = ?", taskID, projectID).Scan(&status); err != nil {

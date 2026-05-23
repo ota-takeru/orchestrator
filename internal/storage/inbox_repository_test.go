@@ -69,6 +69,28 @@ func TestApproveInboxItemDispatchesDecisionSource(t *testing.T) {
 	}
 }
 
+func TestApproveInboxItemDispatchesHumanApprovalSource(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	insertOpenHumanApprovalWithInbox(t, db, "PROJECT-001", "APPROVAL-FINAL", "TASK-001", ApprovalFinalReview, approvalEvidenceJSON(t, db, ctx))
+
+	result, err := db.ApproveInboxItem(ctx, InboxApprovalInput{
+		ProjectID: "PROJECT-001",
+		InboxID:   "INBOX-APPROVAL-FINAL",
+		Notes:     "approved via inbox",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SourceType != "human_approval" || result.HumanApproval == nil {
+		t.Fatalf("inbox approval = %#v", result)
+	}
+	if result.HumanApproval.ID != "APPROVAL-FINAL" || result.HumanApproval.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("human approval = %#v", result.HumanApproval)
+	}
+}
+
 func TestValidateInboxStatusRejectsUnknown(t *testing.T) {
 	if err := ValidateInboxStatus("open"); err != nil {
 		t.Fatal(err)

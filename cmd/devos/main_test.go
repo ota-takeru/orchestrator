@@ -175,6 +175,23 @@ func TestInboxApproveDecisionCLI(t *testing.T) {
 	}
 }
 
+func TestInboxApproveHumanApprovalCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Inbox human approval workflow")
+	seedPatchCLIApprovalEvidence(t, ctx, dataRoot, projectRoot)
+	insertCLIOpenHumanApproval(t, ctx, dataRoot, projectRoot)
+	out := runCLI(t, "inbox", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--notes", "approved", "--json", "INBOX-APPROVAL-FINAL")
+	var result storage.InboxApprovalResult
+	decodeJSON(t, out, &result)
+	if result.SourceType != "human_approval" || result.HumanApproval == nil || result.HumanApproval.ID != "APPROVAL-FINAL" {
+		t.Fatalf("inbox approval = %#v", result)
+	}
+}
+
 func TestEnvStatusCLI(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()
@@ -448,6 +465,32 @@ INSERT INTO inbox_items(
   id, project_id, item_type, status, source_type, source_id, dedupe_key,
   priority, title, body, created_at, updated_at
 ) VALUES ('INBOX-DEC-001', ?, 'human_decision', 'open', 'decision', 'DEC-001', 'decision-DEC-001', 10, 'Choose behavior', 'Pick an option', ?, ?)`,
+		projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertCLIOpenHumanApproval(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO human_approvals(
+  id, project_id, task_id, approval_type, status, evidence_json, created_at, updated_at
+) VALUES ('APPROVAL-FINAL', ?, 'TASK-001', 'final_review', 'open', '{}', ?, ?)`,
+		projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id, dedupe_key,
+  priority, title, body, created_at, updated_at
+) VALUES ('INBOX-APPROVAL-FINAL', ?, 'TASK-001', 'approval', 'open', 'human_approval', 'APPROVAL-FINAL', 'human-approval-final', 70, 'Approval required', 'Approve final review', ?, ?)`,
 		projectID, now, now); err != nil {
 		t.Fatal(err)
 	}

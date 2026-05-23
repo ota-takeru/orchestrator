@@ -61,6 +61,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runInbox(ctx, args[1:], stdout)
 	case "decisions":
 		return runDecisions(ctx, args[1:], stdout)
+	case "approve":
+		return runApproveDecision(ctx, args[1:], stdout)
 	case "env":
 		return runEnv(ctx, args[1:], stdout, stderr)
 	case "review":
@@ -998,6 +1000,41 @@ func runDecisions(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runApproveDecision(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("approve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	option := fs.String("option", "", "selected option")
+	notes := fs.String("notes", "", "approval notes")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("approve requires DECISION_ID"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "decision_approve_failed", err)
+	}
+	defer db.Close()
+	decision, err := db.ApproveDecision(ctx, storage.DecisionApprovalInput{
+		ProjectID:  projectID,
+		DecisionID: fs.Arg(0),
+		Option:     *option,
+		Notes:      *notes,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "decision_approve_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, decision, 0)
+	}
+	fmt.Fprintf(stdout, "%s\t%s\t%s\n", decision.ID, decision.Status, decision.SelectedOption)
+	return 0
+}
+
 func runEnv(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "missing env subcommand")
@@ -1273,6 +1310,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] DECISION_ID")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos review reject [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

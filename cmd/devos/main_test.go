@@ -122,6 +122,31 @@ func TestDecisionsListCLI(t *testing.T) {
 	}
 }
 
+func TestApproveDecisionCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Decision approve workflow")
+	insertCLIDecisionWithInbox(t, ctx, dataRoot, projectRoot)
+	out := runCLI(t, "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--option", "A", "--notes", "recommended", "--json", "DEC-001")
+	var result storage.DecisionRecord
+	decodeJSON(t, out, &result)
+	if result.Status != "approved" || result.SelectedOption != "A" {
+		t.Fatalf("approved decision = %#v", result)
+	}
+
+	listOut := runCLI(t, "decisions", "--project-root", projectRoot, "--data-root", dataRoot, "--status", "approved", "--json")
+	var list struct {
+		Decisions []storage.DecisionRecord `json:"decisions"`
+	}
+	decodeJSON(t, listOut, &list)
+	if len(list.Decisions) != 1 || list.Decisions[0].SelectedOption != "A" {
+		t.Fatalf("approved decisions = %#v", list.Decisions)
+	}
+}
+
 func TestEnvStatusCLI(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()
@@ -327,6 +352,26 @@ func insertCLIDecision(t *testing.T, ctx context.Context, dataRoot string, proje
 INSERT INTO decisions(
   id, project_id, status, title, options_json, evidence_json, created_at, updated_at
 ) VALUES ('DEC-001', ?, 'open', 'Choose behavior', '[]', '{}', ?, ?)`, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertCLIDecisionWithInbox(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) {
+	t.Helper()
+	insertCLIDecision(t, ctx, dataRoot, projectRoot)
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id, dedupe_key,
+  priority, title, body, created_at, updated_at
+) VALUES ('INBOX-DEC-001', ?, 'human_decision', 'open', 'decision', 'DEC-001', 'decision-DEC-001', 10, 'Choose behavior', 'Pick an option', ?, ?)`,
+		projectID, now, now); err != nil {
 		t.Fatal(err)
 	}
 }

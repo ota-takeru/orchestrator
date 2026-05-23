@@ -113,7 +113,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos tasks materialize` | `--json` | approved artifactsからTask YAMLとcanonical taskをproposed/ready化 | artifact version hashが同じならno-op |
 | `devos bootstrap` | `--adapter fake`, `--json` | init/spec/plan/approve/materialize/run/review/approval/merge dry-runの縦断検証 | 開発用。既存projectを壊さない |
 | `devos tasks` | `--status`, `--json` | なし | read-only |
-| `devos run` | `TASK_ID`, `--adapter fake|codex`, `--json` | run、workflow_events、run artifacts | 同じrunning taskがあれば開始しない |
+| `devos run` | `TASK_ID`, `--adapter fake|real-codex`, `--real-codex`, `--json` | run、workflow_events、run artifacts | real-codexはLinux/current env限定、network off、non-interactive |
 | `devos review` | `TASK_ID`, `--json` | review run、semantic diff、gate results | 対象head commitが同じなら再利用可 |
 | `devos review approve` | `TASK_ID`, `--json` | `human_approvals(final_review)`、workflow_events、inbox resolved | 同じhead commitへの同じ承認はno-op |
 | `devos review reject` | `TASK_ID`, `--reason`, `--json` | `human_approvals(final_review)` rejected、taskをrepair/needs_decisionへ戻す | reason必須 |

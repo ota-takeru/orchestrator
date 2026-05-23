@@ -147,7 +147,7 @@ Auto-reviewは権限境界を広げる仕組みではありません。filesyste
 
 | Lane | Executor | Sandbox / Network | Approval |
 | --- | --- | --- | --- |
-| implementation | Codex | `workspace-write`, network off | `untrusted`。approval eventはrunを`blocked`にし、Human Inboxへprojection |
+| implementation | Codex | `workspace-write`, network off | v1 real-codexは`never`で非対話・fail-closed。approval-like failureはDevOSがrunを`blocked`にし、Human Inboxへprojection |
 | repair | Codex | implementationと同じ | `untrusted`。budget内のみ |
 | review | Codex | read-only相当。可能なら`read-only` | `on-request`または`never`。write要求はHARD_BLOCK |
 | verification | Orchestrator process runner | project policyに従う。Codexには実行させない | Codex approvalなし |

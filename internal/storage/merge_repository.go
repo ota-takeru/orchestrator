@@ -19,6 +19,33 @@ type MergeQueueEntry struct {
 	HeadCommit string `json:"head_commit"`
 }
 
+func (db *DB) PreviewTaskMerge(ctx context.Context, projectID string, taskID string) (MergeQueueEntry, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return MergeQueueEntry{}, fmt.Errorf("project id is required")
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return MergeQueueEntry{}, fmt.Errorf("task id is required")
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return MergeQueueEntry{}, err
+	}
+	defer tx.Rollback()
+	status, err := taskStatusForUpdate(ctx, tx, projectID, taskID)
+	if err != nil {
+		return MergeQueueEntry{}, err
+	}
+	if status != "approved_for_merge" {
+		return MergeQueueEntry{}, fmt.Errorf("task %s is not approved for merge: %s", taskID, status)
+	}
+	_, _, evidence, _, err := mergeApprovalEvidence(ctx, tx, projectID, taskID)
+	if err != nil {
+		return MergeQueueEntry{}, err
+	}
+	entryID := "MQ-" + stableShortHash(taskID+"|"+evidence.HeadCommit+"|"+evidence.DiffHash)
+	return MergeQueueEntry{ID: entryID, TaskID: taskID, Status: "queued", BaseCommit: evidence.BaseCommit, HeadCommit: evidence.HeadCommit}, nil
+}
+
 func (db *DB) QueueTaskForMerge(ctx context.Context, projectID string, taskID string) (MergeQueueEntry, error) {
 	if strings.TrimSpace(projectID) == "" {
 		return MergeQueueEntry{}, fmt.Errorf("project id is required")

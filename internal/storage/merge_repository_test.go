@@ -42,6 +42,40 @@ func TestQueueTaskForMergeRequiresApprovedTask(t *testing.T) {
 	}
 }
 
+func TestPreviewTaskMergeDoesNotMutateQueueOrTask(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalFinalReview}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalMerge}); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err := db.PreviewTaskMerge(ctx, "PROJECT-001", "TASK-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Status != "queued" || entry.BaseCommit != "BASE" || entry.HeadCommit != "HEAD" {
+		t.Fatalf("unexpected preview: %#v", entry)
+	}
+	var taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "approved_for_merge" {
+		t.Fatalf("task status = %s", taskStatus)
+	}
+	var queueCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM merge_queue_entries").Scan(&queueCount); err != nil {
+		t.Fatal(err)
+	}
+	if queueCount != 0 {
+		t.Fatalf("queue count = %d", queueCount)
+	}
+}
+
 func TestListMergeQueue(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

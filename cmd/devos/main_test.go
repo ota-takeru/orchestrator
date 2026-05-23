@@ -68,6 +68,12 @@ func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 
 	runCLI(t, "review", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
 	runCLI(t, "merge", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	dryRunOut := runCLI(t, "merge", "--project-root", projectRoot, "--data-root", dataRoot, "--dry-run", "--json", "TASK-001")
+	var dryRun storage.MergeQueueEntry
+	decodeJSON(t, dryRunOut, &dryRun)
+	if dryRun.Status != "queued" {
+		t.Fatalf("dry-run merge = %#v", dryRun)
+	}
 	runCLI(t, "merge", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
 
 	conflictOut := runCLI(t, "merge", "queue", "--project-root", projectRoot, "--data-root", dataRoot, "--process-fake", "--simulate-conflict", "--conflict-reason", "conflict in fake.txt", "--json")

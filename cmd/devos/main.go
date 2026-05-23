@@ -446,6 +446,7 @@ func runQueueTaskForMerge(ctx context.Context, args []string, stdout io.Writer) 
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	dryRun := fs.Bool("dry-run", false, "validate merge queue entry without writing")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -458,6 +459,17 @@ func runQueueTaskForMerge(ctx context.Context, args []string, stdout io.Writer) 
 		return writeError(stdout, *jsonOut, errCode, "merge_queue_failed", err)
 	}
 	defer db.Close()
+	if *dryRun {
+		entry, err := db.PreviewTaskMerge(ctx, projectID, fs.Arg(0))
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "merge_dry_run_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, entry, 0)
+		}
+		fmt.Fprintf(stdout, "Merge dry-run: %s can be queued as %s\n", entry.TaskID, entry.ID)
+		return 0
+	}
 	entry, err := db.QueueTaskForMerge(ctx, projectID, fs.Arg(0))
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "merge_queue_failed", err)
@@ -986,7 +998,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
-	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--dry-run] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--simulate-conflict] [--json]")
 	fmt.Fprintln(w, "  devos patch export [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")

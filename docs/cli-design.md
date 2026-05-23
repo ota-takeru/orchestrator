@@ -141,6 +141,8 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos merge approve` | `TASK_ID`, `--json` | `human_approvals(merge)`、`approved_for_merge` | final review approvalとevidence一致が必須 |
 | `devos merge` | `TASK_ID`, `--dry-run`, `--json` | merge queue entry、workflow_events | open queue entryがあれば重複投入しない |
 | `devos merge queue` | `--json` | なし | read-only |
+| `devos merge queue --dry-run-real-git` | `--entry`, `--json` | real Gitの非破壊検査run、command_events、summary artifact | worktree dirty / missing commit / git errorを分類 |
+| `devos merge queue --process-real-git` | `--execute`, `--ff-only`, `--no-push`, `--target main`, `--entry`, `--json` | local-only fast-forward、summary artifact、task/queueをmergedへ同期 | v1はpush禁止、conflict自動解決なし |
 | `devos patch export` | `TASK_ID`, `--json` | patch artifact、`patch_applications(exported)`、`patch_exported` | approved_for_merge必須 |
 | `devos patch status` | `TASK_ID`, `--json` | なし | read-only |
 | `devos patch mark-applied` | `TASK_ID`, `--commit SHA`, `--json` | `patch_applications(manually_applied)`、`manually_applied` | commit存在確認必須。approvalではなくhuman attestation |

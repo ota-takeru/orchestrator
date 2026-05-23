@@ -117,6 +117,7 @@ func initStorageGitRepo(t *testing.T) string {
 	}
 	gitRun(t, repo, "add", "README.md")
 	gitRun(t, repo, "commit", "-m", "initial")
+	gitRun(t, repo, "branch", "-M", "main")
 	return repo
 }
 

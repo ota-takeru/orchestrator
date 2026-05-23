@@ -583,6 +583,11 @@ func runMergeQueue(ctx context.Context, args []string, stdout io.Writer) int {
 	retryConflict := fs.String("retry-conflict", "", "retry a merge_conflict entry with fake runner")
 	cancelConflict := fs.String("cancel-conflict", "", "cancel a merge_conflict entry")
 	dryRunRealGit := fs.Bool("dry-run-real-git", false, "run non-mutating git checks for the next queued merge")
+	processRealGit := fs.Bool("process-real-git", false, "process next queued merge with local real git")
+	execute := fs.Bool("execute", false, "execute real local merge")
+	ffOnly := fs.Bool("ff-only", false, "require fast-forward only real merge")
+	noPush := fs.Bool("no-push", false, "do not push after real merge")
+	target := fs.String("target", "main", "target branch for real local merge")
 	entryID := fs.String("entry", "", "merge queue entry id")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
@@ -624,6 +629,26 @@ func runMergeQueue(ctx context.Context, args []string, stdout io.Writer) int {
 			return writeJSON(stdout, result, 0)
 		}
 		fmt.Fprintf(stdout, "Git merge dry-run: %s %s\n", result.TaskID, result.Status)
+		for _, blocker := range result.Blockers {
+			fmt.Fprintf(stdout, "blocker: %s\n", blocker)
+		}
+		return 0
+	}
+	if *processRealGit {
+		result, err := db.ProcessRealGitMerge(ctx, projectID, storage.RealGitMergeInput{
+			EntryID: *entryID,
+			Target:  *target,
+			Execute: *execute,
+			FFOnly:  *ffOnly,
+			NoPush:  *noPush,
+		})
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "real_git_merge_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, result, 0)
+		}
+		fmt.Fprintf(stdout, "Real git merge: %s %s\n", result.TaskID, result.Status)
 		for _, blocker := range result.Blockers {
 			fmt.Fprintf(stdout, "blocker: %s\n", blocker)
 		}
@@ -1522,7 +1547,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos review reject [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--dry-run] [--json] TASK_ID")
-	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--simulate-conflict] [--retry-conflict ID] [--cancel-conflict ID] [--dry-run-real-git] [--entry ID] [--json]")
+	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--simulate-conflict] [--retry-conflict ID] [--cancel-conflict ID] [--dry-run-real-git] [--process-real-git --execute --ff-only --no-push --target main] [--entry ID] [--json]")
 	fmt.Fprintln(w, "  devos patch export [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")

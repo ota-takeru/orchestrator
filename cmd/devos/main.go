@@ -45,6 +45,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runPreflight(ctx, args[1:], stdout)
 	case "platform":
 		return runPlatform(ctx, args[1:], stdout, stderr)
+	case "inbox":
+		return runInbox(ctx, args[1:], stdout)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -53,6 +55,52 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		printUsage(stderr)
 		return exitValidation
 	}
+}
+
+func runInbox(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("inbox", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	status := fs.String("status", "open", "inbox item status")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if err := storage.ValidateInboxStatus(*status); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_inbox_status", err)
+	}
+	root, err := preflight.ResolveProjectRoot(*projectRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "project_root_failed", err)
+	}
+	db, _, err := openProjectDB(ctx, root, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "storage_open_failed", err)
+	}
+	defer db.Close()
+	migrations, err := storage.RegisteredMigrations()
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "migration_registry_failed", err)
+	}
+	if err := db.Migrate(ctx, migrations); err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "migration_failed", err)
+	}
+	items, err := db.ListInboxItems(ctx, storage.ProjectIDForRoot(root), *status)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "inbox_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"items": items}, 0)
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(stdout, "Inbox is empty.")
+		return 0
+	}
+	for _, item := range items {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.ID, item.Status, item.ItemType, item.Title)
+	}
+	return 0
 }
 
 func runInit(ctx context.Context, args []string, stdout io.Writer) int {
@@ -191,6 +239,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  devos init [--project-root PATH] [--data-root PATH] [--json] CONCEPT")
 	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
 }

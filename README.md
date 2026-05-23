@@ -12,6 +12,10 @@ Personal Dev OS は、ユーザーのコンセプトからPRD、設計、ロー�
 
 まず読む順番と正規仕様は [docs/index.md](docs/index.md) を入口にしてください。実装時は `docs/index.md` の "Canonical Implementation Docs" に載っている文書だけを正規仕様として扱います。
 
+Codexでこのリポジトリを実装していくための運用ガイドは [docs/codex-implementation-workflow.md](docs/codex-implementation-workflow.md) に分けています。この文書はプロダクト仕様ではなく、Codexへの依頼単位、context選択、検証、レビューの進め方を定義します。
+
+開発進行の記録は [docs/progress.md](docs/progress.md) に残します。このログは人間向けの進行記録であり、Orchestratorが将来保存するrun artifactやDecision Reportの代替ではありません。
+
 1. [docs/index.md](docs/index.md) - ドキュメント全体の入口
 2. [docs/overview.md](docs/overview.md) - 目的と設計方針
 3. [docs/tech-stack.md](docs/tech-stack.md) - Goバックエンド / React UI の技術前提

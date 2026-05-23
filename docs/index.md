@@ -29,6 +29,20 @@
 23. [implementation-plan.md](implementation-plan.md) - Implementation Slice順序と完了条件
 24. [openai-codex-reference.md](openai-codex-reference.md) - Codex公式ドキュメント確認メモ
 
+## Codex Implementation Operating Docs
+
+次の文書は、このリポジトリをCodexで実装していくための運用ガイドです。Orchestratorとして作る製品の正規仕様ではありません。
+
+- [codex-implementation-workflow.md](codex-implementation-workflow.md) - Codexへの依頼単位、context選択、検証、レビュー、止まる条件
+
+この区分の文書は、作業手順やプロンプト設計には使えますが、製品仕様、状態遷移、DB schema、Decision Gate、platform contractを定義しません。正規仕様と衝突する場合は "Canonical Implementation Docs" を優先します。
+
+## Development Progress
+
+- [progress.md](progress.md) - このリポジトリ自体の開発進行ログ
+
+`progress.md` は人間向けの進行記録です。Orchestratorが将来保存するrun artifact、verification result、gate result、Decision Reportではなく、製品仕様としても扱いません。
+
 ## Canonical Implementation Docs
 
 実装時に参照する正規仕様は次です。

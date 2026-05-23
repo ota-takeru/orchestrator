@@ -91,6 +91,9 @@ func runInit(ctx context.Context, args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "project_save_failed", err)
 	}
+	if err := db.SaveToolchainReport(ctx, projectRecord.ID, toolchainReport); err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "toolchain_save_failed", err)
+	}
 	if *jsonOut {
 		return writeJSON(stdout, map[string]any{
 			"project":          projectRecord,

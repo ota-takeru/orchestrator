@@ -1,0 +1,7 @@
+.devagent-worktrees/
+orchestrator-data/
+.env
+.env.*
+!.env.example
+ui/node_modules/
+ui/dist/

@@ -47,6 +47,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runPlatform(ctx, args[1:], stdout, stderr)
 	case "inbox":
 		return runInbox(ctx, args[1:], stdout)
+	case "review":
+		return runReview(ctx, args[1:], stdout, stderr)
+	case "merge":
+		return runMerge(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -55,6 +59,80 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		printUsage(stderr)
 		return exitValidation
 	}
+}
+
+func runReview(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing review subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "approve":
+		return runApproveEvidence(ctx, args[1:], stdout, storage.ApprovalFinalReview)
+	default:
+		fmt.Fprintf(stderr, "unknown review subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runMerge(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing merge subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "approve":
+		return runApproveEvidence(ctx, args[1:], stdout, storage.ApprovalMerge)
+	default:
+		fmt.Fprintf(stderr, "unknown merge subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runApproveEvidence(ctx context.Context, args []string, stdout io.Writer, approvalType storage.ApprovalType) int {
+	fs := flag.NewFlagSet(string(approvalType)+" approve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	notes := fs.String("notes", "", "approval notes")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	root, err := preflight.ResolveProjectRoot(*projectRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "project_root_failed", err)
+	}
+	db, _, err := openProjectDB(ctx, root, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "storage_open_failed", err)
+	}
+	defer db.Close()
+	migrations, err := storage.RegisteredMigrations()
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "migration_registry_failed", err)
+	}
+	if err := db.Migrate(ctx, migrations); err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "migration_failed", err)
+	}
+	result, err := db.ApproveTaskEvidence(ctx, storage.ApprovalInput{
+		ProjectID:    storage.ProjectIDForRoot(root),
+		TaskID:       fs.Arg(0),
+		ApprovalType: approvalType,
+		Notes:        *notes,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "approval_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Approval recorded: %s\n", result.ID)
+	fmt.Fprintf(stdout, "Task status: %s\n", result.TaskStatus)
+	return 0
 }
 
 func runInbox(ctx context.Context, args []string, stdout io.Writer) int {
@@ -240,6 +318,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos init [--project-root PATH] [--data-root PATH] [--json] CONCEPT")
 	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
+	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
 }

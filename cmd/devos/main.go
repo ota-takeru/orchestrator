@@ -1223,6 +1223,8 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		return 0
 	case "profile":
 		return runPlatformProfile(ctx, args[1:], stdout, stderr)
+	case "map":
+		return runPlatformMap(ctx, args[1:], stdout, stderr)
 	case "doctor":
 		fs := flag.NewFlagSet("platform doctor", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -1248,6 +1250,60 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		return exitFromToolchainDoctor(report)
 	default:
 		fmt.Fprintf(stderr, "unknown platform subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runPlatformMap(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing platform map subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "add":
+		fs := flag.NewFlagSet("platform map add", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		fromRoot := fs.String("from-root", "", "source environment root")
+		toRoot := fs.String("to-root", "", "target environment root")
+		mode := fs.String("mode", "", "same_filesystem, isolated_worktree, mirrored_clone, or unsupported")
+		writeOwner := fs.String("write-owner", "", "write owner environment for same_filesystem mappings")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 2 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("platform map add requires FROM_ENV and TO_ENV"))
+		}
+		mappingMode := platform.MappingMode(strings.TrimSpace(*mode))
+		if !platform.ValidMappingMode(mappingMode) {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_mapping_mode", fmt.Errorf("invalid mapping mode: %s", *mode))
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "path_mapping_add_failed", err)
+		}
+		defer db.Close()
+		mapping, err := db.SavePathMapping(ctx, storage.PathMappingInput{
+			ProjectID:               projectID,
+			FromEnvironmentID:       fs.Arg(0),
+			ToEnvironmentID:         fs.Arg(1),
+			FromRoot:                *fromRoot,
+			ToRoot:                  *toRoot,
+			Mode:                    mappingMode,
+			WriteOwnerEnvironmentID: *writeOwner,
+		})
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "path_mapping_add_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, mapping, 0)
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", mapping.ID, mapping.FromEnvironmentID, mapping.ToEnvironmentID, mapping.Mode)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown platform map subcommand: %s\n", args[0])
 		return exitValidation
 	}
 }
@@ -1364,6 +1420,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos platform map add [--project-root PATH] [--data-root PATH] --from-root PATH --to-root PATH --mode MODE [--write-owner ENV_ID] [--json] FROM_ENV TO_ENV")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
 }
 

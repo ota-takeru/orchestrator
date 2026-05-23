@@ -53,6 +53,60 @@ func TestBuildPathMappingServiceRejectsSameFilesystemWithoutOwner(t *testing.T) 
 	}
 }
 
+func TestSavePathMappingValidatesAndPersists(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", "/repo")
+	insertEnvironmentWithRoot(t, db, "wsl-sidecar", "PROJECT-001", "sidecar", "/sidecar")
+
+	mapping, err := db.SavePathMapping(ctx, PathMappingInput{
+		ProjectID:         "PROJECT-001",
+		FromEnvironmentID: "linux-main",
+		ToEnvironmentID:   "wsl-sidecar",
+		FromRoot:          "/repo",
+		ToRoot:            "/sidecar",
+		Mode:              platform.MappingIsolatedWorktree,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapping.ID == "" || mapping.Status != "active" {
+		t.Fatalf("mapping = %#v", mapping)
+	}
+	service, err := db.BuildPathMappingService(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := service.ToEnvironmentPath(ctx, "linux-main", "wsl-sidecar", "/repo/app.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapped != "/sidecar/app.go" {
+		t.Fatalf("mapped = %s", mapped)
+	}
+}
+
+func TestSavePathMappingRejectsSameFilesystemWithoutOwner(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", "/repo")
+	insertEnvironmentWithRoot(t, db, "wsl-sidecar", "PROJECT-001", "sidecar", "/sidecar")
+
+	_, err := db.SavePathMapping(ctx, PathMappingInput{
+		ProjectID:         "PROJECT-001",
+		FromEnvironmentID: "linux-main",
+		ToEnvironmentID:   "wsl-sidecar",
+		FromRoot:          "/repo",
+		ToRoot:            "/sidecar",
+		Mode:              platform.MappingSameFilesystem,
+	})
+	if err == nil {
+		t.Fatal("expected same_filesystem mapping without owner to fail")
+	}
+}
+
 func insertPathMapping(t *testing.T, db *DB, projectID string, fromEnvID string, toEnvID string, fromRoot string, toRoot string, mode platform.MappingMode, writeOwner string) {
 	t.Helper()
 	id := "PATHMAP-" + stableShortHash(projectID+"|"+fromEnvID+"|"+toEnvID+"|"+fromRoot+"|"+toRoot)

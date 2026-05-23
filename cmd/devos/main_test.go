@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
+	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/storage"
 )
 
@@ -189,6 +190,31 @@ func TestEnvStatusCLI(t *testing.T) {
 	decodeJSON(t, out, &result)
 	if len(result.Environments) != 1 || result.Environments[0].ID == "" {
 		t.Fatalf("environments = %#v", result.Environments)
+	}
+}
+
+func TestPlatformMapAddCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Platform map workflow")
+	runCLI(t, "platform", "profile", "set", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "hybrid")
+	out := runCLI(t,
+		"platform", "map", "add",
+		"--project-root", projectRoot,
+		"--data-root", dataRoot,
+		"--from-root", "C:\\fake\\project",
+		"--to-root", projectRoot,
+		"--mode", "same_filesystem",
+		"--write-owner", "windows-main",
+		"--json",
+		"windows-main", "wsl-sidecar",
+	)
+	var mapping storage.PathMappingRecord
+	decodeJSON(t, out, &mapping)
+	if mapping.Status != "active" || mapping.Mode != platform.MappingSameFilesystem || mapping.WriteOwnerEnvironmentID != "windows-main" {
+		t.Fatalf("mapping = %#v", mapping)
 	}
 }
 

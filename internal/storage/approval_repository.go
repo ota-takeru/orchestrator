@@ -32,6 +32,7 @@ type ApprovalRecord struct {
 }
 
 type approvalEvidence struct {
+	BaseCommit            string   `json:"base_commit"`
 	RunID                 string   `json:"run_id"`
 	HeadCommit            string   `json:"head_commit"`
 	DiffHash              string   `json:"diff_hash"`
@@ -133,13 +134,13 @@ func taskStatusForUpdate(ctx context.Context, tx *sql.Tx, projectID string, task
 
 func collectApprovalEvidence(ctx context.Context, tx *sql.Tx, projectID string, taskID string) (approvalEvidence, error) {
 	var evidence approvalEvidence
-	var headCommit, diffHash sql.NullString
+	var baseCommit, headCommit, diffHash sql.NullString
 	if err := tx.QueryRowContext(ctx, `
-SELECT id, head_commit, diff_hash
+SELECT id, base_commit, head_commit, diff_hash
 FROM runs
 WHERE project_id = ? AND task_id = ? AND status = 'succeeded'
 ORDER BY created_at DESC
-LIMIT 1`, projectID, taskID).Scan(&evidence.RunID, &headCommit, &diffHash); err != nil {
+LIMIT 1`, projectID, taskID).Scan(&evidence.RunID, &baseCommit, &headCommit, &diffHash); err != nil {
 		if err == sql.ErrNoRows {
 			return approvalEvidence{}, fmt.Errorf("approval requires a succeeded run for task %s", taskID)
 		}
@@ -148,9 +149,13 @@ LIMIT 1`, projectID, taskID).Scan(&evidence.RunID, &headCommit, &diffHash); err 
 	if !headCommit.Valid || strings.TrimSpace(headCommit.String) == "" {
 		return approvalEvidence{}, fmt.Errorf("approval requires head_commit evidence")
 	}
+	if !baseCommit.Valid || strings.TrimSpace(baseCommit.String) == "" {
+		return approvalEvidence{}, fmt.Errorf("approval requires base_commit evidence")
+	}
 	if !diffHash.Valid || strings.TrimSpace(diffHash.String) == "" {
 		return approvalEvidence{}, fmt.Errorf("approval requires diff_hash evidence")
 	}
+	evidence.BaseCommit = baseCommit.String
 	evidence.HeadCommit = headCommit.String
 	evidence.DiffHash = diffHash.String
 

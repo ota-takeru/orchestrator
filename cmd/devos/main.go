@@ -83,10 +83,70 @@ func runMerge(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	switch args[0] {
 	case "approve":
 		return runApproveEvidence(ctx, args[1:], stdout, storage.ApprovalMerge)
+	case "queue":
+		return runMergeQueue(ctx, args[1:], stdout)
 	default:
-		fmt.Fprintf(stderr, "unknown merge subcommand: %s\n", args[0])
-		return exitValidation
+		return runQueueTaskForMerge(ctx, args, stdout)
 	}
+}
+
+func runQueueTaskForMerge(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("merge", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "merge_queue_failed", err)
+	}
+	defer db.Close()
+	entry, err := db.QueueTaskForMerge(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "merge_queue_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, entry, 0)
+	}
+	fmt.Fprintf(stdout, "Queued for merge: %s\n", entry.ID)
+	return 0
+}
+
+func runMergeQueue(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("merge queue", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "merge_queue_failed", err)
+	}
+	defer db.Close()
+	entries, err := db.ListMergeQueue(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "merge_queue_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"entries": entries}, 0)
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(stdout, "Merge queue is empty.")
+		return 0
+	}
+	for _, entry := range entries {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", entry.ID, entry.Status, entry.TaskID, entry.HeadCommit)
+	}
+	return 0
 }
 
 func runApproveEvidence(ctx context.Context, args []string, stdout io.Writer, approvalType storage.ApprovalType) int {
@@ -102,24 +162,13 @@ func runApproveEvidence(ctx context.Context, args []string, stdout io.Writer, ap
 	if fs.NArg() != 1 {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
 	}
-	root, err := preflight.ResolveProjectRoot(*projectRoot)
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
 	if err != nil {
-		return writeError(stdout, *jsonOut, exitValidation, "project_root_failed", err)
-	}
-	db, _, err := openProjectDB(ctx, root, *dataRoot)
-	if err != nil {
-		return writeError(stdout, *jsonOut, exitStorage, "storage_open_failed", err)
+		return writeError(stdout, *jsonOut, errCode, "approval_failed", err)
 	}
 	defer db.Close()
-	migrations, err := storage.RegisteredMigrations()
-	if err != nil {
-		return writeError(stdout, *jsonOut, exitStorage, "migration_registry_failed", err)
-	}
-	if err := db.Migrate(ctx, migrations); err != nil {
-		return writeError(stdout, *jsonOut, exitStorage, "migration_failed", err)
-	}
 	result, err := db.ApproveTaskEvidence(ctx, storage.ApprovalInput{
-		ProjectID:    storage.ProjectIDForRoot(root),
+		ProjectID:    projectID,
 		TaskID:       fs.Arg(0),
 		ApprovalType: approvalType,
 		Notes:        *notes,
@@ -320,6 +369,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
 }
@@ -360,6 +411,27 @@ func openProjectDB(ctx context.Context, projectRoot string, dataRoot string) (*s
 		return nil, "", err
 	}
 	return db, dbPath, nil
+}
+
+func openMigratedProjectDB(ctx context.Context, projectRoot string, dataRoot string) (*storage.DB, string, int, error) {
+	root, err := preflight.ResolveProjectRoot(projectRoot)
+	if err != nil {
+		return nil, "", exitValidation, err
+	}
+	db, _, err := openProjectDB(ctx, root, dataRoot)
+	if err != nil {
+		return nil, "", exitStorage, err
+	}
+	migrations, err := storage.RegisteredMigrations()
+	if err != nil {
+		_ = db.Close()
+		return nil, "", exitStorage, err
+	}
+	if err := db.Migrate(ctx, migrations); err != nil {
+		_ = db.Close()
+		return nil, "", exitStorage, err
+	}
+	return db, storage.ProjectIDForRoot(root), 0, nil
 }
 
 func writeJSON(w io.Writer, v any, code int) int {

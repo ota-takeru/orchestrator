@@ -85,6 +85,35 @@ func TestApproveArtifactVersionSetsApprovedVersion(t *testing.T) {
 	}
 }
 
+func TestListArtifactsReturnsLatestAndApprovedVersions(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	record, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", record.ArtifactID, 1, "approved", ""); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := db.ListArtifacts(ctx, "PROJECT-001", "prd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("artifact count = %d", len(artifacts))
+	}
+	if artifacts[0].LatestVersion != 1 || artifacts[0].ApprovedVersion != 1 || artifacts[0].Path != ".devagent/prd.md" {
+		t.Fatalf("artifact = %#v", artifacts[0])
+	}
+}
+
 func TestApprovedWithNotesRequiresNotes(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

@@ -374,9 +374,8 @@ func runPlan(ctx context.Context, args []string, stdout io.Writer) int {
 }
 
 func runArtifacts(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "missing artifacts subcommand")
-		return exitValidation
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return runArtifactsList(ctx, args, stdout)
 	}
 	switch args[0] {
 	case "approve":
@@ -412,6 +411,38 @@ func runArtifacts(ctx context.Context, args []string, stdout io.Writer, stderr i
 		fmt.Fprintf(stderr, "unknown artifacts subcommand: %s\n", args[0])
 		return exitValidation
 	}
+}
+
+func runArtifactsList(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("artifacts", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	artifactType := fs.String("type", "", "artifact type")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "artifacts_list_failed", err)
+	}
+	defer db.Close()
+	artifacts, err := db.ListArtifacts(ctx, projectID, *artifactType)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "artifacts_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"artifacts": artifacts}, 0)
+	}
+	if len(artifacts) == 0 {
+		fmt.Fprintln(stdout, "No artifacts.")
+		return 0
+	}
+	for _, artifact := range artifacts {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\tlatest=%d\tapproved=%d\t%s\n", artifact.ArtifactID, artifact.ArtifactType, artifact.Status, artifact.LatestVersion, artifact.ApprovedVersion, artifact.Path)
+	}
+	return 0
 }
 
 func runReview(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -1102,6 +1133,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos spec [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")

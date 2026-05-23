@@ -34,6 +34,61 @@ type ArtifactVersionRecord struct {
 	Hash       string `json:"content_hash"`
 }
 
+type ArtifactRecord struct {
+	ArtifactID        string       `json:"artifact_id"`
+	ArtifactType      ArtifactType `json:"artifact_type"`
+	Status            string       `json:"status"`
+	LatestVersionID   string       `json:"latest_version_id,omitempty"`
+	ApprovedVersionID string       `json:"approved_version_id,omitempty"`
+	LatestVersion     int          `json:"latest_version,omitempty"`
+	ApprovedVersion   int          `json:"approved_version,omitempty"`
+	Path              string       `json:"path,omitempty"`
+}
+
+func (db *DB) ListArtifacts(ctx context.Context, projectID string, artifactType string) ([]ArtifactRecord, error) {
+	query := `
+SELECT a.id, a.artifact_type, a.status,
+       COALESCE(a.latest_version_id, ''),
+       COALESCE(a.approved_version_id, ''),
+       COALESCE(latest.version, 0),
+       COALESCE(approved.version, 0),
+       COALESCE(latest.path, '')
+FROM artifacts a
+LEFT JOIN artifact_versions latest ON latest.id = a.latest_version_id
+LEFT JOIN artifact_versions approved ON approved.id = a.approved_version_id
+WHERE a.project_id = ?`
+	args := []any{projectID}
+	if strings.TrimSpace(artifactType) != "" {
+		query += " AND a.artifact_type = ?"
+		args = append(args, artifactType)
+	}
+	query += " ORDER BY a.artifact_type"
+
+	rows, err := db.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var artifacts []ArtifactRecord
+	for rows.Next() {
+		var artifact ArtifactRecord
+		if err := rows.Scan(
+			&artifact.ArtifactID,
+			&artifact.ArtifactType,
+			&artifact.Status,
+			&artifact.LatestVersionID,
+			&artifact.ApprovedVersionID,
+			&artifact.LatestVersion,
+			&artifact.ApprovedVersion,
+			&artifact.Path,
+		); err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, rows.Err()
+}
+
 func (db *DB) SaveArtifactVersion(ctx context.Context, input ArtifactVersionInput) (ArtifactVersionRecord, error) {
 	if strings.TrimSpace(input.ProjectID) == "" {
 		return ArtifactVersionRecord{}, fmt.Errorf("project id is required")

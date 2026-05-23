@@ -67,6 +67,23 @@ func TestPatchCLIWorkflow(t *testing.T) {
 	}
 }
 
+func TestArtifactsListCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Artifact list workflow")
+	runCLI(t, "spec", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	out := runCLI(t, "artifacts", "--project-root", projectRoot, "--data-root", dataRoot, "--type", "prd", "--json")
+	var result struct {
+		Artifacts []storage.ArtifactRecord `json:"artifacts"`
+	}
+	decodeJSON(t, out, &result)
+	if len(result.Artifacts) != 1 || result.Artifacts[0].ArtifactType != storage.ArtifactPRD {
+		t.Fatalf("artifacts = %#v", result.Artifacts)
+	}
+}
+
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

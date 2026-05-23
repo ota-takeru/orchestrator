@@ -10,7 +10,7 @@ var Task = New("task", map[string][]string{
 	"reviewing":              {"ready_for_human_review", "repairing", "proposed", "needs_input", "needs_decision", "blocked_on_policy"},
 	"needs_input":            {"ready", "verifying", "cancelled"},
 	"blocked_on_environment": {"ready", "verifying", "cancelled"},
-	"needs_decision":         {"ready", "repairing", "reviewing", "cancelled"},
+	"needs_decision":         {"ready", "repairing", "reviewing", "manually_applied", "cancelled"},
 	"blocked_on_policy":      {"cancelled", "proposed"},
 	"ready_for_human_review": {"approved_for_merge", "repairing", "needs_decision"},
 	"approved_for_merge":     {"queued_for_merge", "patch_exported", "ready_for_human_review"},

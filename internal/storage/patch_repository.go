@@ -131,11 +131,15 @@ func (db *DB) MarkPatchApplied(ctx context.Context, projectID string, taskID str
 	if strings.TrimSpace(commit) == "" {
 		return PatchApplicationRecord{}, fmt.Errorf("applied commit is required")
 	}
-	patch, err := db.openPatchApplication(ctx, projectID, taskID, "exported")
+	patch, err := db.openPatchApplicationInStatuses(ctx, projectID, taskID, []string{"exported", "needs_decision"})
 	if err != nil {
 		return PatchApplicationRecord{}, err
 	}
-	if err := statemachine.Task.ValidateTransition("patch_exported", "manually_applied"); err != nil {
+	taskFrom := map[string]string{"exported": "patch_exported", "needs_decision": "needs_decision"}[patch.Status]
+	if err := statemachine.PatchApplication.ValidateTransition(patch.Status, "manually_applied"); err != nil {
+		return PatchApplicationRecord{}, err
+	}
+	if err := statemachine.Task.ValidateTransition(taskFrom, "manually_applied"); err != nil {
 		return PatchApplicationRecord{}, err
 	}
 	tx, err := db.sql.BeginTx(ctx, nil)
@@ -149,10 +153,13 @@ func (db *DB) MarkPatchApplied(ctx context.Context, projectID string, taskID str
 		}
 	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, "UPDATE patch_applications SET status = 'manually_applied', applied_commit = ?, updated_at = ? WHERE id = ?", commit, now, patch.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE patch_applications SET status = 'manually_applied', applied_commit = ?, updated_at = ? WHERE id = ? AND status = ?", commit, now, patch.ID, patch.Status); err != nil {
 		return PatchApplicationRecord{}, err
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'manually_applied', updated_at = ? WHERE project_id = ? AND id = ?", now, projectID, taskID); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'manually_applied', updated_at = ? WHERE project_id = ? AND id = ? AND status = ?", now, projectID, taskID, taskFrom); err != nil {
+		return PatchApplicationRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE inbox_items SET status = 'resolved', updated_at = ?, resolved_at = ? WHERE project_id = ? AND source_type = 'patch_application' AND source_id = ? AND status = 'open'", now, now, projectID, patch.ID); err != nil {
 		return PatchApplicationRecord{}, err
 	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "patch_manually_applied", map[string]any{"task_id": taskID, "patch_application_id": patch.ID, "commit": commit}, now); err != nil {
@@ -210,7 +217,7 @@ func (db *DB) VerifyAppliedPatchFake(ctx context.Context, projectID string, task
 		return PatchApplicationRecord{}, err
 	}
 	if taskStatusFromGateResults(gates) != "ready_for_human_review" {
-		if err := db.updatePatchStatus(ctx, projectID, patch.ID, "verifying", "needs_decision"); err != nil {
+		if err := db.markPatchNeedsDecision(ctx, projectID, taskID, patch.ID, "applied patch verification did not pass"); err != nil {
 			return PatchApplicationRecord{}, err
 		}
 		return PatchApplicationRecord{}, fmt.Errorf("applied patch verification did not pass")
@@ -240,16 +247,29 @@ LIMIT 1`, projectID, taskID).Scan(&evidence.RunID, &evidence.BaseCommit, &eviden
 }
 
 func (db *DB) openPatchApplication(ctx context.Context, projectID string, taskID string, status string) (PatchApplicationRecord, error) {
+	return db.openPatchApplicationInStatuses(ctx, projectID, taskID, []string{status})
+}
+
+func (db *DB) openPatchApplicationInStatuses(ctx context.Context, projectID string, taskID string, statuses []string) (PatchApplicationRecord, error) {
+	if len(statuses) == 0 {
+		return PatchApplicationRecord{}, fmt.Errorf("patch application status is required")
+	}
+	placeholders := make([]string, 0, len(statuses))
+	args := []any{projectID, taskID}
+	for _, status := range statuses {
+		placeholders = append(placeholders, "?")
+		args = append(args, status)
+	}
 	var patch PatchApplicationRecord
 	var appliedCommit sql.NullString
 	if err := db.sql.QueryRowContext(ctx, `
 SELECT id, task_id, status, patch_hash, applied_commit
 FROM patch_applications
-WHERE project_id = ? AND task_id = ? AND status = ?
+WHERE project_id = ? AND task_id = ? AND status IN (`+strings.Join(placeholders, ",")+`)
 ORDER BY created_at DESC
-LIMIT 1`, projectID, taskID, status).Scan(&patch.ID, &patch.TaskID, &patch.Status, &patch.PatchHash, &appliedCommit); err != nil {
+LIMIT 1`, args...).Scan(&patch.ID, &patch.TaskID, &patch.Status, &patch.PatchHash, &appliedCommit); err != nil {
 		if err == sql.ErrNoRows {
-			return PatchApplicationRecord{}, fmt.Errorf("patch application not found for task %s in status %s", taskID, status)
+			return PatchApplicationRecord{}, fmt.Errorf("patch application not found for task %s in statuses %s", taskID, strings.Join(statuses, ","))
 		}
 		return PatchApplicationRecord{}, err
 	}
@@ -292,6 +312,54 @@ func (db *DB) markPatchVerified(ctx context.Context, projectID string, taskID st
 		return err
 	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "patch_verified_applied", map[string]any{"task_id": taskID, "patch_application_id": patchID}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (db *DB) markPatchNeedsDecision(ctx context.Context, projectID string, taskID string, patchID string, reason string) error {
+	if err := statemachine.PatchApplication.ValidateTransition("verifying", "needs_decision"); err != nil {
+		return err
+	}
+	if err := statemachine.Task.ValidateTransition("reverifying", "needs_decision"); err != nil {
+		return err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, "UPDATE patch_applications SET status = 'needs_decision', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'verifying'", now, projectID, patchID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'needs_decision', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'reverifying'", now, projectID, taskID); err != nil {
+		return err
+	}
+	inboxID := "INBOX-" + stableShortHash(projectID+"|patch_application|"+patchID)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, ?, 'human_decision', 'open', 'patch_application', ?, ?, 75, ?, ?, ?, ?)
+ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
+  updated_at = excluded.updated_at,
+  body = excluded.body`,
+		inboxID, projectID, taskID, patchID, "patch_application:"+patchID,
+		"Patch application requires decision", reason, now, now,
+	); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "patch_needs_decision", map[string]any{"task_id": taskID, "patch_application_id": patchID, "reason": reason}, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

@@ -23,6 +23,7 @@ func TestAllowedTaskTransitions(t *testing.T) {
 		{"queued_for_merge", "rebasing"},
 		{"rebasing", "reverifying"},
 		{"reverifying", "merged"},
+		{"needs_decision", "manually_applied"},
 	}
 	for _, tt := range tests {
 		if !Task.CanTransition(tt[0], tt[1]) {

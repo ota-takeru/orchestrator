@@ -91,6 +91,12 @@ func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	if conflict.TaskStatus != "merge_conflict" {
 		t.Fatalf("conflict result = %#v", conflict)
 	}
+	retryOut := runCLI(t, "merge", "queue", "--project-root", projectRoot, "--data-root", dataRoot, "--retry-conflict", conflict.MergeQueueEntryID, "--json")
+	var retry storage.FakeMergeResult
+	decodeJSON(t, retryOut, &retry)
+	if retry.TaskStatus != "merged" {
+		t.Fatalf("retry result = %#v", retry)
+	}
 }
 
 func initGitRepo(t *testing.T, root string) {

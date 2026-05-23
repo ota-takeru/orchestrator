@@ -84,3 +84,71 @@ func TestProcessNextFakeMergeConflictOpensInboxDecision(t *testing.T) {
 		t.Fatalf("inbox count = %d", inboxCount)
 	}
 }
+
+func TestRetryFakeMergeConflictMovesTaskToMerged(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalFinalReview}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalMerge}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueTaskForMerge(ctx, "PROJECT-001", "TASK-001"); err != nil {
+		t.Fatal(err)
+	}
+	conflict, err := db.ProcessNextFakeMergeConflict(ctx, "PROJECT-001", "conflict in fake.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.RetryFakeMergeConflict(ctx, "PROJECT-001", conflict.MergeQueueEntryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "merged" {
+		t.Fatalf("retry status = %s", result.TaskStatus)
+	}
+}
+
+func TestCancelMergeConflictCancelsTaskAndResolvesInbox(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalFinalReview}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalMerge}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueTaskForMerge(ctx, "PROJECT-001", "TASK-001"); err != nil {
+		t.Fatal(err)
+	}
+	conflict, err := db.ProcessNextFakeMergeConflict(ctx, "PROJECT-001", "conflict in fake.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err := db.CancelMergeConflict(ctx, "PROJECT-001", conflict.MergeQueueEntryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Status != "cancelled" {
+		t.Fatalf("entry status = %s", entry.Status)
+	}
+	var taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "cancelled" {
+		t.Fatalf("task status = %s", taskStatus)
+	}
+	var openInboxCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE source_id = ? AND status = 'open'", conflict.MergeQueueEntryID).Scan(&openInboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if openInboxCount != 0 {
+		t.Fatalf("open inbox count = %d", openInboxCount)
+	}
+}

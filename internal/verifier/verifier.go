@@ -145,7 +145,7 @@ func runOne(ctx context.Context, registry RunnerRegistry, command Command) Resul
 	case runners.CommandSucceeded:
 		result.Status = ResultPassed
 	case runners.CommandFailed:
-		failure := FailureUnknown
+		failure := FailureCurrentDiff
 		result.Status = ResultFailed
 		result.FailureClass = &failure
 		result.Message = commandResult.Stderr

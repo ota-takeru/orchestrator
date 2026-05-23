@@ -69,6 +69,29 @@ func TestOptionalVerificationFailureDoesNotCountAsRequiredFailure(t *testing.T) 
 	}
 }
 
+func TestCommandFailureIsCurrentDiffFailure(t *testing.T) {
+	registry := StaticRunnerRegistry{
+		"linux-main": runners.NewFakeLinuxRunner("linux-main"),
+	}
+	report, err := Run(context.Background(), "RUN-001", registry, []Command{
+		{
+			ID:               "go-test",
+			EnvironmentID:    "linux-main",
+			Runner:           "fake",
+			WorkingDir:       "/repo",
+			Argv:             []string{"fail"},
+			NetworkPolicy:    runners.NetworkOff,
+			RequiredForMerge: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Results[0].FailureClass == nil || *report.Results[0].FailureClass != FailureCurrentDiff {
+		t.Fatalf("failure class = %#v", report.Results[0].FailureClass)
+	}
+}
+
 func TestMissingRunnerIsEnvironmentFailure(t *testing.T) {
 	report, err := Run(context.Background(), "RUN-001", StaticRunnerRegistry{}, []Command{
 		{

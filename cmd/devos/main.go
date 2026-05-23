@@ -335,6 +335,7 @@ func runMergeQueue(ctx context.Context, args []string, stdout io.Writer) int {
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	processFake := fs.Bool("process-fake", false, "process next queued merge with fake runner")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -344,6 +345,17 @@ func runMergeQueue(ctx context.Context, args []string, stdout io.Writer) int {
 		return writeError(stdout, *jsonOut, errCode, "merge_queue_failed", err)
 	}
 	defer db.Close()
+	if *processFake {
+		result, err := db.ProcessNextFakeMerge(ctx, projectID)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "merge_queue_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, result, 0)
+		}
+		fmt.Fprintf(stdout, "Merged: %s\n", result.TaskID)
+		return 0
+	}
 	entries, err := db.ListMergeQueue(ctx, projectID)
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "merge_queue_failed", err)
@@ -588,7 +600,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
-	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--include-codex] [--json]")
 }

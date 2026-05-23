@@ -16,6 +16,7 @@ type SaveVerificationInput struct {
 	ProjectID  string
 	TaskID     *string
 	RunID      string
+	RunType    string
 	AttemptNo  int
 	BaseCommit string
 	Commands   []verifier.Command
@@ -56,6 +57,9 @@ func (db *DB) SaveVerificationReport(ctx context.Context, input SaveVerification
 		runStatus = "failed"
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if input.RunType == "" {
+		input.RunType = "verification"
+	}
 	if err := insertRun(ctx, tx, input, runStatus, now); err != nil {
 		return err
 	}
@@ -92,8 +96,8 @@ func insertRun(ctx context.Context, tx *sql.Tx, input SaveVerificationInput, sta
 INSERT INTO runs(
   id, project_id, task_id, run_type, status, attempt_no, base_commit,
   created_at, updated_at, started_at, completed_at
-) VALUES (?, ?, ?, 'verification', ?, ?, ?, ?, ?, ?, ?)`,
-		input.RunID, input.ProjectID, taskID, status, input.AttemptNo, input.BaseCommit,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		input.RunID, input.ProjectID, taskID, input.RunType, status, input.AttemptNo, input.BaseCommit,
 		now, now, now, now,
 	)
 	return err

@@ -1,0 +1,161 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/decisions"
+	"github.com/ota-takeru/orchestrator/internal/runners"
+	"github.com/ota-takeru/orchestrator/internal/statemachine"
+	"github.com/ota-takeru/orchestrator/internal/verifier"
+)
+
+type FakeMergeResult struct {
+	MergeQueueEntryID string `json:"merge_queue_entry_id"`
+	TaskID            string `json:"task_id"`
+	TaskStatus        string `json:"task_status"`
+	ReverifyRunID     string `json:"reverify_run_id"`
+}
+
+func (db *DB) ProcessNextFakeMerge(ctx context.Context, projectID string) (FakeMergeResult, error) {
+	entry, err := db.nextQueuedMergeEntry(ctx, projectID)
+	if err != nil {
+		return FakeMergeResult{}, err
+	}
+	if err := db.syncMergeQueueState(ctx, projectID, entry.ID, entry.TaskID, "queued", "rebasing"); err != nil {
+		return FakeMergeResult{}, err
+	}
+	if err := db.syncMergeQueueState(ctx, projectID, entry.ID, entry.TaskID, "rebasing", "reverifying"); err != nil {
+		return FakeMergeResult{}, err
+	}
+
+	env, err := db.primaryEnvironment(ctx, projectID)
+	if err != nil {
+		return FakeMergeResult{}, err
+	}
+	runID := "RUN-" + stableShortHash(entry.TaskID+"|reverify|"+time.Now().UTC().Format(time.RFC3339Nano))
+	command := verifier.Command{
+		ID:               "fake-reverify",
+		EnvironmentID:    env.ID,
+		Runner:           "fake",
+		WorkingDir:       env.ProjectRoot,
+		Argv:             []string{"reverify"},
+		NetworkPolicy:    runners.NetworkOff,
+		RequiredForMerge: true,
+	}
+	report, err := verifier.Run(ctx, runID, verifier.StaticRunnerRegistry{env.ID: fakeRunnerForEnvironment(env)}, []verifier.Command{command})
+	if err != nil {
+		return FakeMergeResult{}, err
+	}
+	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
+		ProjectID:  projectID,
+		TaskID:     &entry.TaskID,
+		RunID:      runID,
+		RunType:    "reverify",
+		AttemptNo:  1,
+		BaseCommit: entry.BaseCommit,
+		Commands:   []verifier.Command{command},
+		Report:     report,
+	}); err != nil {
+		return FakeMergeResult{}, err
+	}
+	gates := decisions.EvaluateVerification(report)
+	if err := db.SaveGateResults(ctx, projectID, &entry.TaskID, runID, gates); err != nil {
+		return FakeMergeResult{}, err
+	}
+	if taskStatusFromGateResults(gates) != "ready_for_human_review" {
+		return FakeMergeResult{}, fmt.Errorf("fake merge reverify did not pass")
+	}
+	if err := db.markMergeQueueMerged(ctx, projectID, entry.ID, entry.TaskID); err != nil {
+		return FakeMergeResult{}, err
+	}
+	return FakeMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, TaskStatus: "merged", ReverifyRunID: runID}, nil
+}
+
+func (db *DB) nextQueuedMergeEntry(ctx context.Context, projectID string) (MergeQueueEntry, error) {
+	var entry MergeQueueEntry
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT id, task_id, status, base_commit, head_commit
+FROM merge_queue_entries
+WHERE project_id = ? AND status = 'queued'
+ORDER BY created_at ASC
+LIMIT 1`, projectID).Scan(&entry.ID, &entry.TaskID, &entry.Status, &entry.BaseCommit, &entry.HeadCommit); err != nil {
+		if err == sql.ErrNoRows {
+			return MergeQueueEntry{}, fmt.Errorf("queued merge entry not found")
+		}
+		return MergeQueueEntry{}, err
+	}
+	return entry, nil
+}
+
+func (db *DB) syncMergeQueueState(ctx context.Context, projectID string, entryID string, taskID string, from string, to string) error {
+	if err := statemachine.MergeQueue.ValidateTransition(from, to); err != nil {
+		return err
+	}
+	taskFrom := map[string]string{"queued": "queued_for_merge", "rebasing": "rebasing"}[from]
+	taskTo := map[string]string{"rebasing": "rebasing", "reverifying": "reverifying"}[to]
+	if err := statemachine.Task.ValidateTransition(taskFrom, taskTo); err != nil {
+		return err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, "UPDATE merge_queue_entries SET status = ?, updated_at = ? WHERE project_id = ? AND id = ? AND status = ?", to, now, projectID, entryID, from); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = ?, updated_at = ? WHERE project_id = ? AND id = ? AND status = ?", taskTo, now, projectID, taskID, taskFrom); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "merge_queue_"+to, map[string]any{"task_id": taskID, "merge_queue_entry_id": entryID}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (db *DB) markMergeQueueMerged(ctx context.Context, projectID string, entryID string, taskID string) error {
+	if err := statemachine.MergeQueue.ValidateTransition("reverifying", "merged"); err != nil {
+		return err
+	}
+	if err := statemachine.Task.ValidateTransition("reverifying", "merged"); err != nil {
+		return err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, "UPDATE merge_queue_entries SET status = 'merged', updated_at = ?, completed_at = ? WHERE project_id = ? AND id = ? AND status = 'reverifying'", now, now, projectID, entryID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'merged', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'reverifying'", now, projectID, taskID); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "task_merged", map[string]any{"task_id": taskID, "merge_queue_entry_id": entryID}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}

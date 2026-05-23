@@ -12,8 +12,8 @@
 | --- | ---: | --- |
 | Documentation baseline | 100% | 完了 |
 | Codex implementation operating docs | 100% | 完了 |
-| Product implementation code | 40% | 着手 |
-| Initial Complete Scope end-to-end workflow | 0% | 未着手 |
+| Product implementation code | 48% | 着手 |
+| Initial Complete Scope end-to-end workflow | 20% | 進行中 |
 
 ## Slice Progress
 
@@ -26,17 +26,17 @@
 | 1.5 | Schema Registry and Validation | 0% | 未着手 | なし | Slice 1のDB基盤後に着手する |
 | 2 | Artifact Lifecycle + Approval | 45% | 進行中 | `538d771`, `6dcf191`, `5b72158` | artifact list CLI、approved notes trusted context、task YAML schema検証へ進む |
 | 2.25 | Runner and Platform Foundation | 65% | 進行中 | `019d1a9`, `f2309f3`, `bb9e6e1`, `799354b` | platform doctorとの統合、local runner skeletonへ進む |
-| 3 | Fake Run Workflow with Fake Platform Runners | 25% | 進行中 | `f2309f3`, `bb9e6e1`, `5b72158` | fake implementation adapter、invalid state transition rejectionを縦断workflowへ接続する |
+| 3 | Fake Run Workflow with Fake Platform Runners | 75% | 進行中 | `f2309f3`, `bb9e6e1`, `5b72158`, `d387305`, `53abe8d`, `1fd2c5e` | Windows-primary / WSL-primary / Hybrid profilesを明示したfake workflowへ拡張する |
 | 2.5 | Environment-aware Git / Worktree / Patch Foundation | 0% | 未着手 | なし | canonical Git environment resolverとworktree基盤を実装する |
 | 4 | Environment-aware Verification / Baseline / Gate | 15% | 進行中 | `f2309f3`, `bb9e6e1`, `8f8d83e` | baseline classification、required_for_merge failure policy、GateResultからTaskStatusへの写像へ進む |
 | 5 | Human Inbox + Approval Sources + Toolchain Setup | 35% | 進行中 | `dfe3fdf`, `a98622b`, `ab22a6f`, `5d52d90` | platform/path setup cards、review reject、inbox approveへ進む |
-| 6 | Merge Queue + Reverify | 20% | 進行中 | `63132bf` | merge queue worker、reverify、merge conflict handlingを実装する |
+| 6 | Merge Queue + Reverify | 45% | 進行中 | `63132bf`, `acd52bc`, `1fd2c5e` | merge conflict handling、dry-run merge path、manual patch applicationへ進む |
 | 7 | Real Codex Windows / WSL Execution | 0% | 未着手 | なし | Fake workflow完了後にReal Codex adapterへ進む |
 | 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 0% | 未着手 | なし | 初期縦断workflow後に順次扱う |
 
 ## Current Focus
 
-現在の実装対象は Slice 0.5、Slice 1、Slice 2、Slice 2.25、Slice 3、Slice 4、Slice 5、Slice 6 の入口です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、artifact versioning / approval、approved artifactからのtask materialize、toolchain setup card projection、`devos inbox`、Human Approval source、merge queue entrypoint、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundation、command output artifact保存、command event / verification result永続化、GateResult evaluator / 永続化を追加済みです。次はfake implementation runとreverify/merge queue workerへ進みます。
+現在の実装対象は Slice 0.5、Slice 1、Slice 2、Slice 2.25、Slice 3、Slice 4、Slice 5、Slice 6 です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、artifact versioning / approval、approved artifactからのtask materialize、toolchain setup card projection、`devos inbox`、Human Approval source、merge queue entrypoint、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundation、command output artifact保存、command event / verification result永続化、GateResult evaluator / 永続化、fake implementation run、fake merge queue worker、`devos bootstrap --adapter fake`、`TestBootstrapFakeTaskMerges` を追加済みです。次はWindows-primary / WSL-primary / Hybrid fake profile、manual patch application、merge conflict handlingへ進みます。
 
 ## Commit Policy
 

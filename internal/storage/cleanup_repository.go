@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -38,6 +40,26 @@ type CleanupExecuteGuardRecord struct {
 	Items               []CleanupPlanItem      `json:"items"`
 	WorktreeSafety      []WorktreeSafetyRecord `json:"worktree_safety"`
 	Blockers            []string               `json:"blockers,omitempty"`
+}
+
+type CleanupQuarantineMove struct {
+	TaskID         string `json:"task_id"`
+	FromPath       string `json:"from_path"`
+	QuarantinePath string `json:"quarantine_path"`
+	Status         string `json:"status"`
+	Error          string `json:"error,omitempty"`
+}
+
+type CleanupQuarantineRecord struct {
+	RunID               string                  `json:"run_id"`
+	Status              string                  `json:"status"`
+	ActualDeleteEnabled bool                    `json:"actual_delete_enabled"`
+	QuarantineEnabled   bool                    `json:"quarantine_enabled"`
+	QuarantineRoot      string                  `json:"quarantine_root"`
+	Items               []CleanupPlanItem       `json:"items"`
+	WorktreeSafety      []WorktreeSafetyRecord  `json:"worktree_safety"`
+	Moves               []CleanupQuarantineMove `json:"moves"`
+	Blockers            []string                `json:"blockers,omitempty"`
 }
 
 func (db *DB) BuildCleanupDryRunPlan(ctx context.Context, projectID string, options CleanupPlanOptions) ([]CleanupPlanItem, error) {
@@ -212,14 +234,143 @@ func (db *DB) SaveCleanupExecuteGuardEvidence(ctx context.Context, projectID str
 	return CleanupExecuteGuardRecord{RunID: runID, Status: status, ActualDeleteEnabled: false, Items: plan, WorktreeSafety: safety, Blockers: blockers}, nil
 }
 
+func (db *DB) QuarantineCleanupCandidates(ctx context.Context, projectID string, plan []CleanupPlanItem, safety []WorktreeSafetyRecord, quarantineRoot string) (CleanupQuarantineRecord, error) {
+	quarantineRoot = strings.TrimSpace(quarantineRoot)
+	if quarantineRoot == "" {
+		return CleanupQuarantineRecord{}, fmt.Errorf("quarantine root is required")
+	}
+	attemptNo, err := db.nextProjectRunAttempt(ctx, projectID, "cleanup")
+	if err != nil {
+		return CleanupQuarantineRecord{}, err
+	}
+	blockers := cleanupExecuteBlockers(plan, safety)
+	moves := []CleanupQuarantineMove{}
+	if len(blockers) == 0 {
+		if err := os.MkdirAll(quarantineRoot, 0o755); err != nil {
+			blockers = append(blockers, "quarantine root is not writable: "+err.Error())
+		}
+	}
+	if len(blockers) == 0 {
+		env, err := db.ResolveCanonicalGitEnvironment(ctx, projectID)
+		if err != nil {
+			return CleanupQuarantineRecord{}, err
+		}
+		safetyByTask := map[string]WorktreeSafetyRecord{}
+		for _, record := range safety {
+			safetyByTask[record.TaskID] = record
+		}
+		stamp := time.Now().UTC().Format("20060102T150405Z")
+		for _, item := range plan {
+			if !item.Eligible {
+				continue
+			}
+			record := safetyByTask[item.TaskID]
+			destination := filepath.Join(quarantineRoot, item.TaskID+"-"+stamp)
+			move := CleanupQuarantineMove{TaskID: item.TaskID, FromPath: record.WorktreePath, QuarantinePath: destination, Status: "quarantined"}
+			if err := runGit(ctx, env.ProjectRoot, "worktree", "move", record.WorktreePath, destination); err != nil {
+				move.Status = "failed"
+				move.Error = err.Error()
+				blockers = append(blockers, item.TaskID+": quarantine move failed")
+			}
+			moves = append(moves, move)
+		}
+	}
+	status := "quarantined"
+	if len(blockers) > 0 {
+		status = "blocked"
+		if len(moves) > 0 {
+			status = "partial"
+		}
+	}
+	runID := "RUN-" + stableShortHash(projectID+"|cleanup-quarantine|"+time.Now().UTC().Format(time.RFC3339Nano))
+	record := CleanupQuarantineRecord{
+		RunID:               runID,
+		Status:              status,
+		ActualDeleteEnabled: false,
+		QuarantineEnabled:   true,
+		QuarantineRoot:      quarantineRoot,
+		Items:               plan,
+		WorktreeSafety:      safety,
+		Moves:               moves,
+		Blockers:            blockers,
+	}
+	if err := db.saveCleanupQuarantineEvidence(ctx, projectID, record, attemptNo); err != nil {
+		return CleanupQuarantineRecord{}, err
+	}
+	return record, nil
+}
+
+func (db *DB) saveCleanupQuarantineEvidence(ctx context.Context, projectID string, record CleanupQuarantineRecord, attemptNo int) error {
+	summary, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	runStatus := "succeeded"
+	if record.Status == "blocked" || record.Status == "partial" {
+		runStatus = "failed"
+	}
+	if err := insertRun(ctx, tx, SaveVerificationInput{
+		ProjectID:  projectID,
+		RunID:      record.RunID,
+		RunType:    "cleanup",
+		AttemptNo:  attemptNo,
+		BaseCommit: "cleanup-quarantine",
+	}, runStatus, now); err != nil {
+		return err
+	}
+	if _, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        record.RunID,
+		ArtifactType: "summary",
+		ArtifactKey:  "cleanup-quarantine-summary.json",
+		Content:      summary,
+	}, now); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "cleanup_quarantine", map[string]any{
+		"run_id":          record.RunID,
+		"status":          record.Status,
+		"quarantine_root": record.QuarantineRoot,
+		"move_count":      len(record.Moves),
+		"blockers":        record.Blockers,
+	}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 func cleanupExecuteBlockers(plan []CleanupPlanItem, safety []WorktreeSafetyRecord) []string {
 	blockers := []string{}
 	if len(plan) == 0 {
 		blockers = append(blockers, "no cleanup candidates")
 	}
+	safetyByTask := map[string]WorktreeSafetyRecord{}
+	for _, record := range safety {
+		safetyByTask[record.TaskID] = record
+	}
 	for _, item := range plan {
 		for _, blocker := range item.Blockers {
 			blockers = append(blockers, item.TaskID+": "+blocker)
+		}
+		if item.Eligible {
+			if _, ok := safetyByTask[item.TaskID]; !ok {
+				blockers = append(blockers, item.TaskID+": worktree safety evidence missing")
+			}
 		}
 	}
 	for _, record := range safety {

@@ -912,9 +912,14 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 	failed := fs.Bool("failed", false, "include failed tasks")
 	olderThan := fs.String("older-than", "", "minimum age, for example 14d or 72h")
 	execute := fs.Bool("execute", false, "run cleanup execute guard without deleting")
+	quarantine := fs.Bool("quarantine", false, "move eligible worktrees to quarantine instead of deleting")
+	quarantineRoot := fs.String("quarantine-root", "", "directory for quarantined worktrees")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if *quarantine && !*execute {
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("--quarantine requires --execute"))
 	}
 	if !*dryRun && !*execute {
 		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("cleanup deletion is not implemented; use --execute guard or --dry-run"))
@@ -923,7 +928,7 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", err)
 	}
-	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	db, projectID, root, errCode, err := openMigratedProjectDBWithRoot(ctx, *projectRoot, *dataRoot)
 	if err != nil {
 		return writeError(stdout, *jsonOut, errCode, "cleanup_failed", err)
 	}
@@ -950,6 +955,32 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 		record.WorktreeSafety = append(record.WorktreeSafety, safety)
 	}
 	if *execute {
+		if *quarantine {
+			qRoot := strings.TrimSpace(*quarantineRoot)
+			if qRoot == "" {
+				dataRootForQuarantine := *dataRoot
+				if strings.TrimSpace(dataRootForQuarantine) == "" {
+					dataRootForQuarantine = filepath.Join(root, "orchestrator-data")
+				}
+				qRoot = filepath.Join(dataRootForQuarantine, "quarantine")
+			}
+			quarantineRecord, err := db.QuarantineCleanupCandidates(ctx, projectID, record.Items, record.WorktreeSafety, qRoot)
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
+			}
+			if *jsonOut {
+				return writeJSON(stdout, quarantineRecord, 0)
+			}
+			fmt.Fprintf(stdout, "Cleanup quarantine: %s\n", quarantineRecord.Status)
+			fmt.Fprintf(stdout, "Actual delete enabled: %t\n", quarantineRecord.ActualDeleteEnabled)
+			for _, move := range quarantineRecord.Moves {
+				fmt.Fprintf(stdout, "quarantine: %s\t%s\t%s\n", move.TaskID, move.Status, move.QuarantinePath)
+			}
+			for _, blocker := range quarantineRecord.Blockers {
+				fmt.Fprintf(stdout, "blocker: %s\n", blocker)
+			}
+			return 0
+		}
 		guard, err := db.SaveCleanupExecuteGuardEvidence(ctx, projectID, record.Items, record.WorktreeSafety)
 		if err != nil {
 			return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
@@ -1626,7 +1657,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch status [--project-root PATH] [--data-root PATH] [--json] [TASK_ID]")
-	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--merged] [--applied] [--older-than AGE] [--json]")
+	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--quarantine] [--quarantine-root PATH] [--merged] [--applied] [--older-than AGE] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")

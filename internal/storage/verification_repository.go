@@ -65,7 +65,11 @@ func (db *DB) SaveVerificationReport(ctx context.Context, input SaveVerification
 			return fmt.Errorf("verification command not found for result: %s", result.CommandID)
 		}
 		commandEventID := commandEventID(input.RunID, result.CommandID, result.EnvironmentID)
-		if err := insertCommandEvent(ctx, tx, input.ProjectID, input.RunID, commandEventID, command, result.CommandResult, now); err != nil {
+		stdoutArtifactID, stderrArtifactID, err := db.saveCommandOutputArtifacts(ctx, tx, input.ProjectID, input.RunID, commandEventID, result, now)
+		if err != nil {
+			return err
+		}
+		if err := insertCommandEvent(ctx, tx, input.ProjectID, input.RunID, commandEventID, command, result.CommandResult, stdoutArtifactID, stderrArtifactID, now); err != nil {
 			return err
 		}
 		if err := insertVerificationResult(ctx, tx, input.ProjectID, input.RunID, commandEventID, result, now); err != nil {
@@ -95,7 +99,41 @@ INSERT INTO runs(
 	return err
 }
 
-func insertCommandEvent(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, command verifier.Command, result runners.RunCommandResult, now string) error {
+func (db *DB) saveCommandOutputArtifacts(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, result verifier.Result, now string) (*string, *string, error) {
+	var stdoutArtifactID *string
+	if result.CommandResult.Stdout != "" {
+		record, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
+			ProjectID:      projectID,
+			RunID:          runID,
+			CommandEventID: &commandEventID,
+			ArtifactType:   "command_stdout",
+			ArtifactKey:    result.CommandID + "." + result.EnvironmentID + ".stdout.txt",
+			Content:        []byte(result.CommandResult.Stdout),
+		}, now)
+		if err != nil {
+			return nil, nil, err
+		}
+		stdoutArtifactID = &record.ID
+	}
+	var stderrArtifactID *string
+	if result.CommandResult.Stderr != "" {
+		record, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
+			ProjectID:      projectID,
+			RunID:          runID,
+			CommandEventID: &commandEventID,
+			ArtifactType:   "command_stderr",
+			ArtifactKey:    result.CommandID + "." + result.EnvironmentID + ".stderr.txt",
+			Content:        []byte(result.CommandResult.Stderr),
+		}, now)
+		if err != nil {
+			return nil, nil, err
+		}
+		stderrArtifactID = &record.ID
+	}
+	return stdoutArtifactID, stderrArtifactID, nil
+}
+
+func insertCommandEvent(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, command verifier.Command, result runners.RunCommandResult, stdoutArtifactID *string, stderrArtifactID *string, now string) error {
 	argv, err := json.Marshal(command.Argv)
 	if err != nil {
 		return err
@@ -112,15 +150,23 @@ func insertCommandEvent(ctx context.Context, tx *sql.Tx, projectID string, runID
 	if result.CompletedAt.IsZero() {
 		completedAt = now
 	}
+	var stdoutValue any
+	if stdoutArtifactID != nil {
+		stdoutValue = *stdoutArtifactID
+	}
+	var stderrValue any
+	if stderrArtifactID != nil {
+		stderrValue = *stderrArtifactID
+	}
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO command_events(
   id, project_id, run_id, environment_id, command_kind, runner, cwd, argv_json,
   shell_invocation, network_policy, exit_code, status, detected_risks_json,
-  created_at, updated_at, started_at, completed_at
-) VALUES (?, ?, ?, ?, 'verification', ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`,
+  stdout_artifact_id, stderr_artifact_id, created_at, updated_at, started_at, completed_at
+) VALUES (?, ?, ?, ?, 'verification', ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)`,
 		commandEventID, projectID, runID, command.EnvironmentID, command.Runner, command.WorkingDir,
 		string(argv), boolInt(command.Runner != "direct"), command.NetworkPolicy, result.ExitCode, status,
-		now, now, startedAt, completedAt,
+		stdoutValue, stderrValue, now, now, startedAt, completedAt,
 	)
 	return err
 }
@@ -132,8 +178,6 @@ func insertVerificationResult(ctx context.Context, tx *sql.Tx, projectID string,
 	}
 	evidence, err := json.Marshal(map[string]any{
 		"message": result.Message,
-		"stdout":  result.CommandResult.Stdout,
-		"stderr":  result.CommandResult.Stderr,
 	})
 	if err != nil {
 		return err

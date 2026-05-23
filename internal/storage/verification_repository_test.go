@@ -55,15 +55,18 @@ func TestSaveVerificationReportPersistsMultipleEnvironmentResults(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	var commandEvents, verificationResults int
+	var commandEvents, verificationResults, runArtifacts int
 	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM command_events WHERE run_id = 'RUN-001'").Scan(&commandEvents); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM verification_results WHERE run_id = 'RUN-001'").Scan(&verificationResults); err != nil {
 		t.Fatal(err)
 	}
-	if commandEvents != 2 || verificationResults != 2 {
-		t.Fatalf("command_events=%d verification_results=%d", commandEvents, verificationResults)
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM run_artifacts WHERE run_id = 'RUN-001' AND artifact_type = 'command_stdout'").Scan(&runArtifacts); err != nil {
+		t.Fatal(err)
+	}
+	if commandEvents != 2 || verificationResults != 2 || runArtifacts != 2 {
+		t.Fatalf("command_events=%d verification_results=%d run_artifacts=%d", commandEvents, verificationResults, runArtifacts)
 	}
 }
 

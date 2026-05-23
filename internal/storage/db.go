@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,7 +13,8 @@ import (
 )
 
 type DB struct {
-	sql *sql.DB
+	sql      *sql.DB
+	dataRoot string
 }
 
 func Open(ctx context.Context, path string) (*DB, error) {
@@ -25,7 +27,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	}
 	handle.SetMaxOpenConns(1)
 	handle.SetMaxIdleConns(1)
-	db := &DB{sql: handle}
+	db := &DB{sql: handle, dataRoot: filepath.Dir(path)}
 	if err := db.configure(ctx); err != nil {
 		_ = handle.Close()
 		return nil, err
@@ -42,6 +44,10 @@ func (db *DB) Close() error {
 
 func (db *DB) SQL() *sql.DB {
 	return db.sql
+}
+
+func (db *DB) DataRoot() string {
+	return db.dataRoot
 }
 
 func (db *DB) configure(ctx context.Context) error {

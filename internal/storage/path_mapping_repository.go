@@ -134,6 +134,16 @@ func (db *DB) SavePathMapping(ctx context.Context, input PathMappingInput) (Path
 		return PathMappingRecord{}, err
 	}
 
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return PathMappingRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	mappingID := "PATHMAP-" + stableShortHash(strings.Join([]string{
 		input.ProjectID,
@@ -142,7 +152,7 @@ func (db *DB) SavePathMapping(ctx context.Context, input PathMappingInput) (Path
 		input.FromRoot,
 		input.ToRoot,
 	}, "|"))
-	if _, err := db.sql.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO path_mappings(
   id, project_id, from_environment_id, to_environment_id, from_root, to_root,
   mapping_mode, write_owner_environment_id, status, created_at, updated_at
@@ -157,6 +167,21 @@ ON CONFLICT(project_id, from_environment_id, to_environment_id, from_root, to_ro
 	); err != nil {
 		return PathMappingRecord{}, err
 	}
+	if err := syncPathMappingIssueInbox(ctx, tx, input.ProjectID, mappingID, input, now); err != nil {
+		return PathMappingRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, input.ProjectID, "path_mapping_configured", map[string]any{
+		"path_mapping_id":     mappingID,
+		"from_environment_id": input.FromEnvironmentID,
+		"to_environment_id":   input.ToEnvironmentID,
+		"mapping_mode":        input.Mode,
+	}, now); err != nil {
+		return PathMappingRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PathMappingRecord{}, err
+	}
+	committed = true
 	return PathMappingRecord{
 		ID:                      mappingID,
 		FromEnvironmentID:       input.FromEnvironmentID,
@@ -167,6 +192,38 @@ ON CONFLICT(project_id, from_environment_id, to_environment_id, from_root, to_ro
 		WriteOwnerEnvironmentID: input.WriteOwnerEnvironmentID,
 		Status:                  "active",
 	}, nil
+}
+
+func syncPathMappingIssueInbox(ctx context.Context, tx *sql.Tx, projectID string, mappingID string, input PathMappingInput, now string) error {
+	dedupeKey := strings.Join([]string{projectID, "path_mapping_issue", mappingID}, ":")
+	if input.Mode != platform.MappingUnsupported {
+		_, err := tx.ExecContext(ctx, `
+UPDATE inbox_items
+SET status = 'resolved', updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND dedupe_key = ? AND status = 'open'`,
+			now, now, projectID, dedupeKey,
+		)
+		return err
+	}
+	itemID := "INBOX-" + stableShortHash(dedupeKey)
+	title := "Path mapping unsupported: " + input.FromEnvironmentID + " -> " + input.ToEnvironmentID
+	body := "Configure a supported path mapping mode before using this environment pair."
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id, dedupe_key,
+  batch_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, 'path_mapping_issue', 'open', 'path_mapping', ?, ?, ?, 70, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  status = 'open',
+  title = excluded.title,
+  body = excluded.body,
+  resolved_at = NULL,
+  updated_at = excluded.updated_at`,
+		itemID, projectID, mappingID, dedupeKey,
+		projectID+":path_mapping_issue",
+		title, body, now, now,
+	)
+	return err
 }
 
 func (db *DB) ValidateWorktreePath(ctx context.Context, projectID string, environmentID string, worktreePath string) error {

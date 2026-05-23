@@ -107,6 +107,50 @@ func TestSavePathMappingRejectsSameFilesystemWithoutOwner(t *testing.T) {
 	}
 }
 
+func TestSavePathMappingProjectsUnsupportedIssueToInbox(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", "/repo")
+	insertEnvironmentWithRoot(t, db, "wsl-sidecar", "PROJECT-001", "sidecar", "/sidecar")
+
+	mapping, err := db.SavePathMapping(ctx, PathMappingInput{
+		ProjectID:         "PROJECT-001",
+		FromEnvironmentID: "linux-main",
+		ToEnvironmentID:   "wsl-sidecar",
+		FromRoot:          "/repo",
+		ToRoot:            "/sidecar",
+		Mode:              platform.MappingUnsupported,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openIssues int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE project_id = 'PROJECT-001' AND item_type = 'path_mapping_issue' AND source_id = ? AND status = 'open'", mapping.ID).Scan(&openIssues); err != nil {
+		t.Fatal(err)
+	}
+	if openIssues != 1 {
+		t.Fatalf("open issue count = %d", openIssues)
+	}
+
+	if _, err := db.SavePathMapping(ctx, PathMappingInput{
+		ProjectID:         "PROJECT-001",
+		FromEnvironmentID: "linux-main",
+		ToEnvironmentID:   "wsl-sidecar",
+		FromRoot:          "/repo",
+		ToRoot:            "/sidecar",
+		Mode:              platform.MappingIsolatedWorktree,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE project_id = 'PROJECT-001' AND item_type = 'path_mapping_issue' AND source_id = ? AND status = 'open'", mapping.ID).Scan(&openIssues); err != nil {
+		t.Fatal(err)
+	}
+	if openIssues != 0 {
+		t.Fatalf("open issue count after fix = %d", openIssues)
+	}
+}
+
 func insertPathMapping(t *testing.T, db *DB, projectID string, fromEnvID string, toEnvID string, fromRoot string, toRoot string, mode platform.MappingMode, writeOwner string) {
 	t.Helper()
 	id := "PATHMAP-" + stableShortHash(projectID+"|"+fromEnvID+"|"+toEnvID+"|"+fromRoot+"|"+toRoot)

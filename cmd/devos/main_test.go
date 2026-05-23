@@ -118,6 +118,24 @@ func TestDecisionsListCLI(t *testing.T) {
 	}
 }
 
+func TestEnvStatusCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Environment status workflow")
+	out := runCLI(t, "env", "status", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var result struct {
+		Environments []struct {
+			ID string `json:"id"`
+		} `json:"environments"`
+	}
+	decodeJSON(t, out, &result)
+	if len(result.Environments) != 1 || result.Environments[0].ID == "" {
+		t.Fatalf("environments = %#v", result.Environments)
+	}
+}
+
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

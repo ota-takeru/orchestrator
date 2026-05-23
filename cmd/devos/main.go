@@ -61,6 +61,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runInbox(ctx, args[1:], stdout)
 	case "decisions":
 		return runDecisions(ctx, args[1:], stdout)
+	case "env":
+		return runEnv(ctx, args[1:], stdout, stderr)
 	case "review":
 		return runReview(ctx, args[1:], stdout, stderr)
 	case "merge":
@@ -981,6 +983,51 @@ func runDecisions(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runEnv(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing env subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "status":
+		return runEnvStatus(ctx, args[1:], stdout)
+	default:
+		fmt.Fprintf(stderr, "unknown env subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runEnvStatus(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("env status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "env_status_failed", err)
+	}
+	defer db.Close()
+	envs, err := db.ListExecutionEnvironments(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "env_status_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"environments": envs}, 0)
+	}
+	if len(envs) == 0 {
+		fmt.Fprintln(stdout, "No environments.")
+		return 0
+	}
+	for _, env := range envs {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", env.ID, env.Role, env.OSFamily, env.Status)
+	}
+	return 0
+}
+
 func runInit(ctx context.Context, args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1211,6 +1258,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos review reject [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

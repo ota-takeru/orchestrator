@@ -58,4 +58,11 @@ func TestVerifyTaskLocalWithoutKnownCommandsNeedsDecision(t *testing.T) {
 	if len(result.Gates) != 1 || result.Gates[0].Detector != "verification_missing" {
 		t.Fatalf("gates = %#v", result.Gates)
 	}
+	var inboxCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE item_type = 'human_decision' AND source_type = 'gate_result'").Scan(&inboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount != 1 {
+		t.Fatalf("human decision inbox count = %d", inboxCount)
+	}
 }

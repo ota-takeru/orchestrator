@@ -64,6 +64,36 @@ func TestSaveGateResultsDoesNotProjectPassInbox(t *testing.T) {
 	}
 }
 
+func TestSaveGateResultsProjectsHumanDecisionInbox(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "needs_decision")
+	insertRunForGate(t, db, "PROJECT-001", "RUN-001")
+
+	action := "decision"
+	results := []decisions.GateResult{
+		{
+			Status:          decisions.GateHumanDecision,
+			Severity:        decisions.SeverityHigh,
+			Detector:        "verification_missing",
+			HumanActionType: &action,
+			Evidence:        map[string]any{"run_id": "RUN-001"},
+		},
+	}
+	if err := db.SaveGateResults(ctx, "PROJECT-001", ptr("TASK-001"), "RUN-001", results); err != nil {
+		t.Fatal(err)
+	}
+	var itemType, sourceType string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT item_type, source_type FROM inbox_items WHERE project_id = 'PROJECT-001'").Scan(&itemType, &sourceType); err != nil {
+		t.Fatal(err)
+	}
+	if itemType != "human_decision" || sourceType != "gate_result" {
+		t.Fatalf("item_type=%s source_type=%s", itemType, sourceType)
+	}
+}
+
 func insertRunForGate(t *testing.T, db *DB, projectID string, runID string) {
 	t.Helper()
 	_, err := db.SQL().ExecContext(context.Background(), `

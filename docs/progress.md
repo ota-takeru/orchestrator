@@ -1,21 +1,48 @@
-# Progress Log
+# Implementation Progress
 
-この文書は、このリポジトリ自体の開発進行を人間向けに記録するログです。Orchestratorが将来保存するrun artifact、verification result、gate result、Decision Reportではありません。
+この文書は、このリポジトリ自体の実装進捗を [implementation-plan.md](implementation-plan.md) のsliceに沿って確認するためのトラッカーです。単なる時系列ログではなく、計画に対して何が完了し、何が未着手かを見えるようにします。
 
-正規仕様は [index.md](index.md) の "Canonical Implementation Docs" を優先します。このログは、何を進めたか、どの範囲まで完了したか、次に見るべき作業を短く残すために使います。
+これはOrchestratorが将来保存するrun artifact、verification result、gate result、Decision Reportではありません。正規仕様は [index.md](index.md) の "Canonical Implementation Docs" を優先します。
 
-## 2026-05-23
+## Summary
 
-### 初期設計ドキュメントのベースライン化
+最終更新: 2026-05-23
 
-- `AGENTS.md`、README、`docs/` 配下の正規仕様ドキュメントを初期ベースラインとしてコミットした。
-- Commit: `474b591` (`docs: add initial orchestrator design docs`)
-- 状態: 完了
+| Area | Progress | Status |
+| --- | ---: | --- |
+| Documentation baseline | 100% | 完了 |
+| Codex implementation operating docs | 100% | 完了 |
+| Product implementation code | 0% | 未着手 |
+| Initial Complete Scope end-to-end workflow | 0% | 未着手 |
 
-### Codex実装運用ガイドの追加
+## Slice Progress
 
-- `docs/codex-implementation-workflow.md` を追加した。
-- プロダクト仕様とCodex実装運用ガイドを `docs/index.md` 上で分離した。
-- READMEからCodex実装運用ガイドへ導線を追加した。
-- Codex作業では、機能単位のコミットとこの進行ログ更新を標準運用にする。
-- 状態: この変更で追加
+| Slice | Scope | Progress | Status | Evidence | Next |
+| --- | --- | ---: | --- | --- | --- |
+| 0 | Canonical Docs and Authority | 100% | 完了 | `474b591`, `8413a1d` | 実装開始後、context builderが非正規docsを除外することをテストで固定する |
+| 0.25 | Platform Model Docs | 100% | 完了 | `474b591` | platform modelを実装sliceでDB / runner contractへ反映する |
+| 0.5 | Project Trust / Platform-aware Preflight | 0% | 未着手 | なし | project root検出、primary environment selection、trust/preflight設計を実装する |
+| 1 | Core Storage, Platform Tables, State Machines | 0% | 未着手 | なし | SQLite migration systemとcore tablesから開始する |
+| 1.5 | Schema Registry and Validation | 0% | 未着手 | なし | Slice 1のDB基盤後に着手する |
+| 2 | Artifact Lifecycle + Approval | 0% | 未着手 | なし | artifact versioningとapproval source of truthを実装する |
+| 2.25 | Runner and Platform Foundation | 0% | 未着手 | なし | Runner interfaceとfake platform runnerを実装する |
+| 2.5 | Environment-aware Git / Worktree / Patch Foundation | 0% | 未着手 | なし | canonical Git environment resolverとworktree基盤を実装する |
+| 3 | Fake Run Workflow with Fake Platform Runners | 0% | 未着手 | なし | Fake Coding Agent Adapterで縦断workflowを通す |
+| 4 | Environment-aware Verification / Baseline / Gate | 0% | 未着手 | なし | verification commandとGateResult保存を実装する |
+| 5 | Human Inbox + Approval Sources + Toolchain Setup | 0% | 未着手 | なし | Human Inbox projectionとapproval commandsを実装する |
+| 6 | Merge Queue + Reverify | 0% | 未着手 | なし | merge queue state machineとreverificationを実装する |
+| 7 | Real Codex Windows / WSL Execution | 0% | 未着手 | なし | Fake workflow完了後にReal Codex adapterへ進む |
+| 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 0% | 未着手 | なし | 初期縦断workflow後に順次扱う |
+
+## Current Focus
+
+次の実装対象は Slice 0.5 または Slice 1 です。現時点ではGo実装、DB migration、CLI、UIはまだ追加されていません。
+
+## Commit Policy
+
+変更は常に機能単位でコミットします。進捗が変わるコミットでは、この表の `Progress`、`Status`、`Evidence`、`Next` を更新します。
+
+既存コミット:
+
+- `474b591` `docs: add initial orchestrator design docs`
+- `8413a1d` `docs: add codex implementation workflow`

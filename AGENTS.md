@@ -44,6 +44,8 @@
 - Goコードは `gofmt` / `go test ./...` を基準にしてください。
 - テスト、lint、buildが定義されたら、実装後に関連コマンドを実行してください。
 - 検証できない場合は、理由と残リスクを明記してください。
+- 変更は常に機能単位でコミットしてください。無関係な変更を同じコミットへ混ぜず、必要ならドキュメント、実装、テスト、修正を別コミットに分けてください。
+- 意味のある進捗が出たら [docs/progress.md](docs/progress.md) を更新してください。単なる時系列ログではなく、[docs/implementation-plan.md](docs/implementation-plan.md) のsliceに対して何が完了し、何が未着手か分かる形で更新してください。
 
 ## Platform Rules
 

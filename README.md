@@ -14,7 +14,7 @@ Personal Dev OS は、ユーザーのコンセプトからPRD、設計、ロー�
 
 Codexでこのリポジトリを実装していくための運用ガイドは [docs/codex-implementation-workflow.md](docs/codex-implementation-workflow.md) に分けています。この文書はプロダクト仕様ではなく、Codexへの依頼単位、context選択、検証、レビューの進め方を定義します。
 
-開発進行の記録は [docs/progress.md](docs/progress.md) に残します。このログは人間向けの進行記録であり、Orchestratorが将来保存するrun artifactやDecision Reportの代替ではありません。
+開発進行は [docs/progress.md](docs/progress.md) で確認します。この文書は [docs/implementation-plan.md](docs/implementation-plan.md) のsliceに対して、どこまで実装できているかを示す人間向けの進捗トラッカーです。
 
 1. [docs/index.md](docs/index.md) - ドキュメント全体の入口
 2. [docs/overview.md](docs/overview.md) - 目的と設計方針

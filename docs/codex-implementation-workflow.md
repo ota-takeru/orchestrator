@@ -107,7 +107,7 @@ Codexへ渡すcontextは多すぎても少なすぎても品質が落ちます�
 - コミットメッセージは `docs: ...`、`feat: ...`、`fix: ...`、`test: ...`、`chore: ...` のように目的が分かる形にする。
 - 進行に意味のある区切りができたら [progress.md](progress.md) を更新する。
 
-`docs/progress.md` は人間向けの開発進行ログです。Orchestrator-owned run artifact、verification result、gate result、Decision Reportの代替ではありません。
+`docs/progress.md` は [implementation-plan.md](implementation-plan.md) のsliceに対する進捗トラッカーです。単なる時系列ログではなく、計画に対して何が完了し、何が未着手で、次に何を進めるかを分かる形で更新します。Orchestrator-owned run artifact、verification result、gate result、Decision Reportの代替ではありません。
 
 ## Permission And Sandbox Defaults
 

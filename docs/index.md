@@ -39,9 +39,9 @@
 
 ## Development Progress
 
-- [progress.md](progress.md) - このリポジトリ自体の開発進行ログ
+- [progress.md](progress.md) - `implementation-plan.md` のsliceに対する実装進捗トラッカー
 
-`progress.md` は人間向けの進行記録です。Orchestratorが将来保存するrun artifact、verification result、gate result、Decision Reportではなく、製品仕様としても扱いません。
+`progress.md` は人間向けの進捗トラッカーです。単なる時系列ログではなく、計画に対してどこまで完了しているかを示します。Orchestratorが将来保存するrun artifact、verification result、gate result、Decision Reportではなく、製品仕様としても扱いません。
 
 ## Canonical Implementation Docs
 

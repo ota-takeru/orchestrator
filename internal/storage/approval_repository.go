@@ -136,13 +136,15 @@ func collectApprovalEvidence(ctx context.Context, tx *sql.Tx, projectID string, 
 	var evidence approvalEvidence
 	var baseCommit, headCommit, diffHash sql.NullString
 	if err := tx.QueryRowContext(ctx, `
-SELECT id, base_commit, head_commit, diff_hash
+SELECT base_commit, head_commit, diff_hash
 FROM runs
 WHERE project_id = ? AND task_id = ? AND status = 'succeeded'
+  AND head_commit IS NOT NULL
+  AND diff_hash IS NOT NULL
 ORDER BY created_at DESC
-LIMIT 1`, projectID, taskID).Scan(&evidence.RunID, &baseCommit, &headCommit, &diffHash); err != nil {
+LIMIT 1`, projectID, taskID).Scan(&baseCommit, &headCommit, &diffHash); err != nil {
 		if err == sql.ErrNoRows {
-			return approvalEvidence{}, fmt.Errorf("approval requires a succeeded run for task %s", taskID)
+			return approvalEvidence{}, fmt.Errorf("approval requires a succeeded diff-producing run for task %s", taskID)
 		}
 		return approvalEvidence{}, err
 	}
@@ -158,6 +160,19 @@ LIMIT 1`, projectID, taskID).Scan(&evidence.RunID, &baseCommit, &headCommit, &di
 	evidence.BaseCommit = baseCommit.String
 	evidence.HeadCommit = headCommit.String
 	evidence.DiffHash = diffHash.String
+
+	if err := tx.QueryRowContext(ctx, `
+SELECT id
+FROM runs
+WHERE project_id = ? AND task_id = ? AND status = 'succeeded'
+  AND run_type IN ('verification', 'reverify', 'review')
+ORDER BY created_at DESC
+LIMIT 1`, projectID, taskID).Scan(&evidence.RunID); err != nil {
+		if err == sql.ErrNoRows {
+			return approvalEvidence{}, fmt.Errorf("approval requires a succeeded verification/review run for task %s", taskID)
+		}
+		return approvalEvidence{}, err
+	}
 
 	verificationIDs, err := collectIDs(ctx, tx, "SELECT id FROM verification_results WHERE project_id = ? AND run_id = ? ORDER BY id", projectID, evidence.RunID)
 	if err != nil {

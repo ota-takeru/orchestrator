@@ -51,6 +51,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runArtifacts(ctx, args[1:], stdout, stderr)
 	case "tasks":
 		return runTasks(ctx, args[1:], stdout, stderr)
+	case "run":
+		return runTaskCommand(ctx, args[1:], stdout)
 	case "platform":
 		return runPlatform(ctx, args[1:], stdout, stderr)
 	case "inbox":
@@ -67,6 +69,38 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		printUsage(stderr)
 		return exitValidation
 	}
+}
+
+func runTaskCommand(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	adapter := fs.String("adapter", "fake", "fake or codex")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	if *adapter != "fake" {
+		return writeError(stdout, *jsonOut, exitValidation, "unsupported_adapter", errors.New("only --adapter fake is implemented"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "run_failed", err)
+	}
+	defer db.Close()
+	result, err := db.RunFakeTask(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "run_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Run complete: %s -> %s\n", result.TaskID, result.TaskStatus)
+	return 0
 }
 
 func runTasks(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -549,6 +583,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

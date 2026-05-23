@@ -43,6 +43,13 @@ func TestManualPatchExportMarkAndVerifyApplied(t *testing.T) {
 	if taskStatus != "applied" {
 		t.Fatalf("task status = %s", taskStatus)
 	}
+	var reverifyCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE run_type = 'reverify' AND reverify_context_type = 'patch_application' AND reverify_context_id = ?", exported.ID).Scan(&reverifyCount); err != nil {
+		t.Fatal(err)
+	}
+	if reverifyCount != 1 {
+		t.Fatalf("reverify context count = %d", reverifyCount)
+	}
 }
 
 func TestPatchExportRequiresApprovedForMerge(t *testing.T) {

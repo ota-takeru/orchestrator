@@ -112,6 +112,21 @@ func TestSaveVerificationReportMarksRequiredFailureRunFailed(t *testing.T) {
 	}
 }
 
+func TestSaveVerificationReportRequiresReverifyContext(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
+		ProjectID:  "PROJECT-001",
+		RunID:      "RUN-003",
+		RunType:    "reverify",
+		AttemptNo:  1,
+		BaseCommit: "BASE",
+	}); err == nil {
+		t.Fatal("expected reverify context to be required")
+	}
+}
+
 func insertWSLEnvironment(t *testing.T, db sqlExecer, id string, projectID string, role string) {
 	t.Helper()
 	_, err := db.ExecContext(context.Background(), `

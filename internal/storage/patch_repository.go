@@ -191,7 +191,18 @@ func (db *DB) VerifyAppliedPatchFake(ctx context.Context, projectID string, task
 	if err != nil {
 		return PatchApplicationRecord{}, err
 	}
-	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{ProjectID: projectID, TaskID: &taskID, RunID: runID, RunType: "reverify", AttemptNo: 1, BaseCommit: "BASE", Commands: []verifier.Command{command}, Report: report}); err != nil {
+	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
+		ProjectID:           projectID,
+		TaskID:              &taskID,
+		RunID:               runID,
+		RunType:             "reverify",
+		AttemptNo:           1,
+		BaseCommit:          "BASE",
+		ReverifyContextType: "patch_application",
+		ReverifyContextID:   patch.ID,
+		Commands:            []verifier.Command{command},
+		Report:              report,
+	}); err != nil {
 		return PatchApplicationRecord{}, err
 	}
 	gates := decisions.EvaluateVerification(report)

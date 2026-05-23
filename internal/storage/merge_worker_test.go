@@ -37,7 +37,7 @@ func TestProcessNextFakeMergeMovesQueuedTaskToMerged(t *testing.T) {
 		t.Fatalf("task=%s queue=%s", taskStatus, queueStatus)
 	}
 	var reverifyCount int
-	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE run_type = 'reverify'").Scan(&reverifyCount); err != nil {
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE run_type = 'reverify' AND reverify_context_type = 'merge_queue_entry' AND reverify_context_id = ?", result.MergeQueueEntryID).Scan(&reverifyCount); err != nil {
 		t.Fatal(err)
 	}
 	if reverifyCount != 1 {

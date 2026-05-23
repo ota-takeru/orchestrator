@@ -50,14 +50,16 @@ func (db *DB) ProcessNextFakeMerge(ctx context.Context, projectID string) (FakeM
 		return FakeMergeResult{}, err
 	}
 	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
-		ProjectID:  projectID,
-		TaskID:     &entry.TaskID,
-		RunID:      runID,
-		RunType:    "reverify",
-		AttemptNo:  1,
-		BaseCommit: entry.BaseCommit,
-		Commands:   []verifier.Command{command},
-		Report:     report,
+		ProjectID:           projectID,
+		TaskID:              &entry.TaskID,
+		RunID:               runID,
+		RunType:             "reverify",
+		AttemptNo:           1,
+		BaseCommit:          entry.BaseCommit,
+		ReverifyContextType: "merge_queue_entry",
+		ReverifyContextID:   entry.ID,
+		Commands:            []verifier.Command{command},
+		Report:              report,
 	}); err != nil {
 		return FakeMergeResult{}, err
 	}

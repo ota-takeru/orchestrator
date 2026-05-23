@@ -12,7 +12,7 @@
 | --- | ---: | --- |
 | Documentation baseline | 100% | 完了 |
 | Codex implementation operating docs | 100% | 完了 |
-| Product implementation code | 0% | 未着手 |
+| Product implementation code | 5% | 着手 |
 | Initial Complete Scope end-to-end workflow | 0% | 未着手 |
 
 ## Slice Progress
@@ -21,8 +21,8 @@
 | --- | --- | ---: | --- | --- | --- |
 | 0 | Canonical Docs and Authority | 100% | 完了 | `474b591`, `8413a1d` | 実装開始後、context builderが非正規docsを除外することをテストで固定する |
 | 0.25 | Platform Model Docs | 100% | 完了 | `474b591` | platform modelを実装sliceでDB / runner contractへ反映する |
-| 0.5 | Project Trust / Platform-aware Preflight | 0% | 未着手 | なし | project root検出、primary environment selection、trust/preflight設計を実装する |
-| 1 | Core Storage, Platform Tables, State Machines | 0% | 未着手 | なし | SQLite migration systemとcore tablesから開始する |
+| 0.5 | Project Trust / Platform-aware Preflight | 35% | 進行中 | `c77f689` | preflight結果の永続化、path mapping validation、toolchain doctor skeletonへ進む |
+| 1 | Core Storage, Platform Tables, State Machines | 10% | 進行中 | `c77f689` | SQLite migration systemとcore tablesを追加し、Go enum/state machineとDB CHECKの整合を固定する |
 | 1.5 | Schema Registry and Validation | 0% | 未着手 | なし | Slice 1のDB基盤後に着手する |
 | 2 | Artifact Lifecycle + Approval | 0% | 未着手 | なし | artifact versioningとapproval source of truthを実装する |
 | 2.25 | Runner and Platform Foundation | 0% | 未着手 | なし | Runner interfaceとfake platform runnerを実装する |
@@ -36,7 +36,7 @@
 
 ## Current Focus
 
-次の実装対象は Slice 0.5 または Slice 1 です。現時点ではGo実装、DB migration、CLI、UIはまだ追加されていません。
+現在の実装対象は Slice 0.5 と Slice 1 の入口です。Go module、`devos` CLI入口、project root検出、platform-aware preflight、platform enum、主要state machine APIを追加済みです。次はSQLite migration system、core tables、preflight reportの保存へ進みます。
 
 ## Commit Policy
 

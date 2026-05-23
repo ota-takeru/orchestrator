@@ -12,8 +12,8 @@
 | --- | ---: | --- |
 | Documentation baseline | 100% | 完了 |
 | Codex implementation operating docs | 100% | 完了 |
-| Product implementation code | 54% | 着手 |
-| Initial Complete Scope end-to-end workflow | 27% | 進行中 |
+| Product implementation code | 56% | 着手 |
+| Initial Complete Scope end-to-end workflow | 29% | 進行中 |
 
 ## Slice Progress
 
@@ -30,13 +30,13 @@
 | 2.5 | Environment-aware Git / Worktree / Patch Foundation | 0% | 未着手 | なし | canonical Git environment resolverとworktree基盤を実装する |
 | 4 | Environment-aware Verification / Baseline / Gate | 15% | 進行中 | `f2309f3`, `bb9e6e1`, `8f8d83e` | baseline classification、required_for_merge failure policy、GateResultからTaskStatusへの写像へ進む |
 | 5 | Human Inbox + Approval Sources + Toolchain Setup | 35% | 進行中 | `dfe3fdf`, `a98622b`, `ab22a6f`, `5d52d90` | platform/path setup cards、review reject、inbox approveへ進む |
-| 6 | Merge Queue + Reverify | 72% | 進行中 | `63132bf`, `acd52bc`, `1fd2c5e`, `0bbd6e9`, `c79bd76`, `d77433c`, `989becc`, `31c099a` | merge conflict retry/cancel、manual patch needs_decision復帰、cleanup dry-run planへ進む |
+| 6 | Merge Queue + Reverify | 75% | 進行中 | `63132bf`, `acd52bc`, `1fd2c5e`, `0bbd6e9`, `c79bd76`, `d77433c`, `989becc`, `31c099a`, `dd44f1b` | merge conflict retry/cancel、manual patch needs_decision復帰へ進む |
 | 7 | Real Codex Windows / WSL Execution | 0% | 未着手 | なし | Fake workflow完了後にReal Codex adapterへ進む |
-| 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 0% | 未着手 | なし | 初期縦断workflow後に順次扱う |
+| 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 2% | 着手 | `dd44f1b` | cleanup実削除前のworktree safety証跡、UIは初期縦断workflow後に扱う |
 
 ## Current Focus
 
-現在の実装対象は Slice 0.5、Slice 1、Slice 2、Slice 2.25、Slice 3、Slice 4、Slice 5、Slice 6 です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、artifact versioning / approval、approved artifactからのtask materialize、toolchain setup card projection、`devos inbox`、Human Approval source、merge queue entrypoint、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundation、command output artifact保存、command event / verification result永続化、GateResult evaluator / 永続化、fake implementation run、fake merge queue worker、`devos bootstrap --adapter fake`、`TestBootstrapFakeTaskMerges`、manual patch application repository、`devos patch export/status/mark-applied/verify-applied`、`runs.reverify_context_*` 保存、fake merge conflict handling、`devos merge --dry-run` を追加済みです。次はWindows-primary / WSL-primary / Hybrid fake profileの残確認、merge conflict retry/cancel、cleanup dry-run planへ進みます。
+現在の実装対象は Slice 0.5、Slice 1、Slice 2、Slice 2.25、Slice 3、Slice 4、Slice 5、Slice 6 です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、artifact versioning / approval、approved artifactからのtask materialize、toolchain setup card projection、`devos inbox`、Human Approval source、merge queue entrypoint、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundation、command output artifact保存、command event / verification result永続化、GateResult evaluator / 永続化、fake implementation run、fake merge queue worker、`devos bootstrap --adapter fake`、`TestBootstrapFakeTaskMerges`、manual patch application repository、`devos patch export/status/mark-applied/verify-applied`、`runs.reverify_context_*` 保存、fake merge conflict handling、`devos merge --dry-run`、`devos cleanup --dry-run` planを追加済みです。次はWindows-primary / WSL-primary / Hybrid fake profileの残確認、merge conflict retry/cancel、manual patch needs_decision復帰へ進みます。
 
 ## Commit Policy
 

@@ -53,6 +53,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runTasks(ctx, args[1:], stdout, stderr)
 	case "run":
 		return runTaskCommand(ctx, args[1:], stdout)
+	case "bootstrap":
+		return runBootstrap(ctx, args[1:], stdout)
 	case "platform":
 		return runPlatform(ctx, args[1:], stdout, stderr)
 	case "inbox":
@@ -69,6 +71,128 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		printUsage(stderr)
 		return exitValidation
 	}
+}
+
+func runBootstrap(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	adapter := fs.String("adapter", "fake", "fake or codex")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if *adapter != "fake" {
+		return writeError(stdout, *jsonOut, exitValidation, "unsupported_adapter", errors.New("only --adapter fake is implemented"))
+	}
+	concept := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if concept == "" {
+		concept = "Bootstrap fake project"
+	}
+	initResult, err := preflight.InitProject(ctx, *projectRoot, concept)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+	}
+	toolchainReport := toolchains.RunDoctor(ctx, initResult.PreflightReport.Environment, toolchains.Options{IncludeCodex: false})
+	db, _, err := openProjectDB(ctx, initResult.ProjectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
+	}
+	defer db.Close()
+	migrations, err := storage.RegisteredMigrations()
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
+	}
+	if err := db.Migrate(ctx, migrations); err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
+	}
+	project, err := db.SaveProjectInit(ctx, storage.ProjectInitInput{
+		RootPath:        initResult.ProjectRoot,
+		Environment:     initResult.PreflightReport.Environment,
+		PreflightReport: initResult.PreflightReport,
+		ToolchainReport: &toolchainReport,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
+	}
+	if err := db.SaveToolchainReport(ctx, project.ID, toolchainReport); err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
+	}
+
+	records, err := generateBootstrapArtifacts(ctx, db, project.ID, initResult.ProjectRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "bootstrap_failed", err)
+	}
+	for _, record := range records {
+		if _, err := db.ApproveArtifactVersion(ctx, project.ID, record.ArtifactID, record.Version, "approved", ""); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+		}
+	}
+	tasks, err := db.MaterializeApprovedTasks(ctx, project.ID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+	}
+	if len(tasks) == 0 {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", errors.New("no tasks materialized"))
+	}
+	runResult, err := db.RunFakeTask(ctx, project.ID, tasks[0].ID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, storage.ApprovalInput{ProjectID: project.ID, TaskID: tasks[0].ID, ApprovalType: storage.ApprovalFinalReview}); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, storage.ApprovalInput{ProjectID: project.ID, TaskID: tasks[0].ID, ApprovalType: storage.ApprovalMerge}); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+	}
+	queueEntry, err := db.QueueTaskForMerge(ctx, project.ID, tasks[0].ID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+	}
+	mergeResult, err := db.ProcessNextFakeMerge(ctx, project.ID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "bootstrap_failed", err)
+	}
+	result := map[string]any{
+		"project":     project,
+		"artifacts":   records,
+		"tasks":       tasks,
+		"run":         runResult,
+		"merge_queue": queueEntry,
+		"merge":       mergeResult,
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Bootstrap fake workflow complete: %s %s\n", tasks[0].ID, mergeResult.TaskStatus)
+	return 0
+}
+
+func generateBootstrapArtifacts(ctx context.Context, db *storage.DB, projectID string, root string) ([]storage.ArtifactVersionRecord, error) {
+	concept, err := os.ReadFile(filepath.Join(root, ".devagent", "concept.md"))
+	if err != nil {
+		return nil, err
+	}
+	artifacts := []struct {
+		path    string
+		typ     storage.ArtifactType
+		content []byte
+	}{
+		{".devagent/prd.md", storage.ArtifactPRD, []byte("# PRD\n\n" + strings.TrimSpace(string(concept)) + "\n\n## Acceptance Criteria\n\n- Bootstrap workflow evidence is saved.\n")},
+		{".devagent/architecture.md", storage.ArtifactArchitecture, []byte("# Architecture\n\nLocal-first Go CLI/Core with SQLite evidence store.\n")},
+		{".devagent/roadmap.yaml", storage.ArtifactRoadmap, []byte("slices:\n  - id: TASK-001\n    title: Bootstrap fake workflow\n")},
+		{".devagent/tasks/TASK-001.yaml", storage.ArtifactTaskYAML, []byte("id: TASK-001\ntitle: Bootstrap fake workflow\nstatus: proposed\nbase_branch: main\n")},
+	}
+	records := make([]storage.ArtifactVersionRecord, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		record, err := writeArtifactAndSave(ctx, db, projectID, root, artifact.path, artifact.typ, artifact.content)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func runTaskCommand(ctx context.Context, args []string, stdout io.Writer) int {
@@ -596,6 +720,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

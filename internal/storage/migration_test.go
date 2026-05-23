@@ -3,6 +3,8 @@ package storage
 import (
 	"strings"
 	"testing"
+
+	"github.com/ota-takeru/orchestrator/internal/statemachine"
 )
 
 func TestRegisteredMigrationsValidate(t *testing.T) {
@@ -62,6 +64,37 @@ func TestMigration002ContainsMergeAndPatchTables(t *testing.T) {
 	for _, token := range []string{"CREATE TABLE merge_queue_entries", "CREATE TABLE patch_applications", "CREATE TABLE semantic_behavior_diffs"} {
 		if !strings.Contains(sql, token) {
 			t.Fatalf("migration 002 missing %q", token)
+		}
+	}
+}
+
+func TestStorageCheckValuesCoverAllStateMachines(t *testing.T) {
+	migrations, err := RegisteredMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allSQL := migrations[0].SQL + "\n" + migrations[1].SQL
+	machines := []statemachine.Machine{
+		statemachine.Task,
+		statemachine.Run,
+		statemachine.CommandEvent,
+		statemachine.ExecutionEnvironment,
+		statemachine.RunProfile,
+		statemachine.PathMapping,
+		statemachine.TargetPlatform,
+		statemachine.ToolchainRequirement,
+		statemachine.ProjectLifecycle,
+		statemachine.ArtifactVersion,
+		statemachine.Artifact,
+		statemachine.HumanApproval,
+		statemachine.MergeQueue,
+		statemachine.PatchApplication,
+	}
+	for _, machine := range machines {
+		for _, state := range machine.States() {
+			if !strings.Contains(allSQL, "'"+state+"'") {
+				t.Fatalf("state %q from %s is missing from storage CHECK values", state, machine.Name())
+			}
 		}
 	}
 }

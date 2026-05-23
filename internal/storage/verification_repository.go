@@ -74,11 +74,11 @@ func (db *DB) SaveVerificationReport(ctx context.Context, input SaveVerification
 			return fmt.Errorf("verification command not found for result: %s", result.CommandID)
 		}
 		commandEventID := commandEventID(input.RunID, result.CommandID, result.EnvironmentID)
-		stdoutArtifactID, stderrArtifactID, err := db.saveCommandOutputArtifacts(ctx, tx, input.ProjectID, input.RunID, commandEventID, result, now)
+		stdoutArtifactID, stderrArtifactID, err := db.saveCommandOutputArtifacts(ctx, tx, input.ProjectID, input.RunID, commandEventID, result.CommandID, result.EnvironmentID, result.CommandResult, now)
 		if err != nil {
 			return err
 		}
-		if err := insertCommandEvent(ctx, tx, input.ProjectID, input.RunID, commandEventID, command, result.CommandResult, stdoutArtifactID, stderrArtifactID, now); err != nil {
+		if err := insertCommandEvent(ctx, tx, input.ProjectID, input.RunID, commandEventID, "verification", command, result.CommandResult, stdoutArtifactID, stderrArtifactID, now); err != nil {
 			return err
 		}
 		if err := insertVerificationResult(ctx, tx, input.ProjectID, input.RunID, commandEventID, result, now); err != nil {
@@ -116,16 +116,16 @@ INSERT INTO runs(
 	return err
 }
 
-func (db *DB) saveCommandOutputArtifacts(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, result verifier.Result, now string) (*string, *string, error) {
+func (db *DB) saveCommandOutputArtifacts(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, commandID string, environmentID string, result runners.RunCommandResult, now string) (*string, *string, error) {
 	var stdoutArtifactID *string
-	if result.CommandResult.Stdout != "" {
+	if result.Stdout != "" {
 		record, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
 			ProjectID:      projectID,
 			RunID:          runID,
 			CommandEventID: &commandEventID,
 			ArtifactType:   "command_stdout",
-			ArtifactKey:    result.CommandID + "." + result.EnvironmentID + ".stdout.txt",
-			Content:        []byte(result.CommandResult.Stdout),
+			ArtifactKey:    commandID + "." + environmentID + ".stdout.txt",
+			Content:        []byte(result.Stdout),
 		}, now)
 		if err != nil {
 			return nil, nil, err
@@ -133,14 +133,14 @@ func (db *DB) saveCommandOutputArtifacts(ctx context.Context, tx *sql.Tx, projec
 		stdoutArtifactID = &record.ID
 	}
 	var stderrArtifactID *string
-	if result.CommandResult.Stderr != "" {
+	if result.Stderr != "" {
 		record, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
 			ProjectID:      projectID,
 			RunID:          runID,
 			CommandEventID: &commandEventID,
 			ArtifactType:   "command_stderr",
-			ArtifactKey:    result.CommandID + "." + result.EnvironmentID + ".stderr.txt",
-			Content:        []byte(result.CommandResult.Stderr),
+			ArtifactKey:    commandID + "." + environmentID + ".stderr.txt",
+			Content:        []byte(result.Stderr),
 		}, now)
 		if err != nil {
 			return nil, nil, err
@@ -150,10 +150,13 @@ func (db *DB) saveCommandOutputArtifacts(ctx context.Context, tx *sql.Tx, projec
 	return stdoutArtifactID, stderrArtifactID, nil
 }
 
-func insertCommandEvent(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, command verifier.Command, result runners.RunCommandResult, stdoutArtifactID *string, stderrArtifactID *string, now string) error {
+func insertCommandEvent(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, commandKind string, command verifier.Command, result runners.RunCommandResult, stdoutArtifactID *string, stderrArtifactID *string, now string) error {
 	argv, err := json.Marshal(command.Argv)
 	if err != nil {
 		return err
+	}
+	if commandKind == "" {
+		commandKind = "verification"
 	}
 	status := string(result.Status)
 	if status == "" {
@@ -180,8 +183,8 @@ INSERT INTO command_events(
   id, project_id, run_id, environment_id, command_kind, runner, cwd, argv_json,
   shell_invocation, network_policy, exit_code, status, detected_risks_json,
   stdout_artifact_id, stderr_artifact_id, created_at, updated_at, started_at, completed_at
-) VALUES (?, ?, ?, ?, 'verification', ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)`,
-		commandEventID, projectID, runID, command.EnvironmentID, command.Runner, command.WorkingDir,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)`,
+		commandEventID, projectID, runID, command.EnvironmentID, commandKind, command.Runner, command.WorkingDir,
 		string(argv), boolInt(command.Runner != "direct"), command.NetworkPolicy, result.ExitCode, status,
 		stdoutValue, stderrValue, now, now, startedAt, completedAt,
 	)

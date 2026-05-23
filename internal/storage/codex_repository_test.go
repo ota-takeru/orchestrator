@@ -57,6 +57,32 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskThenVerificationReachesReview(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+
+	runResult, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runResult.TaskStatus != "verifying" {
+		t.Fatalf("run result = %#v", runResult)
+	}
+	verifyResult, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifyResult.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("verify result = %#v", verifyResult)
+	}
+}
+
 func TestRunRealCodexTaskFailureOpensDecision(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

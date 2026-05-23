@@ -59,6 +59,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runPlatform(ctx, args[1:], stdout, stderr)
 	case "inbox":
 		return runInbox(ctx, args[1:], stdout)
+	case "decisions":
+		return runDecisions(ctx, args[1:], stdout)
 	case "review":
 		return runReview(ctx, args[1:], stdout, stderr)
 	case "merge":
@@ -947,6 +949,38 @@ func runInbox(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runDecisions(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("decisions", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	status := fs.String("status", "", "decision status")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "decisions_list_failed", err)
+	}
+	defer db.Close()
+	decisions, err := db.ListDecisions(ctx, projectID, *status)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "decisions_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"decisions": decisions}, 0)
+	}
+	if len(decisions) == 0 {
+		fmt.Fprintln(stdout, "No decisions.")
+		return 0
+	}
+	for _, decision := range decisions {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", decision.ID, decision.Status, decision.Title)
+	}
+	return 0
+}
+
 func runInit(ctx context.Context, args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1176,6 +1210,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
+	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos review reject [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

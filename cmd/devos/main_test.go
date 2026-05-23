@@ -100,6 +100,24 @@ func TestReviewRejectCLI(t *testing.T) {
 	}
 }
 
+func TestDecisionsListCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Decision list workflow")
+	insertCLIDecision(t, ctx, dataRoot, projectRoot)
+	out := runCLI(t, "decisions", "--project-root", projectRoot, "--data-root", dataRoot, "--status", "open", "--json")
+	var result struct {
+		Decisions []storage.DecisionRecord `json:"decisions"`
+	}
+	decodeJSON(t, out, &result)
+	if len(result.Decisions) != 1 || result.Decisions[0].ID != "DEC-001" {
+		t.Fatalf("decisions = %#v", result.Decisions)
+	}
+}
+
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()
@@ -270,6 +288,23 @@ func updateCLIRunEvidence(t *testing.T, ctx context.Context, dataRoot string, pr
 	defer db.Close()
 	projectID := storage.ProjectIDForRoot(projectRoot)
 	if _, err := db.SQL().ExecContext(ctx, "UPDATE runs SET base_commit = ?, head_commit = ? WHERE project_id = ? AND id = 'RUN-001'", baseCommit, headCommit, projectID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertCLIDecision(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO decisions(
+  id, project_id, status, title, options_json, evidence_json, created_at, updated_at
+) VALUES ('DEC-001', ?, 'open', 'Choose behavior', '[]', '{}', ?, ?)`, projectID, now, now); err != nil {
 		t.Fatal(err)
 	}
 }

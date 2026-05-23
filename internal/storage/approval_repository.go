@@ -121,6 +121,64 @@ func (db *DB) ApproveTaskEvidence(ctx context.Context, input ApprovalInput) (App
 	return ApprovalRecord{ID: approvalID, TaskStatus: taskStatus, ApprovedForMerge: approvedForMerge}, nil
 }
 
+func (db *DB) RejectTaskFinalReview(ctx context.Context, input ApprovalInput) (ApprovalRecord, error) {
+	if strings.TrimSpace(input.ProjectID) == "" {
+		return ApprovalRecord{}, fmt.Errorf("project id is required")
+	}
+	if strings.TrimSpace(input.TaskID) == "" {
+		return ApprovalRecord{}, fmt.Errorf("task id is required")
+	}
+	input.ApprovalType = ApprovalFinalReview
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	taskStatus, err := taskStatusForUpdate(ctx, tx, input.ProjectID, input.TaskID)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	if taskStatus != "ready_for_human_review" {
+		return ApprovalRecord{}, fmt.Errorf("task %s is not ready for final review rejection: %s", input.TaskID, taskStatus)
+	}
+	evidence, err := collectApprovalEvidence(ctx, tx, input.ProjectID, input.TaskID)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	evidenceJSON, err := json.Marshal(evidence)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	approvalID := approvalID(input.TaskID, input.ApprovalType, string(evidenceJSON))
+	if err := upsertApprovalStatus(ctx, tx, approvalID, input, string(evidenceJSON), "rejected", now); err != nil {
+		return ApprovalRecord{}, err
+	}
+	if err := statemachine.Task.ValidateTransition("ready_for_human_review", "needs_decision"); err != nil {
+		return ApprovalRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'needs_decision', updated_at = ? WHERE id = ? AND project_id = ?", now, input.TaskID, input.ProjectID); err != nil {
+		return ApprovalRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, input.ProjectID, "final_review_rejected", map[string]any{
+		"task_id":     input.TaskID,
+		"approval_id": approvalID,
+		"evidence":    evidence,
+	}, now); err != nil {
+		return ApprovalRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ApprovalRecord{}, err
+	}
+	committed = true
+	return ApprovalRecord{ID: approvalID, TaskStatus: "needs_decision"}, nil
+}
+
 func taskStatusForUpdate(ctx context.Context, tx *sql.Tx, projectID string, taskID string) (string, error) {
 	var status string
 	if err := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = ? AND project_id = ?", taskID, projectID).Scan(&status); err != nil {
@@ -211,18 +269,22 @@ func collectIDs(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]s
 }
 
 func upsertApproval(ctx context.Context, tx *sql.Tx, approvalID string, input ApprovalInput, evidenceJSON string, now string) error {
+	return upsertApprovalStatus(ctx, tx, approvalID, input, evidenceJSON, "approved", now)
+}
+
+func upsertApprovalStatus(ctx context.Context, tx *sql.Tx, approvalID string, input ApprovalInput, evidenceJSON string, status string, now string) error {
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO human_approvals(
   id, project_id, task_id, approval_type, status, evidence_json, notes,
   created_at, updated_at, resolved_at
-) VALUES (?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
-  status = 'approved',
+  status = excluded.status,
   evidence_json = excluded.evidence_json,
   notes = excluded.notes,
   updated_at = excluded.updated_at,
   resolved_at = excluded.resolved_at`,
-		approvalID, input.ProjectID, input.TaskID, input.ApprovalType, evidenceJSON, input.Notes, now, now, now,
+		approvalID, input.ProjectID, input.TaskID, input.ApprovalType, status, evidenceJSON, input.Notes, now, now, now,
 	)
 	return err
 }

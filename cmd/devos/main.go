@@ -453,10 +453,46 @@ func runReview(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	switch args[0] {
 	case "approve":
 		return runApproveEvidence(ctx, args[1:], stdout, storage.ApprovalFinalReview)
+	case "reject":
+		return runRejectFinalReview(ctx, args[1:], stdout)
 	default:
 		fmt.Fprintf(stderr, "unknown review subcommand: %s\n", args[0])
 		return exitValidation
 	}
+}
+
+func runRejectFinalReview(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("review reject", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	notes := fs.String("notes", "", "rejection notes")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "review_reject_failed", err)
+	}
+	defer db.Close()
+	result, err := db.RejectTaskFinalReview(ctx, storage.ApprovalInput{
+		ProjectID: projectID,
+		TaskID:    fs.Arg(0),
+		Notes:     *notes,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "review_reject_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Review rejected: %s\n", result.ID)
+	fmt.Fprintf(stdout, "Task status: %s\n", result.TaskStatus)
+	return 0
 }
 
 func runMerge(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -1141,6 +1177,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos review reject [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--dry-run] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--simulate-conflict] [--retry-conflict ID] [--cancel-conflict ID] [--dry-run-real-git] [--entry ID] [--json]")

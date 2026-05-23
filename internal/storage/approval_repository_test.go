@@ -59,6 +59,33 @@ func TestMergeApprovalRequiresMatchingFinalReview(t *testing.T) {
 	}
 }
 
+func TestRejectFinalReviewMovesTaskToNeedsDecision(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	rejection, err := db.RejectTaskFinalReview(ctx, ApprovalInput{
+		ProjectID: "PROJECT-001",
+		TaskID:    "TASK-001",
+		Notes:     "needs changes",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejection.TaskStatus != "needs_decision" {
+		t.Fatalf("rejection = %#v", rejection)
+	}
+	var approvalStatus, taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM human_approvals WHERE id = ?", rejection.ID).Scan(&approvalStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if approvalStatus != "rejected" || taskStatus != "needs_decision" {
+		t.Fatalf("approval=%s task=%s", approvalStatus, taskStatus)
+	}
+}
+
 func TestApprovalRequiresGateEvidence(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

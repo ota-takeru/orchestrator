@@ -84,6 +84,22 @@ func TestArtifactsListCLI(t *testing.T) {
 	}
 }
 
+func TestReviewRejectCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Review reject workflow")
+	seedPatchCLIApprovalEvidence(t, ctx, dataRoot, projectRoot)
+	out := runCLI(t, "review", "reject", "--project-root", projectRoot, "--data-root", dataRoot, "--notes", "needs changes", "--json", "TASK-001")
+	var result storage.ApprovalRecord
+	decodeJSON(t, out, &result)
+	if result.TaskStatus != "needs_decision" {
+		t.Fatalf("review reject = %#v", result)
+	}
+}
+
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

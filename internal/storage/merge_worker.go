@@ -76,6 +76,23 @@ func (db *DB) ProcessNextFakeMerge(ctx context.Context, projectID string) (FakeM
 	return FakeMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, TaskStatus: "merged", ReverifyRunID: runID}, nil
 }
 
+func (db *DB) ProcessNextFakeMergeConflict(ctx context.Context, projectID string, reason string) (FakeMergeResult, error) {
+	entry, err := db.nextQueuedMergeEntry(ctx, projectID)
+	if err != nil {
+		return FakeMergeResult{}, err
+	}
+	if err := db.syncMergeQueueState(ctx, projectID, entry.ID, entry.TaskID, "queued", "rebasing"); err != nil {
+		return FakeMergeResult{}, err
+	}
+	if reason == "" {
+		reason = "fake merge conflict"
+	}
+	if err := db.markMergeQueueConflict(ctx, projectID, entry.ID, entry.TaskID, reason); err != nil {
+		return FakeMergeResult{}, err
+	}
+	return FakeMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, TaskStatus: "merge_conflict"}, nil
+}
+
 func (db *DB) nextQueuedMergeEntry(ctx context.Context, projectID string) (MergeQueueEntry, error) {
 	var entry MergeQueueEntry
 	if err := db.sql.QueryRowContext(ctx, `
@@ -119,6 +136,54 @@ func (db *DB) syncMergeQueueState(ctx context.Context, projectID string, entryID
 		return err
 	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "merge_queue_"+to, map[string]any{"task_id": taskID, "merge_queue_entry_id": entryID}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (db *DB) markMergeQueueConflict(ctx context.Context, projectID string, entryID string, taskID string, reason string) error {
+	if err := statemachine.MergeQueue.ValidateTransition("rebasing", "merge_conflict"); err != nil {
+		return err
+	}
+	if err := statemachine.Task.ValidateTransition("rebasing", "merge_conflict"); err != nil {
+		return err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, "UPDATE merge_queue_entries SET status = 'merge_conflict', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'rebasing'", now, projectID, entryID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'merge_conflict', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'rebasing'", now, projectID, taskID); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "merge_conflict_detected", map[string]any{"task_id": taskID, "merge_queue_entry_id": entryID, "reason": reason}, now); err != nil {
+		return err
+	}
+	inboxID := "INBOX-" + stableShortHash(projectID+"|merge_conflict|"+entryID)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, ?, 'human_decision', 'open', 'merge_conflict', ?, ?, 80, ?, ?, ?, ?)
+ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
+  updated_at = excluded.updated_at,
+  body = excluded.body`,
+		inboxID, projectID, taskID, entryID, "merge_conflict:"+entryID,
+		"Merge conflict requires decision", reason, now, now,
+	); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

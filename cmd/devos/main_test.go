@@ -57,6 +57,27 @@ func TestPatchCLIWorkflow(t *testing.T) {
 	}
 }
 
+func TestMergeQueueSimulateConflictCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Merge conflict workflow")
+	seedPatchCLIApprovalEvidence(t, ctx, dataRoot, projectRoot)
+
+	runCLI(t, "review", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	runCLI(t, "merge", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	runCLI(t, "merge", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+
+	conflictOut := runCLI(t, "merge", "queue", "--project-root", projectRoot, "--data-root", dataRoot, "--process-fake", "--simulate-conflict", "--conflict-reason", "conflict in fake.txt", "--json")
+	var conflict storage.FakeMergeResult
+	decodeJSON(t, conflictOut, &conflict)
+	if conflict.TaskStatus != "merge_conflict" {
+		t.Fatalf("conflict result = %#v", conflict)
+	}
+}
+
 func initGitRepo(t *testing.T, root string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".env.*\n.devagent-worktrees/\norchestrator-data/\n"), 0o644); err != nil {

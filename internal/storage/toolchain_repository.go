@@ -8,8 +8,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
+
+type ToolchainSetupInstructions struct {
+	InboxID          string            `json:"inbox_id"`
+	RequirementID    string            `json:"requirement_id"`
+	EnvironmentID    string            `json:"environment_id"`
+	OSFamily         platform.OSFamily `json:"os_family"`
+	ToolchainKey     string            `json:"toolchain_key"`
+	RequiredFor      string            `json:"required_for"`
+	RequiredForMerge bool              `json:"required_for_merge"`
+	Status           string            `json:"status"`
+	Message          string            `json:"message"`
+	Instructions     []string          `json:"instructions"`
+	RerunCommand     string            `json:"rerun_command"`
+}
 
 func (db *DB) SaveToolchainReport(ctx context.Context, projectID string, report toolchains.Report) error {
 	if strings.TrimSpace(projectID) == "" {
@@ -102,6 +117,94 @@ WHERE project_id = ? AND source_type = 'toolchain_requirement' AND source_id = ?
 		now, now, projectID, requirementID,
 	)
 	return err
+}
+
+func (db *DB) ToolchainSetupInstructions(ctx context.Context, projectID string, inboxID string) (ToolchainSetupInstructions, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return ToolchainSetupInstructions{}, fmt.Errorf("project id is required")
+	}
+	if strings.TrimSpace(inboxID) == "" {
+		return ToolchainSetupInstructions{}, fmt.Errorf("inbox id is required")
+	}
+	var out ToolchainSetupInstructions
+	var evidenceJSON string
+	var requiredForMerge int
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT ii.id, tr.id, tr.environment_id, ee.os_family, tr.toolchain_key,
+       tr.required_for, tr.required_for_merge, tr.status, tr.evidence_json
+FROM inbox_items ii
+JOIN toolchain_requirements tr ON tr.project_id = ii.project_id AND tr.id = ii.source_id
+JOIN execution_environments ee ON ee.project_id = tr.project_id AND ee.id = tr.environment_id
+WHERE ii.project_id = ? AND ii.id = ? AND ii.source_type = 'toolchain_requirement'`,
+		projectID, inboxID,
+	).Scan(
+		&out.InboxID,
+		&out.RequirementID,
+		&out.EnvironmentID,
+		&out.OSFamily,
+		&out.ToolchainKey,
+		&out.RequiredFor,
+		&requiredForMerge,
+		&out.Status,
+		&evidenceJSON,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return ToolchainSetupInstructions{}, fmt.Errorf("toolchain setup inbox item not found: %s", inboxID)
+		}
+		return ToolchainSetupInstructions{}, err
+	}
+	out.RequiredForMerge = requiredForMerge == 1
+	var evidence struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(evidenceJSON), &evidence); err == nil {
+		out.Message = evidence.Message
+	}
+	out.Instructions = setupInstructionsFor(out.OSFamily, out.ToolchainKey)
+	out.RerunCommand = "devos platform doctor --save --project-root <PROJECT_ROOT>"
+	return out, nil
+}
+
+func setupInstructionsFor(osFamily platform.OSFamily, toolchainKey string) []string {
+	switch toolchainKey {
+	case "codex":
+		return []string{
+			"Install or update the Codex CLI manually using the official OpenAI instructions.",
+			"Authenticate Codex in the existing CODEX_HOME for this environment.",
+			"Rerun platform doctor with --save after setup.",
+		}
+	case "git":
+		if osFamily == platform.OSFamilyWindows || osFamily == platform.OSFamilyRemoteWindows {
+			return []string{
+				"Install Git for Windows manually.",
+				"Make git available on PATH for the configured shell.",
+				"Rerun platform doctor with --save after setup.",
+			}
+		}
+		return []string{
+			"Install git with the operating system package manager or approved manual process.",
+			"Make git available on PATH for this environment.",
+			"Rerun platform doctor with --save after setup.",
+		}
+	case "bubblewrap":
+		return []string{
+			"Install bubblewrap so the bwrap executable is available on PATH.",
+			"Do not run package manager commands through DevOS; perform setup manually.",
+			"Rerun platform doctor with --save after setup.",
+		}
+	case "bash", "sh", "powershell", "cmd":
+		return []string{
+			"Install or enable the required shell for this execution environment.",
+			"Make the shell executable available on PATH.",
+			"Rerun platform doctor with --save after setup.",
+		}
+	default:
+		return []string{
+			"Install the missing toolchain manually using the project's approved setup process.",
+			"Make the required executable available on PATH for this environment.",
+			"Rerun platform doctor with --save after setup.",
+		}
+	}
 }
 
 func requiresSetupCard(status toolchains.Status) bool {

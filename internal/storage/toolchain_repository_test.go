@@ -117,3 +117,36 @@ func TestSaveToolchainReportResolvesDetectedSetupCard(t *testing.T) {
 		t.Fatalf("open setup card count = %d", openCount)
 	}
 }
+
+func TestToolchainSetupInstructions(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	report := toolchains.Report{
+		EnvironmentID: "linux-main",
+		Requirements: []toolchains.Requirement{
+			{
+				ToolchainKey:     "bubblewrap",
+				RequiredFor:      toolchains.RequiredForImplementation,
+				RequiredForMerge: false,
+				Status:           toolchains.StatusMissing,
+				Message:          "bwrap executable not found",
+			},
+		},
+	}
+	if err := db.SaveToolchainReport(ctx, "PROJECT-001", report); err != nil {
+		t.Fatal(err)
+	}
+	var inboxID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT id FROM inbox_items WHERE item_type = 'toolchain_setup'").Scan(&inboxID); err != nil {
+		t.Fatal(err)
+	}
+	instructions, err := db.ToolchainSetupInstructions(ctx, "PROJECT-001", inboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instructions.ToolchainKey != "bubblewrap" || len(instructions.Instructions) == 0 || instructions.RerunCommand == "" {
+		t.Fatalf("instructions = %#v", instructions)
+	}
+}

@@ -259,6 +259,32 @@ func TestPlatformDoctorSaveCLI(t *testing.T) {
 	}
 }
 
+func TestPlatformSetupInstructionsAndMarkInstalledCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Platform setup workflow")
+	runCLI(t, "platform", "doctor", "--project-root", projectRoot, "--data-root", dataRoot, "--save", "--json")
+	inboxID := insertCLIToolchainSetupForDetectedGit(t, ctx, dataRoot, projectRoot)
+	instructionsOut := runCLI(t, "platform", "setup", "instructions", "--project-root", projectRoot, "--data-root", dataRoot, "--json", inboxID)
+	var instructions storage.ToolchainSetupInstructions
+	decodeJSON(t, instructionsOut, &instructions)
+	if instructions.InboxID != inboxID || instructions.ToolchainKey != "git" || len(instructions.Instructions) == 0 {
+		t.Fatalf("instructions = %#v", instructions)
+	}
+
+	markOut := runCLI(t, "platform", "setup", "mark-installed", "--project-root", projectRoot, "--data-root", dataRoot, "--json", inboxID)
+	var mark struct {
+		Resolved bool `json:"resolved"`
+	}
+	decodeJSON(t, markOut, &mark)
+	if !mark.Resolved {
+		t.Fatalf("mark installed result = %#v", mark)
+	}
+}
+
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()
@@ -494,6 +520,31 @@ INSERT INTO inbox_items(
 		projectID, now, now); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func insertCLIToolchainSetupForDetectedGit(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) string {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	var requirementID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT id FROM toolchain_requirements WHERE project_id = ? AND toolchain_key = 'git' AND status = 'detected' LIMIT 1", projectID).Scan(&requirementID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	inboxID := "INBOX-DETECTED-GIT"
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id, dedupe_key,
+  priority, title, body, created_at, updated_at
+) VALUES (?, ?, 'toolchain_setup', 'open', 'toolchain_requirement', ?, 'detected-git-test', 40, 'Toolchain setup required: git', 'git setup check', ?, ?)`,
+		inboxID, projectID, requirementID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return inboxID
 }
 
 func ptr[T any](v T) *T {

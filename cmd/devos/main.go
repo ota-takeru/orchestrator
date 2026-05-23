@@ -1225,6 +1225,8 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		return runPlatformProfile(ctx, args[1:], stdout, stderr)
 	case "map":
 		return runPlatformMap(ctx, args[1:], stdout, stderr)
+	case "setup":
+		return runPlatformSetup(ctx, args[1:], stdout, stderr)
 	case "doctor":
 		fs := flag.NewFlagSet("platform doctor", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -1262,6 +1264,87 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		return exitFromToolchainDoctor(report)
 	default:
 		fmt.Fprintf(stderr, "unknown platform subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runPlatformSetup(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing platform setup subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "instructions":
+		fs := flag.NewFlagSet("platform setup instructions", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("platform setup instructions requires INBOX_ID"))
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "setup_instructions_failed", err)
+		}
+		defer db.Close()
+		instructions, err := db.ToolchainSetupInstructions(ctx, projectID, fs.Arg(0))
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "setup_instructions_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, instructions, 0)
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", instructions.InboxID, instructions.EnvironmentID, instructions.ToolchainKey)
+		for _, line := range instructions.Instructions {
+			fmt.Fprintf(stdout, "- %s\n", line)
+		}
+		fmt.Fprintf(stdout, "Rerun: %s\n", instructions.RerunCommand)
+		return 0
+	case "mark-installed":
+		fs := flag.NewFlagSet("platform setup mark-installed", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		includeCodex := fs.Bool("include-codex", false, "include real Codex adapter preflight")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("platform setup mark-installed requires INBOX_ID"))
+		}
+		db, projectID, root, errCode, err := openMigratedProjectDBWithRoot(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "setup_mark_installed_failed", err)
+		}
+		defer db.Close()
+		instructions, err := db.ToolchainSetupInstructions(ctx, projectID, fs.Arg(0))
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "setup_mark_installed_failed", err)
+		}
+		env := platform.DetectHostEnvironment(root)
+		if env.ID != instructions.EnvironmentID {
+			return writeError(stdout, *jsonOut, exitValidation, "setup_mark_installed_failed", fmt.Errorf("setup card belongs to %s, current environment is %s", instructions.EnvironmentID, env.ID))
+		}
+		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: *includeCodex})
+		if err := db.SaveToolchainReport(ctx, projectID, report); err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "setup_mark_installed_failed", err)
+		}
+		item, err := db.GetInboxItem(ctx, projectID, fs.Arg(0))
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "setup_mark_installed_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, map[string]any{"report": report, "inbox_item": item, "resolved": item.Status == "resolved"}, exitFromToolchainDoctor(report))
+		}
+		fmt.Fprintf(stdout, "%s\t%s\n", item.ID, item.Status)
+		return exitFromToolchainDoctor(report)
+	default:
+		fmt.Fprintf(stderr, "unknown platform setup subcommand: %s\n", args[0])
 		return exitValidation
 	}
 }
@@ -1433,6 +1516,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform map add [--project-root PATH] [--data-root PATH] --from-root PATH --to-root PATH --mode MODE [--write-owner ENV_ID] [--json] FROM_ENV TO_ENV")
+	fmt.Fprintln(w, "  devos platform setup instructions [--project-root PATH] [--data-root PATH] [--json] INBOX_ID")
+	fmt.Fprintln(w, "  devos platform setup mark-installed [--project-root PATH] [--data-root PATH] [--include-codex] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--data-root PATH] [--include-codex] [--save] [--json]")
 }
 

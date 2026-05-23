@@ -136,6 +136,10 @@ func ValidateInboxStatus(status string) error {
 	}
 }
 
+func (db *DB) GetInboxItem(ctx context.Context, projectID string, inboxID string) (InboxItem, error) {
+	return db.getInboxItem(ctx, projectID, inboxID)
+}
+
 func (db *DB) getInboxItem(ctx context.Context, projectID string, inboxID string) (InboxItem, error) {
 	var item InboxItem
 	var taskID sql.NullString

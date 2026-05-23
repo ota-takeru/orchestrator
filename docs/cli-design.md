@@ -153,6 +153,8 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos platform profile set` | `windows-primary|wsl-primary|hybrid` | canonical_operationsを含むproject_run_profileをactive/default化 | profile snapshotが同じならno-op |
 | `devos platform doctor` | `--env ENV_ID`, `--save`, `--json` | toolchain_requirements検査、setup card projection | 同じ検査結果ならno-op |
 | `devos platform map add` | `FROM_ENV`, `TO_ENV`, `--from-root`, `--to-root`, `--mode` | path_mappings作成 | validation failureなら保存しない |
+| `devos platform setup instructions` | `INBOX_ID`, `--json` | Toolchain Setup Cardの手動セットアップ手順表示 | 自動インストールはしない |
+| `devos platform setup mark-installed` | `INBOX_ID`, `--json` | doctor再実行、toolchain_requirements / setup card同期 | doctorが検出した場合だけresolved |
 | `devos platform map list` | `--json` | なし | read-only |
 
 `devos init "concept"` の初期生成物:

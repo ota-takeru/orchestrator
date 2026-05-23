@@ -63,6 +63,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runReview(ctx, args[1:], stdout, stderr)
 	case "merge":
 		return runMerge(ctx, args[1:], stdout, stderr)
+	case "patch":
+		return runPatch(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -510,6 +512,156 @@ func runMergeQueue(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runPatch(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing patch subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "export":
+		return runPatchExport(ctx, args[1:], stdout)
+	case "mark-applied":
+		return runPatchMarkApplied(ctx, args[1:], stdout)
+	case "verify-applied":
+		return runPatchVerifyApplied(ctx, args[1:], stdout)
+	case "status":
+		return runPatchStatus(ctx, args[1:], stdout)
+	default:
+		fmt.Fprintf(stderr, "unknown patch subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runPatchExport(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("patch export", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "patch_export_failed", err)
+	}
+	defer db.Close()
+	patch, err := db.ExportPatch(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "patch_export_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, patch, 0)
+	}
+	fmt.Fprintf(stdout, "Patch exported: %s\n", patch.ID)
+	fmt.Fprintf(stdout, "Task status: patch_exported\n")
+	return 0
+}
+
+func runPatchMarkApplied(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("patch mark-applied", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	commit := fs.String("commit", "", "applied commit")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "patch_mark_applied_failed", err)
+	}
+	defer db.Close()
+	patch, err := db.MarkPatchApplied(ctx, projectID, fs.Arg(0), *commit)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "patch_mark_applied_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, patch, 0)
+	}
+	fmt.Fprintf(stdout, "Patch marked applied: %s\n", patch.ID)
+	fmt.Fprintf(stdout, "Task status: manually_applied\n")
+	return 0
+}
+
+func runPatchVerifyApplied(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("patch verify-applied", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	adapter := fs.String("adapter", "fake", "fake or codex")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	if *adapter != "fake" {
+		return writeError(stdout, *jsonOut, exitValidation, "unsupported_adapter", errors.New("only --adapter fake is implemented"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "patch_verify_applied_failed", err)
+	}
+	defer db.Close()
+	patch, err := db.VerifyAppliedPatchFake(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "patch_verify_applied_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, patch, 0)
+	}
+	fmt.Fprintf(stdout, "Patch verified: %s\n", patch.ID)
+	fmt.Fprintf(stdout, "Task status: applied\n")
+	return 0
+}
+
+func runPatchStatus(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("patch status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	var taskID string
+	if fs.NArg() > 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("at most one task id is allowed"))
+	}
+	if fs.NArg() == 1 {
+		taskID = fs.Arg(0)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "patch_status_failed", err)
+	}
+	defer db.Close()
+	patches, err := db.ListPatchApplications(ctx, projectID, taskID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "patch_status_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"patches": patches}, 0)
+	}
+	if len(patches) == 0 {
+		fmt.Fprintln(stdout, "No patch applications.")
+		return 0
+	}
+	for _, patch := range patches {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", patch.ID, patch.Status, patch.TaskID, patch.AppliedCommit)
+	}
+	return 0
+}
+
 func runApproveEvidence(ctx context.Context, args []string, stdout io.Writer, approvalType storage.ApprovalType) int {
 	fs := flag.NewFlagSet(string(approvalType)+" approve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -823,6 +975,10 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--json]")
+	fmt.Fprintln(w, "  devos patch export [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos patch status [--project-root PATH] [--data-root PATH] [--json] [TASK_ID]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")

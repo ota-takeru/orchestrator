@@ -1,0 +1,139 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/decisions"
+	"github.com/ota-takeru/orchestrator/internal/storage"
+)
+
+func TestPatchCLIWorkflow(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Patch workflow")
+	seedPatchCLIApprovalEvidence(t, ctx, dataRoot, projectRoot)
+
+	runCLI(t, "review", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	runCLI(t, "merge", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+
+	exportOut := runCLI(t, "patch", "export", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	var exported storage.PatchApplicationRecord
+	decodeJSON(t, exportOut, &exported)
+	if exported.Status != "exported" {
+		t.Fatalf("exported status = %s", exported.Status)
+	}
+
+	statusOut := runCLI(t, "patch", "status", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-001")
+	var status struct {
+		Patches []storage.PatchApplicationRecord `json:"patches"`
+	}
+	decodeJSON(t, statusOut, &status)
+	if len(status.Patches) != 1 || status.Patches[0].ID != exported.ID {
+		t.Fatalf("patch status = %#v", status.Patches)
+	}
+
+	appliedOut := runCLI(t, "patch", "mark-applied", "--project-root", projectRoot, "--data-root", dataRoot, "--commit", "COMMIT1", "--json", "TASK-001")
+	var applied storage.PatchApplicationRecord
+	decodeJSON(t, appliedOut, &applied)
+	if applied.Status != "manually_applied" || applied.AppliedCommit != "COMMIT1" {
+		t.Fatalf("applied patch = %#v", applied)
+	}
+
+	verifiedOut := runCLI(t, "patch", "verify-applied", "--project-root", projectRoot, "--data-root", dataRoot, "--adapter", "fake", "--json", "TASK-001")
+	var verified storage.PatchApplicationRecord
+	decodeJSON(t, verifiedOut, &verified)
+	if verified.Status != "verified" {
+		t.Fatalf("verified patch = %#v", verified)
+	}
+}
+
+func initGitRepo(t *testing.T, root string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".env.*\n.devagent-worktrees/\norchestrator-data/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "init", root)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, string(out))
+	}
+}
+
+func runCLI(t *testing.T, args ...string) []byte {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("devos %v failed with %d\nstdout:\n%s\nstderr:\n%s", args, code, stdout.String(), stderr.String())
+	}
+	return stdout.Bytes()
+}
+
+func decodeJSON(t *testing.T, raw []byte, v any) {
+	t.Helper()
+	if err := json.Unmarshal(raw, v); err != nil {
+		t.Fatalf("decode JSON failed: %v\n%s", err, string(raw))
+	}
+}
+
+func seedPatchCLIApprovalEvidence(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var environmentID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT id FROM execution_environments WHERE project_id = ? AND role = 'primary'", projectID).Scan(&environmentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO tasks(
+  id, project_id, status, title, base_branch, created_at, updated_at
+) VALUES ('TASK-001', ?, 'ready_for_human_review', 'Patch CLI workflow', 'main', ?, ?)`,
+		projectID, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit, head_commit,
+  diff_hash, created_at, updated_at, started_at, completed_at
+) VALUES ('RUN-001', ?, 'TASK-001', 'verification', 'succeeded', 1, 'BASE', 'HEAD', 'DIFF', ?, ?, ?, ?)`,
+		projectID, now, now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO verification_results(
+  id, project_id, run_id, environment_id, command_id, required_for_merge,
+  status, evidence_json, created_at
+) VALUES ('VERIF-001', ?, 'RUN-001', ?, 'go-test', 1, 'passed', '{}', ?)`,
+		projectID, environmentID, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	gates := []decisions.GateResult{{
+		Status:   decisions.GatePass,
+		Severity: decisions.SeverityLow,
+		Detector: "verification_passed",
+		Evidence: map[string]any{"run_id": "RUN-001"},
+	}}
+	if err := db.SaveGateResults(ctx, projectID, ptr("TASK-001"), "RUN-001", gates); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ptr[T any](v T) *T {
+	return &v
+}

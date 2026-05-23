@@ -22,6 +22,39 @@ type PatchApplicationRecord struct {
 	AppliedCommit string `json:"applied_commit,omitempty"`
 }
 
+func (db *DB) ListPatchApplications(ctx context.Context, projectID string, taskID string) ([]PatchApplicationRecord, error) {
+	query := `
+SELECT id, task_id, status, patch_hash, applied_commit
+FROM patch_applications
+WHERE project_id = ?`
+	args := []any{projectID}
+	if strings.TrimSpace(taskID) != "" {
+		query += " AND task_id = ?"
+		args = append(args, taskID)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := db.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var patches []PatchApplicationRecord
+	for rows.Next() {
+		var patch PatchApplicationRecord
+		var appliedCommit sql.NullString
+		if err := rows.Scan(&patch.ID, &patch.TaskID, &patch.Status, &patch.PatchHash, &appliedCommit); err != nil {
+			return nil, err
+		}
+		if appliedCommit.Valid {
+			patch.AppliedCommit = appliedCommit.String
+		}
+		patches = append(patches, patch)
+	}
+	return patches, rows.Err()
+}
+
 func (db *DB) ExportPatch(ctx context.Context, projectID string, taskID string) (PatchApplicationRecord, error) {
 	status, err := db.taskStatus(ctx, projectID, taskID)
 	if err != nil {

@@ -59,11 +59,15 @@ func TestPatchCLIWorkflow(t *testing.T) {
 
 	cleanupOut := runCLI(t, "cleanup", "--project-root", projectRoot, "--data-root", dataRoot, "--applied", "--json")
 	var cleanup struct {
-		Items []storage.CleanupPlanItem `json:"items"`
+		Items          []storage.CleanupPlanItem      `json:"items"`
+		WorktreeSafety []storage.WorktreeSafetyRecord `json:"worktree_safety"`
 	}
 	decodeJSON(t, cleanupOut, &cleanup)
 	if len(cleanup.Items) != 1 || cleanup.Items[0].TaskID != "TASK-001" {
 		t.Fatalf("cleanup plan = %#v", cleanup.Items)
+	}
+	if len(cleanup.WorktreeSafety) != 1 || cleanup.WorktreeSafety[0].TaskID != "TASK-001" {
+		t.Fatalf("worktree safety = %#v", cleanup.WorktreeSafety)
 	}
 }
 

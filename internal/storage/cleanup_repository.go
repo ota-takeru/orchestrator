@@ -26,8 +26,9 @@ type CleanupPlanItem struct {
 }
 
 type CleanupDryRunRecord struct {
-	RunID string            `json:"run_id"`
-	Items []CleanupPlanItem `json:"items"`
+	RunID          string                 `json:"run_id"`
+	Items          []CleanupPlanItem      `json:"items"`
+	WorktreeSafety []WorktreeSafetyRecord `json:"worktree_safety,omitempty"`
 }
 
 func (db *DB) BuildCleanupDryRunPlan(ctx context.Context, projectID string, options CleanupPlanOptions) ([]CleanupPlanItem, error) {

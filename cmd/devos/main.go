@@ -841,8 +841,15 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
 	}
+	for _, item := range plan {
+		safety, err := db.RunWorktreeSafetyCheck(ctx, projectID, item.TaskID, "")
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
+		}
+		record.WorktreeSafety = append(record.WorktreeSafety, safety)
+	}
 	if *jsonOut {
-		return writeJSON(stdout, map[string]any{"items": record.Items, "run_id": record.RunID, "dry_run": true}, 0)
+		return writeJSON(stdout, map[string]any{"items": record.Items, "run_id": record.RunID, "worktree_safety": record.WorktreeSafety, "dry_run": true}, 0)
 	}
 	if len(plan) == 0 {
 		fmt.Fprintf(stdout, "No cleanup candidates. Evidence run: %s\n", record.RunID)
@@ -851,6 +858,9 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 	fmt.Fprintf(stdout, "Evidence run: %s\n", record.RunID)
 	for _, item := range plan {
 		fmt.Fprintf(stdout, "%s\t%s\teligible=%t\t%s\n", item.TaskID, item.Status, item.Eligible, strings.Join(item.Blockers, "; "))
+	}
+	for _, safety := range record.WorktreeSafety {
+		fmt.Fprintf(stdout, "worktree safety: %s\t%s\t%s\n", safety.TaskID, safety.Status, strings.Join(safety.Blockers, "; "))
 	}
 	return 0
 }

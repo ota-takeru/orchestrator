@@ -418,7 +418,9 @@ type Run = {
     | "rebase"
     | "reverify"
     | "merge"
-    | "patch_export";
+    | "patch_export"
+    | "cleanup"
+    | "worktree_safety";
   attempt_no: number;
   repair_of_run_id?: string;
   reverify_context_type?: "merge_queue_entry" | "patch_application";

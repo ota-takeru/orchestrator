@@ -335,11 +335,13 @@ RunType:
 
 ```sql
 run_type TEXT NOT NULL CHECK (
-  run_type IN ('implementation', 'repair', 'verification', 'review', 'replan', 'rebase', 'reverify', 'merge', 'patch_export')
+  run_type IN ('implementation', 'repair', 'verification', 'review', 'replan', 'rebase', 'reverify', 'merge', 'patch_export', 'cleanup', 'worktree_safety')
 )
 ```
 
 Manual applyの検証runも `reverify` を使います。merge queue由来は `run_type = 'reverify'` かつ `reverify_context_type = 'merge_queue_entry'`、manual apply由来は `run_type = 'reverify'` かつ `reverify_context_type = 'patch_application'` として保存します。manual apply専用の別run typeは定義しません。
+
+cleanup dry-runとworktree削除前安全確認は証拠保存対象です。`cleanup` は `devos cleanup --dry-run` のplan、対象task、blocker、削除しない理由を保存します。`worktree_safety` は実削除またはworktree操作前の未保存diff、untracked files、path ownership、artifact保存済み確認を保存するためのrun typeです。
 
 RunArtifactType:
 
@@ -681,7 +683,7 @@ dependency_type TEXT NOT NULL CHECK (
 | `tasks.status` | TaskStatus table values | `state-machine.md` | SQLite CHECK + state service |
 | `tasks.verification_commands_json` | `VerificationCommand[]`; environment ids must resolve | `runner-protocol.md` | Go validation + JSON Schema |
 | `task_dependencies.dependency_type` | `blocks_execution`, `blocks_merge`, `ordering_only` | `task-planning-and-work-queue.md` | SQLite CHECK |
-| `runs.run_type` | `implementation`, `repair`, `verification`, `review`, `replan`, `rebase`, `reverify`, `merge`, `patch_export` | `storage-schema.md` | SQLite CHECK |
+| `runs.run_type` | `implementation`, `repair`, `verification`, `review`, `replan`, `rebase`, `reverify`, `merge`, `patch_export`, `cleanup`, `worktree_safety` | `storage-schema.md` | SQLite CHECK |
 | `runs.status` | `pending`, `running`, `succeeded`, `failed`, `cancelled`, `timed_out`, `blocked` | `state-machine.md` | SQLite CHECK + state service |
 | `run_artifacts.artifact_type` | `prompt`, `events_jsonl`, `final_message`, `diff`, `verification_summary`, `gate_result`, `review`, `summary`, `secret_scan`, `command_stdout`, `command_stderr`, `command_result` | `runner-protocol.md` | SQLite CHECK |
 | `command_events.command_kind` | `codex`, `verification`, `reverify`, `git`, `merge`, `patch`, `doctor`, `toolchain`, `cleanup`, `other` | `runner-protocol.md` | SQLite CHECK |

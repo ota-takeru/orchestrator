@@ -14,8 +14,8 @@ func TestMigrateAppliesRegisteredMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applied) != 2 {
-		t.Fatalf("applied migrations = %d, want 2", len(applied))
+	if len(applied) != 3 {
+		t.Fatalf("applied migrations = %d, want 3", len(applied))
 	}
 }
 
@@ -30,6 +30,50 @@ func TestMigrationRejectsChecksumDrift(t *testing.T) {
 	migrations[0] = NewMigration(migrations[0].Version, migrations[0].Name, migrations[0].SQL)
 	if err := db.Migrate(ctx, migrations); err == nil {
 		t.Fatal("expected checksum drift to fail")
+	}
+}
+
+func TestMigration003PreservesExistingRunArtifacts(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	migrations, err := RegisteredMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, migrations[:2]); err != nil {
+		t.Fatal(err)
+	}
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	runID, err := db.createTerminalRun(ctx, "PROJECT-001", "TASK-001", "implementation", "succeeded", 1, "BASE", "HEAD", "DIFF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SaveRunArtifact(ctx, RunArtifactInput{
+		ProjectID:    "PROJECT-001",
+		RunID:        runID,
+		ArtifactType: "diff",
+		ArtifactKey:  "diff.patch",
+		Content:      []byte("diff --git a/fake.txt b/fake.txt\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, migrations); err != nil {
+		t.Fatal(err)
+	}
+	var runCount, artifactCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE id = ?", runID).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM run_artifacts WHERE run_id = ?", runID).Scan(&artifactCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 1 || artifactCount != 1 {
+		t.Fatalf("runCount=%d artifactCount=%d", runCount, artifactCount)
 	}
 }
 

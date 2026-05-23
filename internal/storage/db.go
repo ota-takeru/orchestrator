@@ -106,6 +106,9 @@ func (db *DB) AppliedMigrations(ctx context.Context) ([]AppliedMigration, error)
 }
 
 func (db *DB) applyMigration(ctx context.Context, migration Migration) error {
+	if strings.Contains(migration.SQL, "-- devos:non_transactional") {
+		return db.applyNonTransactionalMigration(ctx, migration)
+	}
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -131,6 +134,20 @@ func (db *DB) applyMigration(ctx context.Context, migration Migration) error {
 		return err
 	}
 	committed = true
+	return nil
+}
+
+func (db *DB) applyNonTransactionalMigration(ctx context.Context, migration Migration) error {
+	if _, err := db.sql.ExecContext(ctx, migration.SQL); err != nil {
+		return fmt.Errorf("apply migration %03d %s: %w", migration.Version, migration.Name, err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.sql.ExecContext(ctx,
+		"INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+		migration.Version, migration.Name, migration.Checksum, now,
+	); err != nil {
+		return fmt.Errorf("record migration %03d %s: %w", migration.Version, migration.Name, err)
+	}
 	return nil
 }
 

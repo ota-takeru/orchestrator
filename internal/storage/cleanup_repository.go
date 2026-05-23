@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -22,6 +23,11 @@ type CleanupPlanItem struct {
 	Eligible  bool     `json:"eligible"`
 	Blockers  []string `json:"blockers,omitempty"`
 	UpdatedAt string   `json:"updated_at"`
+}
+
+type CleanupDryRunRecord struct {
+	RunID string            `json:"run_id"`
+	Items []CleanupPlanItem `json:"items"`
 }
 
 func (db *DB) BuildCleanupDryRunPlan(ctx context.Context, projectID string, options CleanupPlanOptions) ([]CleanupPlanItem, error) {
@@ -74,6 +80,66 @@ WHERE t.project_id = ? AND t.status IN (%s)`, strings.Join(placeholders, ","))
 	return plan, rows.Err()
 }
 
+func (db *DB) SaveCleanupDryRunEvidence(ctx context.Context, projectID string, plan []CleanupPlanItem) (CleanupDryRunRecord, error) {
+	attemptNo, err := db.nextProjectRunAttempt(ctx, projectID, "cleanup")
+	if err != nil {
+		return CleanupDryRunRecord{}, err
+	}
+	runID := "RUN-" + stableShortHash(projectID+"|cleanup|"+time.Now().UTC().Format(time.RFC3339Nano))
+	status := "succeeded"
+	for _, item := range plan {
+		if len(item.Blockers) > 0 {
+			status = "failed"
+			break
+		}
+	}
+	summary, err := json.MarshalIndent(map[string]any{
+		"dry_run": true,
+		"items":   plan,
+		"status":  status,
+	}, "", "  ")
+	if err != nil {
+		return CleanupDryRunRecord{}, err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return CleanupDryRunRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := insertRun(ctx, tx, SaveVerificationInput{
+		ProjectID:  projectID,
+		RunID:      runID,
+		RunType:    "cleanup",
+		AttemptNo:  attemptNo,
+		BaseCommit: "cleanup-dry-run",
+	}, status, now); err != nil {
+		return CleanupDryRunRecord{}, err
+	}
+	if _, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        runID,
+		ArtifactType: "summary",
+		ArtifactKey:  "cleanup-dry-run-summary.json",
+		Content:      summary,
+	}, now); err != nil {
+		return CleanupDryRunRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "cleanup_dry_run", map[string]any{"run_id": runID, "status": status, "item_count": len(plan)}, now); err != nil {
+		return CleanupDryRunRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CleanupDryRunRecord{}, err
+	}
+	committed = true
+	return CleanupDryRunRecord{RunID: runID, Items: plan}, nil
+}
+
 func cleanupStatuses(options CleanupPlanOptions) []string {
 	if !options.IncludeMerged && !options.IncludeApplied && !options.IncludeCancelled && !options.IncludeFailed {
 		return []string{"merged", "applied", "cancelled", "failed"}
@@ -92,4 +158,36 @@ func cleanupStatuses(options CleanupPlanOptions) []string {
 		statuses = append(statuses, "failed")
 	}
 	return statuses
+}
+
+func (db *DB) nextProjectRunAttempt(ctx context.Context, projectID string, runType string) (int, error) {
+	var attempt sqlNullInt64
+	if err := db.sql.QueryRowContext(ctx, "SELECT MAX(attempt_no) + 1 FROM runs WHERE project_id = ? AND task_id IS NULL AND run_type = ?", projectID, runType).Scan(&attempt); err != nil {
+		return 0, err
+	}
+	if !attempt.Valid {
+		return 1, nil
+	}
+	return int(attempt.Int64), nil
+}
+
+type sqlNullInt64 struct {
+	Int64 int64
+	Valid bool
+}
+
+func (n *sqlNullInt64) Scan(value any) error {
+	if value == nil {
+		n.Valid = false
+		n.Int64 = 0
+		return nil
+	}
+	switch v := value.(type) {
+	case int64:
+		n.Valid = true
+		n.Int64 = v
+		return nil
+	default:
+		return fmt.Errorf("unexpected int64 scan value %T", value)
+	}
 }

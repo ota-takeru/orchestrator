@@ -34,6 +34,23 @@ func TestBuildCleanupDryRunPlanListsTerminalTasks(t *testing.T) {
 	if plan[0].Eligible {
 		t.Fatal("dry-run cleanup should not mark deletion eligible before worktree deletion is implemented")
 	}
+	record, err := db.SaveCleanupDryRunEvidence(ctx, "PROJECT-001", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.RunID == "" || len(record.Items) != 1 {
+		t.Fatalf("cleanup record = %#v", record)
+	}
+	var runType, artifactKey string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT run_type FROM runs WHERE id = ?", record.RunID).Scan(&runType); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT artifact_key FROM run_artifacts WHERE run_id = ? AND artifact_type = 'summary'", record.RunID).Scan(&artifactKey); err != nil {
+		t.Fatal(err)
+	}
+	if runType != "cleanup" || artifactKey != "cleanup-dry-run-summary.json" {
+		t.Fatalf("runType=%s artifactKey=%s", runType, artifactKey)
+	}
 }
 
 func TestBuildCleanupDryRunPlanSkipsNonTerminalTasks(t *testing.T) {

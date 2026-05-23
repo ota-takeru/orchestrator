@@ -837,13 +837,18 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
 	}
+	record, err := db.SaveCleanupDryRunEvidence(ctx, projectID, plan)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
+	}
 	if *jsonOut {
-		return writeJSON(stdout, map[string]any{"items": plan, "dry_run": true}, 0)
+		return writeJSON(stdout, map[string]any{"items": record.Items, "run_id": record.RunID, "dry_run": true}, 0)
 	}
 	if len(plan) == 0 {
-		fmt.Fprintln(stdout, "No cleanup candidates.")
+		fmt.Fprintf(stdout, "No cleanup candidates. Evidence run: %s\n", record.RunID)
 		return 0
 	}
+	fmt.Fprintf(stdout, "Evidence run: %s\n", record.RunID)
 	for _, item := range plan {
 		fmt.Fprintf(stdout, "%s\t%s\teligible=%t\t%s\n", item.TaskID, item.Status, item.Eligible, strings.Join(item.Blockers, "; "))
 	}

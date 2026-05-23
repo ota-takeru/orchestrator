@@ -12,7 +12,7 @@
 | --- | ---: | --- |
 | Documentation baseline | 100% | 完了 |
 | Codex implementation operating docs | 100% | 完了 |
-| Product implementation code | 26% | 着手 |
+| Product implementation code | 28% | 着手 |
 | Initial Complete Scope end-to-end workflow | 0% | 未着手 |
 
 ## Slice Progress
@@ -21,7 +21,7 @@
 | --- | --- | ---: | --- | --- | --- |
 | 0 | Canonical Docs and Authority | 100% | 完了 | `474b591`, `8413a1d`, `7fad1c4` | context builderを実ワークフローへ接続する |
 | 0.25 | Platform Model Docs | 100% | 完了 | `474b591` | platform modelを実装sliceでDB / runner contractへ反映する |
-| 0.5 | Project Trust / Platform-aware Preflight | 75% | 進行中 | `c77f689`, `11603b3`, `b4129d6`, `de0d26f` | setup card projectionへ進む |
+| 0.5 | Project Trust / Platform-aware Preflight | 85% | 進行中 | `c77f689`, `11603b3`, `b4129d6`, `de0d26f`, `dfe3fdf` | platform setup / path mapping issue projectionへ進む |
 | 1 | Core Storage, Platform Tables, State Machines | 48% | 進行中 | `c77f689`, `ff4e1bb`, `90d6cb0`, `de0d26f`, `bb9e6e1` | gate_results / inbox_items repository、DB CHECKの追加整合検証を実装する |
 | 1.5 | Schema Registry and Validation | 0% | 未着手 | なし | Slice 1のDB基盤後に着手する |
 | 2 | Artifact Lifecycle + Approval | 0% | 未着手 | なし | artifact versioningとapproval source of truthを実装する |
@@ -30,14 +30,14 @@
 | 2.5 | Environment-aware Git / Worktree / Patch Foundation | 0% | 未着手 | なし | canonical Git environment resolverとworktree基盤を実装する |
 | 3 | Fake Run Workflow with Fake Platform Runners | 0% | 未着手 | なし | Fake Coding Agent Adapterで縦断workflowを通す |
 | 4 | Environment-aware Verification / Baseline / Gate | 0% | 未着手 | なし | verification commandとGateResult保存を実装する |
-| 5 | Human Inbox + Approval Sources + Toolchain Setup | 0% | 未着手 | なし | Human Inbox projectionとapproval commandsを実装する |
+| 5 | Human Inbox + Approval Sources + Toolchain Setup | 10% | 進行中 | `dfe3fdf` | inbox read CLI、approval source、platform/path setup cardsへ進む |
 | 6 | Merge Queue + Reverify | 0% | 未着手 | なし | merge queue state machineとreverificationを実装する |
 | 7 | Real Codex Windows / WSL Execution | 0% | 未着手 | なし | Fake workflow完了後にReal Codex adapterへ進む |
 | 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 0% | 未着手 | なし | 初期縦断workflow後に順次扱う |
 
 ## Current Focus
 
-現在の実装対象は Slice 0.5、Slice 1、Slice 2.25、Slice 3 の入口です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundation、command event / verification result永続化を追加済みです。次はgate result、inbox item、setup card projectionの保存へ進みます。
+現在の実装対象は Slice 0.5、Slice 1、Slice 2.25、Slice 3、Slice 5 の入口です。Go module、`devos` CLI入口、canonical docs context filter、project root検出、platform-aware preflight、platform enum、主要state machine API、PathMappingServiceの最小実装、toolchain doctor skeleton、SQLite migration registryと001/002 DDL、SQLite接続/migration apply、project init永続化、toolchain setup card projection、Runner interfaceとfake Windows/WSL/Linux runner、複数environment対応のverification runner foundation、command event / verification result永続化を追加済みです。次はgate result、inbox read CLI、approval sourceの保存へ進みます。
 
 ## Commit Policy
 

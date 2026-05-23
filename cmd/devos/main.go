@@ -65,6 +65,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runMerge(ctx, args[1:], stdout, stderr)
 	case "patch":
 		return runPatch(ctx, args[1:], stdout, stderr)
+	case "cleanup":
+		return runCleanup(ctx, args[1:], stdout)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -687,6 +689,76 @@ func runPatchStatus(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	dryRun := fs.Bool("dry-run", true, "show cleanup plan without deleting")
+	merged := fs.Bool("merged", false, "include merged tasks")
+	applied := fs.Bool("applied", false, "include applied tasks")
+	cancelled := fs.Bool("cancelled", false, "include cancelled tasks")
+	failed := fs.Bool("failed", false, "include failed tasks")
+	olderThan := fs.String("older-than", "", "minimum age, for example 14d or 72h")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if !*dryRun {
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("cleanup deletion is not implemented; use --dry-run"))
+	}
+	age, err := parseCleanupAge(*olderThan)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "cleanup_failed", err)
+	}
+	defer db.Close()
+	plan, err := db.BuildCleanupDryRunPlan(ctx, projectID, storage.CleanupPlanOptions{
+		IncludeMerged:    *merged,
+		IncludeApplied:   *applied,
+		IncludeCancelled: *cancelled,
+		IncludeFailed:    *failed,
+		OlderThan:        age,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"items": plan, "dry_run": true}, 0)
+	}
+	if len(plan) == 0 {
+		fmt.Fprintln(stdout, "No cleanup candidates.")
+		return 0
+	}
+	for _, item := range plan {
+		fmt.Fprintf(stdout, "%s\t%s\teligible=%t\t%s\n", item.TaskID, item.Status, item.Eligible, strings.Join(item.Blockers, "; "))
+	}
+	return 0
+}
+
+func parseCleanupAge(input string) (time.Duration, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return 0, nil
+	}
+	if strings.HasSuffix(input, "d") {
+		daysText := strings.TrimSuffix(input, "d")
+		days, err := time.ParseDuration(daysText + "h")
+		if err != nil {
+			return 0, fmt.Errorf("invalid --older-than value: %s", input)
+		}
+		return days * 24, nil
+	}
+	duration, err := time.ParseDuration(input)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --older-than value: %s", input)
+	}
+	return duration, nil
+}
+
 func runApproveEvidence(ctx context.Context, args []string, stdout io.Writer, approvalType storage.ApprovalType) int {
 	fs := flag.NewFlagSet(string(approvalType)+" approve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1004,6 +1076,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch status [--project-root PATH] [--data-root PATH] [--json] [TASK_ID]")
+	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--merged] [--applied] [--older-than AGE] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")

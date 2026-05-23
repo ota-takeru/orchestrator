@@ -55,6 +55,15 @@ func TestPatchCLIWorkflow(t *testing.T) {
 	if verified.Status != "verified" {
 		t.Fatalf("verified patch = %#v", verified)
 	}
+
+	cleanupOut := runCLI(t, "cleanup", "--project-root", projectRoot, "--data-root", dataRoot, "--applied", "--json")
+	var cleanup struct {
+		Items []storage.CleanupPlanItem `json:"items"`
+	}
+	decodeJSON(t, cleanupOut, &cleanup)
+	if len(cleanup.Items) != 1 || cleanup.Items[0].TaskID != "TASK-001" {
+		t.Fatalf("cleanup plan = %#v", cleanup.Items)
+	}
 }
 
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {

@@ -17,6 +17,7 @@ func RegisteredMigrations() ([]Migration, error) {
 		{1, "platform_core", "migrations/001_platform_core.sql"},
 		{2, "merge", "migrations/002_merge.sql"},
 		{3, "worktree_safety_runs", "migrations/003_worktree_safety_runs.sql"},
+		{4, "task_verification_commands", "migrations/004_task_verification_commands.sql"},
 	}
 	migrations := make([]Migration, 0, len(definitions))
 	for _, definition := range definitions {

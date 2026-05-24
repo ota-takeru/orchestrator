@@ -41,6 +41,45 @@ func TestApprovedArtifactsMakeTaskReady(t *testing.T) {
 	}
 }
 
+func TestMaterializeApprovedTasksStoresVerificationCommands(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	approveRequiredArtifactsWithTaskYAML(t, db, ctx, "PROJECT-001", root, "approved", []byte(`id: TASK-001
+title: Bootstrap fake workflow
+base_branch: main
+verification_commands:
+  - id: go-test
+    environment: primary
+    runner: auto
+    required_for_merge: true
+    working_dir: task_worktree
+    command:
+      argv: ["go", "test", "./..."]
+    timeout: 10m
+    network: false
+`))
+	tasks, err := db.MaterializeApprovedTasks(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || len(tasks[0].VerificationCommands) != 1 {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+	command := tasks[0].VerificationCommands[0]
+	if command.ID != "go-test" || command.Command.Argv[0] != "go" || command.Timeout != "10m" {
+		t.Fatalf("verification command = %#v", command)
+	}
+	var stored string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT verification_commands_json FROM tasks WHERE id = 'TASK-001'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored == "" || stored == "[]" {
+		t.Fatalf("stored verification commands = %s", stored)
+	}
+}
+
 func TestRejectedArtifactCannotMaterializeReadyTask(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -58,6 +97,11 @@ func TestRejectedArtifactCannotMaterializeReadyTask(t *testing.T) {
 
 func approveRequiredArtifacts(t *testing.T, db *DB, ctx context.Context, projectID string, root string, status string) {
 	t.Helper()
+	approveRequiredArtifactsWithTaskYAML(t, db, ctx, projectID, root, status, []byte("id: TASK-001\ntitle: Bootstrap fake workflow\nbase_branch: main\n"))
+}
+
+func approveRequiredArtifactsWithTaskYAML(t *testing.T, db *DB, ctx context.Context, projectID string, root string, status string, taskYAML []byte) {
+	t.Helper()
 	artifacts := []struct {
 		typ     ArtifactType
 		path    string
@@ -66,7 +110,7 @@ func approveRequiredArtifacts(t *testing.T, db *DB, ctx context.Context, project
 		{ArtifactPRD, ".devagent/prd.md", []byte("# PRD")},
 		{ArtifactArchitecture, ".devagent/architecture.md", []byte("# Architecture")},
 		{ArtifactRoadmap, ".devagent/roadmap.yaml", []byte("slices: []")},
-		{ArtifactTaskYAML, ".devagent/tasks/TASK-001.yaml", []byte("id: TASK-001\ntitle: Bootstrap fake workflow\nbase_branch: main\n")},
+		{ArtifactTaskYAML, ".devagent/tasks/TASK-001.yaml", taskYAML},
 	}
 	for _, artifact := range artifacts {
 		writeTestArtifact(t, root, artifact.path, artifact.content)

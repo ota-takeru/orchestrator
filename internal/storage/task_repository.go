@@ -4,17 +4,35 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type TaskRecord struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Title  string `json:"title"`
+	ID                   string                    `json:"id"`
+	Status               string                    `json:"status"`
+	Title                string                    `json:"title"`
+	VerificationCommands []TaskVerificationCommand `json:"verification_commands,omitempty"`
+}
+
+type TaskVerificationCommand struct {
+	ID               string                         `json:"id"`
+	Environment      string                         `json:"environment"`
+	Runner           string                         `json:"runner"`
+	RequiredForMerge bool                           `json:"required_for_merge"`
+	WorkingDir       string                         `json:"working_dir"`
+	Command          TaskVerificationCommandCommand `json:"command"`
+	Timeout          string                         `json:"timeout,omitempty"`
+	Network          bool                           `json:"network"`
+}
+
+type TaskVerificationCommandCommand struct {
+	Argv []string `json:"argv"`
 }
 
 func (db *DB) MaterializeApprovedTasks(ctx context.Context, projectID string) ([]TaskRecord, error) {
@@ -48,11 +66,15 @@ func (db *DB) MaterializeApprovedTasks(ctx context.Context, projectID string) ([
 	if err != nil {
 		return nil, err
 	}
+	verificationCommands, err := json.Marshal(task.VerificationCommands)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO tasks(
-  id, project_id, artifact_version_id, status, title, base_branch, created_at, updated_at
-) VALUES (?, ?, ?, 'ready', ?, ?, ?, ?)
+  id, project_id, artifact_version_id, status, title, base_branch, verification_commands_json, created_at, updated_at
+) VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   artifact_version_id = excluded.artifact_version_id,
   status = CASE
@@ -61,8 +83,9 @@ ON CONFLICT(id) DO UPDATE SET
   END,
   title = excluded.title,
   base_branch = excluded.base_branch,
+  verification_commands_json = excluded.verification_commands_json,
   updated_at = excluded.updated_at`,
-		task.ID, projectID, taskArtifact.VersionID, task.Title, task.BaseBranch, now, now,
+		task.ID, projectID, taskArtifact.VersionID, task.Title, task.BaseBranch, string(verificationCommands), now, now,
 	); err != nil {
 		return nil, err
 	}
@@ -76,11 +99,11 @@ ON CONFLICT(id) DO UPDATE SET
 		return nil, err
 	}
 	committed = true
-	return []TaskRecord{{ID: task.ID, Status: "ready", Title: task.Title}}, nil
+	return []TaskRecord{{ID: task.ID, Status: "ready", Title: task.Title, VerificationCommands: task.VerificationCommands}}, nil
 }
 
 func (db *DB) ListTasks(ctx context.Context, projectID string, status string) ([]TaskRecord, error) {
-	query := "SELECT id, status, title FROM tasks WHERE project_id = ?"
+	query := "SELECT id, status, title, verification_commands_json FROM tasks WHERE project_id = ?"
 	args := []any{projectID}
 	if status != "" {
 		query += " AND status = ?"
@@ -95,8 +118,14 @@ func (db *DB) ListTasks(ctx context.Context, projectID string, status string) ([
 	var tasks []TaskRecord
 	for rows.Next() {
 		var task TaskRecord
-		if err := rows.Scan(&task.ID, &task.Status, &task.Title); err != nil {
+		var verificationCommandsJSON string
+		if err := rows.Scan(&task.ID, &task.Status, &task.Title, &verificationCommandsJSON); err != nil {
 			return nil, err
+		}
+		if strings.TrimSpace(verificationCommandsJSON) != "" {
+			if err := json.Unmarshal([]byte(verificationCommandsJSON), &task.VerificationCommands); err != nil {
+				return nil, err
+			}
 		}
 		tasks = append(tasks, task)
 	}
@@ -145,9 +174,10 @@ func projectRoot(ctx context.Context, tx *sql.Tx, projectID string) (string, err
 }
 
 type parsedTaskYAML struct {
-	ID         string
-	Title      string
-	BaseBranch string
+	ID                   string
+	Title                string
+	BaseBranch           string
+	VerificationCommands []TaskVerificationCommand
 }
 
 func parseGeneratedTaskYAML(path string) (parsedTaskYAML, error) {
@@ -158,8 +188,14 @@ func parseGeneratedTaskYAML(path string) (parsedTaskYAML, error) {
 	defer file.Close()
 	task := parsedTaskYAML{BaseBranch: "main"}
 	scanner := bufio.NewScanner(file)
+	var lines []string
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		rawLine := scanner.Text()
+		lines = append(lines, rawLine)
+		if strings.TrimSpace(rawLine) != rawLine {
+			continue
+		}
+		line := strings.TrimSpace(rawLine)
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
@@ -177,8 +213,128 @@ func parseGeneratedTaskYAML(path string) (parsedTaskYAML, error) {
 	if err := scanner.Err(); err != nil {
 		return parsedTaskYAML{}, err
 	}
+	task.VerificationCommands = parseVerificationCommandsYAML(lines)
 	if task.ID == "" || task.Title == "" {
 		return parsedTaskYAML{}, fmt.Errorf("task yaml requires id and title")
 	}
 	return task, nil
+}
+
+func parseVerificationCommandsYAML(lines []string) []TaskVerificationCommand {
+	commands := []TaskVerificationCommand{}
+	inCommands := false
+	var current *TaskVerificationCommand
+	inCommandBlock := false
+	for _, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if !strings.HasPrefix(rawLine, " ") && strings.HasSuffix(trimmed, ":") {
+			if trimmed == "verification_commands:" {
+				inCommands = true
+				continue
+			}
+			if inCommands {
+				break
+			}
+		}
+		if !inCommands {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			if current != nil {
+				commands = append(commands, normalizeVerificationCommand(*current))
+			}
+			current = &TaskVerificationCommand{Environment: "primary", Runner: "auto", WorkingDir: "task_worktree", RequiredForMerge: true}
+			inCommandBlock = false
+			assignment := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+			applyVerificationCommandAssignment(current, assignment, inCommandBlock)
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		if trimmed == "command:" {
+			inCommandBlock = true
+			continue
+		}
+		if key, value, ok := strings.Cut(trimmed, ":"); ok {
+			assignment := strings.TrimSpace(key) + ":" + strings.TrimSpace(value)
+			applyVerificationCommandAssignment(current, assignment, inCommandBlock)
+		}
+	}
+	if current != nil {
+		commands = append(commands, normalizeVerificationCommand(*current))
+	}
+	return commands
+}
+
+func applyVerificationCommandAssignment(command *TaskVerificationCommand, assignment string, inCommandBlock bool) {
+	key, value, ok := strings.Cut(assignment, ":")
+	if !ok {
+		return
+	}
+	key = strings.TrimSpace(key)
+	value = strings.Trim(strings.TrimSpace(value), `"`)
+	if inCommandBlock && key == "argv" {
+		command.Command.Argv = parseArgv(value)
+		return
+	}
+	switch key {
+	case "id":
+		command.ID = value
+	case "environment":
+		command.Environment = value
+	case "runner":
+		command.Runner = value
+	case "required_for_merge":
+		command.RequiredForMerge = parseYAMLBool(value, true)
+	case "working_dir":
+		command.WorkingDir = value
+	case "timeout":
+		command.Timeout = value
+	case "network":
+		command.Network = parseYAMLBool(value, false)
+	case "argv":
+		command.Command.Argv = parseArgv(value)
+	}
+}
+
+func normalizeVerificationCommand(command TaskVerificationCommand) TaskVerificationCommand {
+	if command.Environment == "" {
+		command.Environment = "primary"
+	}
+	if command.Runner == "" {
+		command.Runner = "auto"
+	}
+	if command.WorkingDir == "" {
+		command.WorkingDir = "task_worktree"
+	}
+	return command
+}
+
+func parseYAMLBool(value string, fallback bool) bool {
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func parseArgv(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	var argv []string
+	if strings.HasPrefix(value, "[") {
+		if err := json.Unmarshal([]byte(value), &argv); err == nil {
+			return argv
+		}
+	}
+	return strings.Fields(value)
 }

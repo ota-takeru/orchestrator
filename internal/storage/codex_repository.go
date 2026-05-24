@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -43,6 +44,8 @@ type RealCodexRunResult struct {
 	Classification    string   `json:"classification"`
 	Blockers          []string `json:"blockers,omitempty"`
 }
+
+var realCodexRuntimeGOOS = runtime.GOOS
 
 func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecRequest) (CodexExecResult, error) {
 	finalFile, err := os.CreateTemp("", "devos-codex-final-*.txt")
@@ -116,11 +119,9 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
-	if env.OSFamily != platform.OSFamilyLinux || env.ID != "linux-main" {
-		return RealCodexRunResult{}, fmt.Errorf("real Codex adapter v1 only supports linux-main current environment")
-	}
-	if env.CodexAdapter != platform.CodexAdapterLinux {
-		return RealCodexRunResult{}, fmt.Errorf("real Codex adapter v1 requires codex-linux environment")
+	classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
+	if len(blockers) > 0 {
+		return db.recordRealCodexAdapterBlocked(ctx, projectID, taskID, env, classification, blockers)
 	}
 	if err := db.transitionTask(ctx, projectID, taskID, "ready", "implementing", "real_codex_implementation_started", map[string]any{"task_id": taskID, "environment_id": env.ID}); err != nil {
 		return RealCodexRunResult{}, err
@@ -139,7 +140,7 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	headCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
 	diff := gitOutputOrEmpty(ctx, env.ProjectRoot, "diff", "--binary")
 	diffHash := sha256Hex([]byte(diff))
-	classification, blockers := classifyCodexExecResult(execResult)
+	classification, blockers = classifyCodexExecResult(execResult)
 	runStatus := "succeeded"
 	taskTo := "verifying"
 	if len(blockers) > 0 {
@@ -164,6 +165,113 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 		return RealCodexRunResult{}, err
 	}
 	return RealCodexRunResult{TaskID: taskID, TaskStatus: taskTo, ImplementationRun: runID, Classification: classification, Blockers: blockers}, nil
+}
+
+func evaluateRealCodexEnvironment(env platform.ExecutionEnvironment, hostGOOS string) (string, []string) {
+	if strings.TrimSpace(env.ProjectRoot) == "" {
+		return "project_root_missing", []string{"project_root_missing"}
+	}
+	switch env.OSFamily {
+	case platform.OSFamilyLinux:
+		if env.CodexAdapter != platform.CodexAdapterLinux {
+			return "codex_adapter_mismatch", []string{"linux_environment_requires_codex_linux"}
+		}
+		if hostGOOS != "linux" {
+			return "linux_codex_adapter_requires_linux_runtime", []string{"linux_codex_adapter_requires_linux_runtime"}
+		}
+		if !isPOSIXShell(env.Shell) {
+			return "shell_mismatch", []string{"linux_codex_adapter_requires_posix_shell"}
+		}
+		if !isPOSIXRoot(env.ProjectRoot) {
+			return "project_root_mismatch", []string{"linux_codex_adapter_requires_posix_project_root"}
+		}
+		return "ready", nil
+	case platform.OSFamilyWSL:
+		if env.CodexAdapter != platform.CodexAdapterWSL {
+			return "codex_adapter_mismatch", []string{"wsl_environment_requires_codex_wsl"}
+		}
+		if hostGOOS != "linux" {
+			return "wsl_codex_adapter_requires_linux_runtime", []string{"wsl_codex_adapter_requires_linux_runtime"}
+		}
+		if !isPOSIXShell(env.Shell) {
+			return "shell_mismatch", []string{"wsl_codex_adapter_requires_posix_shell"}
+		}
+		if !isPOSIXRoot(env.ProjectRoot) {
+			return "project_root_mismatch", []string{"wsl_codex_adapter_requires_posix_project_root"}
+		}
+		return "ready", nil
+	case platform.OSFamilyWindows:
+		if env.CodexAdapter != platform.CodexAdapterWindows {
+			return "codex_adapter_mismatch", []string{"windows_environment_requires_codex_windows"}
+		}
+		if hostGOOS != "windows" {
+			return "windows_codex_adapter_requires_windows_runtime", []string{"windows_codex_adapter_requires_windows_runtime"}
+		}
+		if env.Shell != platform.ShellPowerShell && env.Shell != platform.ShellCmd {
+			return "shell_mismatch", []string{"windows_codex_adapter_requires_windows_shell"}
+		}
+		if !isWindowsRoot(env.ProjectRoot) {
+			return "project_root_mismatch", []string{"windows_codex_adapter_requires_windows_project_root"}
+		}
+		return "ready", nil
+	case platform.OSFamilyRemoteWindows, platform.OSFamilyRemoteLinux:
+		return "remote_runner_required", []string{"real_codex_remote_runner_not_configured"}
+	default:
+		return "unsupported_os_family", []string{"real_codex_adapter_unsupported_os_family"}
+	}
+}
+
+func isPOSIXShell(shell platform.Shell) bool {
+	return shell == platform.ShellBash || shell == platform.ShellSh
+}
+
+func isPOSIXRoot(path string) bool {
+	return strings.HasPrefix(strings.TrimSpace(path), "/")
+}
+
+func isWindowsRoot(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if len(trimmed) >= 3 && trimmed[1] == ':' && (trimmed[2] == '\\' || trimmed[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(trimmed, `\\`)
+}
+
+func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, classification string, blockers []string) (RealCodexRunResult, error) {
+	attemptNo, err := db.nextRunAttempt(ctx, projectID, taskID, "implementation")
+	if err != nil {
+		return RealCodexRunResult{}, err
+	}
+	now := time.Now().UTC()
+	runID := "RUN-" + stableShortHash(taskID+"|real-codex-adapter-blocked|"+now.Format(time.RFC3339Nano))
+	baseCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
+	headCommit := baseCommit
+	prompt := realCodexPrompt(taskID)
+	blockerText := strings.Join(blockers, ", ")
+	execResult := CodexExecResult{
+		Stdout:       "",
+		Stderr:       "real Codex adapter blocked before process start: " + blockerText,
+		FinalMessage: "real Codex adapter blocked before process start: " + blockerText,
+		ExitCode:     1,
+		StartedAt:    now,
+		CompletedAt:  now,
+	}
+	if err := db.saveCodexRun(ctx, projectID, taskID, env, runID, attemptNo, baseCommit, headCommit, sha256Hex(nil), "", prompt, execResult, "blocked", classification, blockers); err != nil {
+		return RealCodexRunResult{}, err
+	}
+	if err := db.openCodexBlockedDecision(ctx, projectID, taskID, runID, classification, blockers); err != nil {
+		return RealCodexRunResult{}, err
+	}
+	if err := db.transitionTask(ctx, projectID, taskID, "ready", "needs_decision", "real_codex_adapter_blocked", map[string]any{
+		"task_id":        taskID,
+		"run_id":         runID,
+		"environment_id": env.ID,
+		"classification": classification,
+		"blockers":       blockers,
+	}); err != nil {
+		return RealCodexRunResult{}, err
+	}
+	return RealCodexRunResult{TaskID: taskID, TaskStatus: "needs_decision", ImplementationRun: runID, Classification: classification, Blockers: blockers}, nil
 }
 
 func realCodexPrompt(taskID string) string {

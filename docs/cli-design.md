@@ -167,7 +167,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos platform profile list` | `--json` | なし | read-only |
 | `devos platform profile set` | `windows-primary|wsl-primary|hybrid` | canonical_operationsを含むproject_run_profileをactive/default化 | profile snapshotが同じならno-op |
 | `devos platform doctor` | `--env ENV_ID`, `--include-codex`, `--include-ui`, `--save`, `--json` | toolchain_requirements検査、setup card projection | 同じ検査結果ならno-op |
-| `devos platform codex-readiness` | `--save`, `--json` | Codex runtime readiness report、runner capability issue projection、toolchain_required環境のCodex doctor report | `--save`なしではread-only |
+| `devos platform codex-readiness` | `--from-file PATH`, `--save`, `--json` | Codex runtime readiness report、runner capability issue projection、toolchain_required環境のCodex doctor report | `--save`なしではread-only。`--from-file` は別runtimeで生成したreadiness JSONを取り込む |
 | `devos platform map add` | `FROM_ENV`, `TO_ENV`, `--from-root`, `--to-root`, `--mode` | path_mappings作成 | validation failureなら保存しない |
 | `devos platform setup instructions` | `INBOX_ID`, `--json` | Toolchain Setup Cardの手動セットアップ手順表示 | 自動インストールはしない |
 | `devos platform setup mark-installed` | `INBOX_ID`, `--json` | doctor再実行、toolchain_requirements / setup card同期 | doctorが検出した場合だけresolved |
@@ -185,6 +185,7 @@ platform command details:
 - `devos platform doctor` はtoolchain_requirementsを検査し、missing/setup_requiredをHuman Inboxへ投影する。
 - `devos platform doctor --include-ui` はUI検証用のNode.js / Corepackを検査する。pnpmは `ui/package.json` の `packageManager` をCorepack経由で実行するため、正規検証コマンドは `corepack pnpm --dir ui test` / `lint` / `build` とする。
 - `devos platform codex-readiness --save` はruntime不一致をRunner Capability Issueとして投影し、runtimeは利用可能だがCodex CLI / auth / sandbox系toolchainが不足する環境では `devos platform doctor --include-codex` 相当のToolchainRequirementも保存する。
+- `devos platform codex-readiness --from-file windows-readiness.json --save` は、Windows上のDevOS runtimeで生成したreadiness JSONを別環境のDBへ取り込む。import時はschema validationとenvironment id照合を行い、Windows nativeでreadyになったenvironmentのopen runtime issueを解消できる。
 - `devos platform map add` はpath_mappingsを作成する。mapping後のpath validationを通らない場合は保存しない。
 
 ```text

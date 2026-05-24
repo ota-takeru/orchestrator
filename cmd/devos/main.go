@@ -934,7 +934,7 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("--delete and --quarantine are mutually exclusive"))
 	}
 	if !*dryRun && !*execute {
-		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("cleanup deletion is not implemented; use --execute guard or --dry-run"))
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("cleanup changes require --execute or --dry-run"))
 	}
 	age, err := parseCleanupAge(*olderThan)
 	if err != nil {
@@ -1819,7 +1819,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--quarantine] [--quarantine-root PATH] [--delete] [--merged] [--applied] [--older-than AGE] [--json]")
 	fmt.Fprintln(w, "  devos cleanup quarantine list [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos cleanup quarantine restore [--project-root PATH] [--data-root PATH] [--run RUN_ID] [--json] TASK_ID")
-	fmt.Fprintln(w, "  devos publish [--project-root PATH] [--data-root PATH] [--remote origin] [--branch main] [--dry-run] [--json]")
+	fmt.Fprintln(w, "  devos publish [--project-root PATH] [--data-root PATH] [--remote origin] [--branch main] [--dry-run|--execute] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")

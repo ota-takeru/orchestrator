@@ -51,9 +51,14 @@ devos patch status TASK-001
 devos patch mark-applied TASK-001 --commit abc123
 devos patch verify-applied TASK-001
 devos cleanup --dry-run
+devos cleanup --execute
+devos cleanup --quarantine --execute
+devos cleanup --delete --execute
 devos cleanup --merged
 devos cleanup --applied
 devos cleanup --older-than 14d
+devos publish --dry-run
+devos publish --execute --remote origin --branch main
 devos platform list
 devos platform detect
 devos platform add windows-main --os windows --project-root C:\dev\app --shell powershell
@@ -149,11 +154,12 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos patch mark-applied` | `TASK_ID`, `--commit SHA`, `--json` | `patch_applications(manually_applied)`、`manually_applied` | commit存在確認必須。approvalではなくhuman attestation |
 | `devos patch verify-applied` | `TASK_ID`, `--json` | `reverify` run、verification_results、gate_results、`applied`またはneeds_decision | 同じcommitなら再利用可 |
 | `devos cleanup` | `--dry-run`, `--merged`, `--applied`, `--older-than` | worktree cleanup plan | default dry-run |
-| `devos cleanup --execute` | `--merged`, `--applied`, `--older-than` | cleanup execute guard、worktree safety evidence | v1は実削除せず`actual_delete_enabled=false` |
+| `devos cleanup --execute` | `--merged`, `--applied`, `--older-than` | cleanup execute guard、worktree safety evidence | 恒久削除や隔離移動を伴わないguardだけを証跡化する |
 | `devos cleanup --quarantine --execute` | `--merged`, `--applied`, `--older-than`, `--quarantine-root` | cleanup quarantine evidence、worktree safety evidence、eligible worktreeの隔離移動 | `git worktree move` でDevOS管理下のquarantineへ移し、恒久削除はしない |
+| `devos cleanup --delete --execute` | `--merged`, `--applied`, `--older-than` | cleanup delete evidence、worktree safety evidence、eligible worktreeの恒久削除 | `git worktree remove --force` を使う。未保存diff、untracked、diff artifact欠落、stale safety evidenceがある対象は削除しない |
 | `devos cleanup quarantine list` | `--json` | なし | `cleanup-quarantine-summary.json` evidenceから隔離済みworktreeを一覧表示する |
 | `devos cleanup quarantine restore` | `TASK_ID`, `--run RUN_ID`, `--json` | cleanup restore evidence、quarantine worktreeの復元移動 | `git worktree move` で元pathへ戻す。復元先が存在する場合はblocked |
-| `devos publish` | `--remote origin`, `--branch main`, `--dry-run`, `--json` | publish readiness run、summary artifact、workflow_events | v1はpushしない。remote URL、local/remote OID、fast-forward関係、blockerだけを証跡化する |
+| `devos publish` | `--remote origin`, `--branch main`, `--dry-run`, `--execute`, `--json` | publish readiness / execute run、summary artifact、workflow_events | defaultはreadiness証跡だけ。`--execute` はremoteがlocal behindでないことを確認し、`local_ahead` のときだけ明示refspecでpushする。`up_to_date` はno-op |
 | `devos platform detect` | `--apply`, `--json` | Windows / WSL / Linux local environment候補 | `--apply`なしではDB更新しない |
 | `devos platform add` | `ENV_ID`, `--os`, `--project-root`, `--shell` | execution_environment作成または更新 | 同じENV_IDはupdate |
 | `devos platform set-primary` | `ENV_ID` | projectのprimary_environment変更 | 未解決runやopen worktreeがある場合は拒否 |
@@ -500,6 +506,8 @@ worktree cleanupは危険操作なので、defaultはdry-runです。
 ```text
 devos cleanup --dry-run
 devos cleanup --execute
+devos cleanup --quarantine --execute
+devos cleanup --delete --execute
 devos cleanup --merged
 devos cleanup --applied
 devos cleanup --older-than 14d
@@ -508,8 +516,26 @@ devos cleanup --older-than 14d
 削除条件:
 
 - `--dry-run` では削除予定だけを表示する。
-- `--execute` v1は削除せず、guard結果と `actual_delete_not_enabled` を証拠保存する。
+- `--execute` 単体では削除せず、guard結果と `actual_delete_enabled=false` を証拠保存する。
+- `--quarantine --execute` はeligible worktreeをDevOS管理下のquarantine rootへ移動し、後から `devos cleanup quarantine restore` で復元できる。
+- `--delete --execute` はeligible worktreeを恒久削除する。`--delete` と `--quarantine` は同時指定できない。
 - 未merge diffがあるworktreeは削除しない。
 - 削除前に `diff.patch` がOrchestrator-owned artifactとして保存済みであることを確認する。
 - untracked filesがあるworktreeは、人間が明示しない限り削除しない。
 - `merged`、`applied`、`cancelled`、`failed` のworktreeだけを対象にする。
+
+## Publish
+
+mainのpublishはmergeとは別commandです。`devos merge queue --process-real-git --execute` はlocal-only / no-pushのままにし、remote更新は `devos publish` が担当します。
+
+```text
+devos publish --dry-run --remote origin --branch main
+devos publish --execute --remote origin --branch main
+```
+
+publish条件:
+
+- defaultは `--dry-run` としてremote URL、local OID、remote OID、local/remote関係、blockerだけを証跡化する。
+- `--execute` はremote branchが存在しない、またはremoteがlocalのancestorである場合だけpush可能にする。
+- `remote_ahead`、`diverged`、local branch未存在、remote URL未設定、push後OID不一致はblockedとしてevidenceを残す。
+- push実行後は `git ls-remote` でremote OIDがlocal OIDへ更新されたことを確認する。

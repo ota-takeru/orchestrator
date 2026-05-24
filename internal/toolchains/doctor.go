@@ -52,6 +52,7 @@ type Options struct {
 	LookupPath   func(file string) (string, error)
 	LookupEnv    func(key string) (string, bool)
 	FileExists   func(path string) bool
+	ReadFile     func(path string) ([]byte, error)
 }
 
 func RunDoctor(ctx context.Context, env platform.ExecutionEnvironment, opts Options) Report {
@@ -68,11 +69,18 @@ func RunDoctor(ctx context.Context, env platform.ExecutionEnvironment, opts Opti
 	if fileExists == nil {
 		fileExists = regularFileExists
 	}
+	readFile := opts.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
 
 	report := Report{EnvironmentID: env.ID}
 	report.Requirements = append(report.Requirements, checkExecutable(lookup, "git", executableForGit(env), RequiredForImplementation, true))
 	report.Requirements = append(report.Requirements, checkExecutable(lookup, string(env.Shell), executableForShell(env), RequiredForVerification, true))
 
+	if env.OSFamily == platform.OSFamilyWSL {
+		report.Requirements = append(report.Requirements, checkWSL2(readFile))
+	}
 	if env.SandboxProfile == platform.SandboxLinuxBubblewrap {
 		report.Requirements = append(report.Requirements, checkExecutable(lookup, "bubblewrap", "bwrap", RequiredForImplementation, false))
 	}
@@ -165,6 +173,36 @@ func checkCodexAuth(env platform.ExecutionEnvironment, lookupEnv func(string) (s
 	}
 	req.Status = StatusDetected
 	req.Message = fmt.Sprintf("Codex auth detected in %s for this environment", source)
+	return req
+}
+
+func checkWSL2(readFile func(string) ([]byte, error)) Requirement {
+	req := Requirement{
+		ToolchainKey:     "wsl2",
+		RequiredFor:      RequiredForImplementation,
+		RequiredForMerge: true,
+		Executable:       "/proc/sys/kernel/osrelease",
+	}
+	raw, err := readFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		req.Status = StatusUnsupported
+		req.Message = "WSL kernel release could not be inspected; WSL2 is required for Codex WSL adapter"
+		return req
+	}
+	release := strings.TrimSpace(string(raw))
+	lower := strings.ToLower(release)
+	switch {
+	case strings.Contains(lower, "wsl2") || strings.Contains(lower, "microsoft-standard"):
+		req.Status = StatusDetected
+		req.Message = "WSL2 detected"
+		req.DetectedPath = "/proc/sys/kernel/osrelease"
+	case strings.Contains(lower, "microsoft"):
+		req.Status = StatusUnsupported
+		req.Message = "WSL1 appears to be running; WSL2 is required for Codex WSL adapter"
+	default:
+		req.Status = StatusUnsupported
+		req.Message = "WSL environment was not detected; WSL2 is required for Codex WSL adapter"
+	}
 	return req
 }
 

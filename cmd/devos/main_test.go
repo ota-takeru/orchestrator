@@ -275,6 +275,40 @@ func TestPlatformDoctorSaveCLI(t *testing.T) {
 	}
 }
 
+func TestPlatformDoctorEnvCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Platform doctor env workflow")
+	runCLI(t, "platform", "profile", "set", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "wsl-primary")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"platform", "doctor", "--project-root", projectRoot, "--data-root", dataRoot, "--env", "wsl-main", "--json"}, &stdout, &stderr)
+	if code != 0 && code != exitPolicy {
+		t.Fatalf("unexpected doctor exit code %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	var report struct {
+		EnvironmentID string `json:"environment_id"`
+		Requirements  []struct {
+			ToolchainKey string `json:"toolchain_key"`
+		} `json:"requirements"`
+	}
+	decodeJSON(t, stdout.Bytes(), &report)
+	if report.EnvironmentID != "wsl-main" {
+		t.Fatalf("environment id = %s", report.EnvironmentID)
+	}
+	var foundWSL2 bool
+	for _, req := range report.Requirements {
+		if req.ToolchainKey == "wsl2" {
+			foundWSL2 = true
+		}
+	}
+	if !foundWSL2 {
+		t.Fatalf("wsl2 requirement not found: %#v", report.Requirements)
+	}
+}
+
 func TestPlatformSetupInstructionsAndMarkInstalledCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

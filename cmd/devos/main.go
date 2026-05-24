@@ -1536,6 +1536,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		fs.SetOutput(io.Discard)
 		projectRoot := fs.String("project-root", "", "project root")
 		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		envID := fs.String("env", "", "execution environment id")
 		includeCodex := fs.Bool("include-codex", false, "include real Codex adapter preflight")
 		save := fs.Bool("save", false, "save toolchain requirements and setup cards")
 		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
@@ -1547,13 +1548,36 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 			return writeError(stdout, *jsonOut, exitValidation, "platform_doctor_failed", err)
 		}
 		env := platform.DetectHostEnvironment(root)
-		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: *includeCodex})
-		if *save {
-			db, projectID, errCode, err := openMigratedProjectDB(ctx, root, *dataRoot)
+		var db *storage.DB
+		var projectID string
+		if *envID != "" || *save {
+			var errCode int
+			var err error
+			db, projectID, errCode, err = openMigratedProjectDB(ctx, root, *dataRoot)
 			if err != nil {
-				return writeError(stdout, *jsonOut, errCode, "platform_doctor_save_failed", err)
+				return writeError(stdout, *jsonOut, errCode, "platform_doctor_failed", err)
 			}
 			defer db.Close()
+		}
+		if *envID != "" {
+			envs, err := db.ListExecutionEnvironments(ctx, projectID)
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitStorage, "platform_doctor_failed", err)
+			}
+			found := false
+			for _, candidate := range envs {
+				if candidate.ID == *envID {
+					env = candidate
+					found = true
+					break
+				}
+			}
+			if !found {
+				return writeError(stdout, *jsonOut, exitValidation, "platform_doctor_failed", fmt.Errorf("execution environment not found: %s", *envID))
+			}
+		}
+		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: *includeCodex})
+		if *save {
 			if err := db.SaveToolchainReport(ctx, projectID, report); err != nil {
 				return writeError(stdout, *jsonOut, exitStorage, "platform_doctor_save_failed", err)
 			}
@@ -1826,7 +1850,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform map add [--project-root PATH] [--data-root PATH] --from-root PATH --to-root PATH --mode MODE [--write-owner ENV_ID] [--json] FROM_ENV TO_ENV")
 	fmt.Fprintln(w, "  devos platform setup instructions [--project-root PATH] [--data-root PATH] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform setup mark-installed [--project-root PATH] [--data-root PATH] [--include-codex] [--json] INBOX_ID")
-	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--data-root PATH] [--include-codex] [--save] [--json]")
+	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--data-root PATH] [--env ENV_ID] [--include-codex] [--save] [--json]")
 }
 
 func printFindings(w io.Writer, report preflight.Report) {

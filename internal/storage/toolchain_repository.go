@@ -198,6 +198,12 @@ func setupInstructionsFor(osFamily platform.OSFamily, toolchainKey string) []str
 			"Do not run package manager commands through DevOS; perform setup manually.",
 			"Rerun platform doctor with --save after setup.",
 		}
+	case "wsl2":
+		return []string{
+			"Upgrade or recreate this Linux environment as WSL2 before using the Codex WSL adapter.",
+			"Verify the environment from the target WSL shell, not from Windows PowerShell.",
+			"Rerun platform doctor with --save after setup.",
+		}
 	case "bash", "sh", "powershell", "cmd":
 		return []string{
 			"Install or enable the required shell for this execution environment.",

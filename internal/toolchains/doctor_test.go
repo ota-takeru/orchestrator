@@ -105,11 +105,18 @@ func TestDoctorDetectsEnvironmentSpecificCodexAuth(t *testing.T) {
 		FileExists: func(path string) bool {
 			return path == "/home/wsl-user/.codex/auth.json"
 		},
+		ReadFile: func(path string) ([]byte, error) {
+			return []byte("5.15.90.1-microsoft-standard-WSL2\n"), nil
+		},
 	})
 
 	auth := requirementByKey(report, "codex-auth")
 	if auth.Status != StatusDetected || auth.DetectedPath != "/home/wsl-user/.codex" {
 		t.Fatalf("codex-auth requirement = %#v", auth)
+	}
+	wsl2 := requirementByKey(report, "wsl2")
+	if wsl2.Status != StatusDetected {
+		t.Fatalf("wsl2 requirement = %#v", wsl2)
 	}
 }
 
@@ -141,6 +148,43 @@ func TestDoctorUsesWindowsCodexHomeBoundary(t *testing.T) {
 	auth := requirementByKey(report, "codex-auth")
 	if auth.Status != StatusDetected || auth.DetectedPath != `C:\Users\dev\.codex` {
 		t.Fatalf("codex-auth requirement = %#v", auth)
+	}
+}
+
+func TestDoctorBlocksWSL1ForCodexAdapter(t *testing.T) {
+	env := platform.ExecutionEnvironment{
+		ID:             "wsl-main",
+		OSFamily:       platform.OSFamilyWSL,
+		Shell:          platform.ShellBash,
+		GitProvider:    platform.GitProviderLinux,
+		CodexAdapter:   platform.CodexAdapterWSL,
+		SandboxProfile: platform.SandboxLinuxBubblewrap,
+	}
+	report := RunDoctor(context.Background(), env, Options{
+		IncludeCodex: true,
+		LookupPath: func(file string) (string, error) {
+			return "/usr/bin/" + file, nil
+		},
+		LookupEnv: func(key string) (string, bool) {
+			if key == "HOME" {
+				return "/home/wsl-user", true
+			}
+			return "", false
+		},
+		FileExists: func(path string) bool {
+			return path == "/home/wsl-user/.codex/auth.json"
+		},
+		ReadFile: func(path string) ([]byte, error) {
+			return []byte("4.4.0-19041-Microsoft\n"), nil
+		},
+	})
+
+	wsl2 := requirementByKey(report, "wsl2")
+	if wsl2.Status != StatusUnsupported {
+		t.Fatalf("wsl2 requirement = %#v", wsl2)
+	}
+	if !report.HasRequiredMergeFailure() {
+		t.Fatal("expected WSL1 to block required merge checks")
 	}
 }
 

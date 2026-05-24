@@ -157,6 +157,14 @@ Human Inboxに出るものはDecisionだけではありません。Environment I
 
 `inbox_items` はsource of truthではなく、表示用のprojection / queueです。
 
+UI/APIの最小取得面は次です。
+
+- `GET /api/ui/snapshot`: Human Inbox summary、open inbox items、recommended next commandsを返す。`baseline_issues` countを含め、既知baseline failureを判断待ちではなく報告/確認対象として分離する。
+- `GET /api/inbox?status=open`: Inbox projectionを一覧する。
+- `POST /api/inbox/{id}/approve`: Inbox itemを承認済みにする。承認は副作用を直接実行しない。
+- `GET /api/decisions?status=open`: Decision sourceを一覧する。
+- `GET /api/memory?type=baseline_issue`: Baseline Issue Reportとして保存されたmemoryを一覧する。
+
 source of truth:
 
 - `decisions`

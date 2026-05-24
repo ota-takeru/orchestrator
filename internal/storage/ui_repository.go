@@ -28,6 +28,7 @@ type HumanInboxUICounts struct {
 	OpenDecisions        int `json:"open_decisions"`
 	RunningWorkers       int `json:"running_workers"`
 	OpenMergeQueue       int `json:"open_merge_queue"`
+	BaselineIssues       int `json:"baseline_issues"`
 }
 
 func (db *DB) LoadHumanInboxSnapshot(ctx context.Context, projectID string, limit int) (HumanInboxSnapshot, error) {
@@ -81,6 +82,10 @@ func (db *DB) LoadHumanInboxSnapshot(ctx context.Context, projectID string, limi
 	if err != nil {
 		return HumanInboxSnapshot{}, err
 	}
+	snapshot.Counts.BaselineIssues, err = db.countWhere(ctx, "memories", "project_id = ? AND memory_type = 'baseline_issue' AND invalidated_at IS NULL", projectID)
+	if err != nil {
+		return HumanInboxSnapshot{}, err
+	}
 	snapshot.LastSuccessfulMergeAt, err = db.lastSuccessfulMergeAt(ctx, projectID)
 	if err != nil {
 		return HumanInboxSnapshot{}, err
@@ -131,6 +136,9 @@ func recommendedUICommands(snapshot HumanInboxSnapshot) []string {
 	}
 	if snapshot.Counts.OpenMergeQueue > 0 {
 		commands = append(commands, "devos merge queue --json")
+	}
+	if snapshot.Counts.BaselineIssues > 0 {
+		commands = append(commands, "devos memory --type baseline_issue --json")
 	}
 	if len(commands) == 0 {
 		commands = append(commands, "devos request --json <TEXT>")

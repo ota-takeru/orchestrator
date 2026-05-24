@@ -295,6 +295,7 @@ type HumanInboxCounts struct {
 	OpenDecisions        int `json:"open_decisions"`
 	RunningWorkers       int `json:"running_workers"`
 	OpenMergeQueue       int `json:"open_merge_queue"`
+	BaselineIssues       int `json:"baseline_issues"`
 }
 
 func HumanInboxSnapshotSchema() []byte {
@@ -322,7 +323,8 @@ func ValidateHumanInboxSnapshot(raw string) error {
 		snapshot.Counts.QueuedRequests < 0 ||
 		snapshot.Counts.OpenDecisions < 0 ||
 		snapshot.Counts.RunningWorkers < 0 ||
-		snapshot.Counts.OpenMergeQueue < 0 {
+		snapshot.Counts.OpenMergeQueue < 0 ||
+		snapshot.Counts.BaselineIssues < 0 {
 		return fmt.Errorf("human inbox snapshot counts cannot be negative")
 	}
 	if len(snapshot.OpenInboxItems) > snapshot.Counts.OpenInboxItems {
@@ -638,7 +640,8 @@ const humanInboxSnapshotSchema = `{
         "queued_requests",
         "open_decisions",
         "running_workers",
-        "open_merge_queue"
+        "open_merge_queue",
+        "baseline_issues"
       ],
       "additionalProperties": false,
       "properties": {
@@ -649,7 +652,8 @@ const humanInboxSnapshotSchema = `{
         "queued_requests": { "type": "integer", "minimum": 0 },
         "open_decisions": { "type": "integer", "minimum": 0 },
         "running_workers": { "type": "integer", "minimum": 0 },
-        "open_merge_queue": { "type": "integer", "minimum": 0 }
+        "open_merge_queue": { "type": "integer", "minimum": 0 },
+        "baseline_issues": { "type": "integer", "minimum": 0 }
       }
     },
     "last_successful_merge_at": { "type": "string" },

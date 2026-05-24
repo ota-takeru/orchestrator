@@ -34,12 +34,21 @@ INSERT INTO feature_requests(
 ) VALUES ('FR-001', 'PROJECT-001', 'queued', 'Feature', 'Feature', 'Feature', 'human', 'medium', ?, ?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO memories(
+  id, project_id, memory_type, key, value, scope, scope_id, source_type, source_id, created_at, updated_at
+) VALUES (
+  'MEM-BASELINE', 'PROJECT-001', 'baseline_issue', 'baseline_issue.GATE-001', '{}',
+  'project', '', 'system', 'GATE-001', ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
 
 	snapshot, err := db.LoadHumanInboxSnapshot(ctx, "PROJECT-001", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Counts.OpenInboxItems != 1 || snapshot.Counts.RunningTasks != 1 || snapshot.Counts.WaitingForHumanTasks != 1 || snapshot.Counts.QueuedRequests != 1 || snapshot.Counts.OpenDecisions != 1 {
+	if snapshot.Counts.OpenInboxItems != 1 || snapshot.Counts.RunningTasks != 1 || snapshot.Counts.WaitingForHumanTasks != 1 || snapshot.Counts.QueuedRequests != 1 || snapshot.Counts.OpenDecisions != 1 || snapshot.Counts.BaselineIssues != 1 {
 		t.Fatalf("snapshot counts = %#v", snapshot.Counts)
 	}
 	if len(snapshot.OpenInboxItems) != 1 || snapshot.OpenInboxItems[0].ID != "INBOX-001" {

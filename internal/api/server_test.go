@@ -88,6 +88,36 @@ INSERT INTO inbox_items(
 	}
 }
 
+func TestServerListsMemoryByType(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO memories(
+  id, project_id, memory_type, key, value, scope, scope_id, source_type, source_id, created_at, updated_at
+) VALUES (
+  'MEM-BASELINE', ?, 'baseline_issue', 'baseline_issue.GATE-001', '{}',
+  'project', '', 'system', 'GATE-001', ?, ?
+)`, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/memory?type=baseline_issue", nil)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Memories []storage.MemoryRecord `json:"memories"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Memories) != 1 || body.Memories[0].MemoryType != "baseline_issue" {
+		t.Fatalf("memories = %#v", body.Memories)
+	}
+}
+
 func openAPITestDB(t *testing.T) (*storage.DB, string) {
 	t.Helper()
 	ctx := context.Background()

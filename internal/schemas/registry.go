@@ -21,6 +21,8 @@ const (
 	SchemaKindDependencyRisk     SchemaKind = "dependency_risk_ledger"
 	SchemaKindHumanInboxSnapshot SchemaKind = "human_inbox_snapshot"
 	SchemaKindGateResult         SchemaKind = "gate_result"
+	SchemaKindToolchainReport    SchemaKind = "toolchain_report"
+	SchemaKindCodexReadiness     SchemaKind = "codex_runtime_readiness"
 )
 
 type Definition struct {
@@ -103,6 +105,20 @@ func Definitions() []Definition {
 			Version: "1",
 			File:    "gate-result.v1.schema.json",
 			Content: []byte(gateResultSchema),
+		},
+		{
+			ID:      "devos.toolchain-report",
+			Kind:    SchemaKindToolchainReport,
+			Version: "1",
+			File:    "toolchain-report.v1.schema.json",
+			Content: []byte(toolchainReportSchema),
+		},
+		{
+			ID:      "devos.codex-runtime-readiness",
+			Kind:    SchemaKindCodexReadiness,
+			Version: "1",
+			File:    "codex-runtime-readiness.v1.schema.json",
+			Content: []byte(codexRuntimeReadinessSchema),
 		},
 	}
 }
@@ -390,6 +406,137 @@ func ValidateGateResult(raw string) error {
 	}
 	if values, ok := evidence.([]any); ok && len(values) == 0 {
 		return fmt.Errorf("gate result evidence array cannot be empty")
+	}
+	return nil
+}
+
+type ToolchainReport struct {
+	EnvironmentID string                 `json:"environment_id"`
+	Requirements  []ToolchainRequirement `json:"requirements"`
+}
+
+type ToolchainRequirement struct {
+	ToolchainKey     string `json:"toolchain_key"`
+	RequiredFor      string `json:"required_for"`
+	RequiredForMerge bool   `json:"required_for_merge"`
+	Status           string `json:"status"`
+	Executable       string `json:"executable,omitempty"`
+	DetectedPath     string `json:"detected_path,omitempty"`
+	Message          string `json:"message"`
+}
+
+func ToolchainReportSchema() []byte {
+	return []byte(toolchainReportSchema)
+}
+
+func ValidateToolchainReport(raw string) error {
+	var report ToolchainReport
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		return fmt.Errorf("toolchain report must be JSON: %w", err)
+	}
+	if strings.TrimSpace(report.EnvironmentID) == "" {
+		return fmt.Errorf("toolchain report requires environment_id")
+	}
+	if len(report.Requirements) == 0 {
+		return fmt.Errorf("toolchain report requires at least one requirement")
+	}
+	seen := map[string]struct{}{}
+	for i, req := range report.Requirements {
+		if strings.TrimSpace(req.ToolchainKey) == "" {
+			return fmt.Errorf("toolchain report requirement %d requires toolchain_key", i)
+		}
+		key := req.ToolchainKey + "|" + req.RequiredFor
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("toolchain report has duplicate requirement: %s", key)
+		}
+		seen[key] = struct{}{}
+		switch req.RequiredFor {
+		case "implementation", "verification", "runtime", "runtime_smoke", "deployment":
+		default:
+			return fmt.Errorf("toolchain report requirement %d has invalid required_for: %s", i, req.RequiredFor)
+		}
+		switch req.Status {
+		case "detected", "missing", "invalid", "setup_required", "waived", "unsupported", "revoked":
+		default:
+			return fmt.Errorf("toolchain report requirement %d has invalid status: %s", i, req.Status)
+		}
+		if strings.TrimSpace(req.Message) == "" {
+			return fmt.Errorf("toolchain report requirement %d requires message", i)
+		}
+	}
+	return nil
+}
+
+type CodexRuntimeReadiness struct {
+	HostGOOS string                      `json:"host_goos"`
+	Items    []CodexRuntimeReadinessItem `json:"items"`
+}
+
+type CodexRuntimeReadinessItem struct {
+	EnvironmentID        string   `json:"environment_id"`
+	OSFamily             string   `json:"os_family"`
+	ProjectRoot          string   `json:"project_root"`
+	CodexAdapter         string   `json:"codex_adapter"`
+	SandboxProfile       string   `json:"sandbox_profile"`
+	ExpectedHostRuntime  string   `json:"expected_host_runtime"`
+	CurrentRuntimeUsable bool     `json:"current_runtime_usable"`
+	Classification       string   `json:"classification"`
+	Blockers             []string `json:"blockers,omitempty"`
+	Argv                 []string `json:"argv,omitempty"`
+}
+
+func CodexRuntimeReadinessSchema() []byte {
+	return []byte(codexRuntimeReadinessSchema)
+}
+
+func ValidateCodexRuntimeReadiness(raw string) error {
+	var report CodexRuntimeReadiness
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		return fmt.Errorf("codex runtime readiness must be JSON: %w", err)
+	}
+	if strings.TrimSpace(report.HostGOOS) == "" {
+		return fmt.Errorf("codex runtime readiness requires host_goos")
+	}
+	seen := map[string]struct{}{}
+	for i, item := range report.Items {
+		if strings.TrimSpace(item.EnvironmentID) == "" {
+			return fmt.Errorf("codex runtime readiness item %d requires environment_id", i)
+		}
+		if _, ok := seen[item.EnvironmentID]; ok {
+			return fmt.Errorf("codex runtime readiness has duplicate environment: %s", item.EnvironmentID)
+		}
+		seen[item.EnvironmentID] = struct{}{}
+		for _, required := range []struct {
+			field string
+			value string
+		}{
+			{"os_family", item.OSFamily},
+			{"project_root", item.ProjectRoot},
+			{"codex_adapter", item.CodexAdapter},
+			{"sandbox_profile", item.SandboxProfile},
+			{"expected_host_runtime", item.ExpectedHostRuntime},
+			{"classification", item.Classification},
+		} {
+			if strings.TrimSpace(required.value) == "" {
+				return fmt.Errorf("codex runtime readiness item %d requires %s", i, required.field)
+			}
+		}
+		if item.CurrentRuntimeUsable && len(item.Blockers) > 0 {
+			return fmt.Errorf("codex runtime readiness item %d cannot be usable with blockers", i)
+		}
+		if !item.CurrentRuntimeUsable && len(item.Blockers) == 0 {
+			return fmt.Errorf("codex runtime readiness item %d requires blockers when not usable", i)
+		}
+		for j, blocker := range item.Blockers {
+			if strings.TrimSpace(blocker) == "" {
+				return fmt.Errorf("codex runtime readiness item %d blocker %d is empty", i, j)
+			}
+		}
+		for j, arg := range item.Argv {
+			if strings.TrimSpace(arg) == "" {
+				return fmt.Errorf("codex runtime readiness item %d argv %d is empty", i, j)
+			}
+		}
 	}
 	return nil
 }
@@ -735,5 +882,88 @@ const gateResultSchema = `{
     "detector": { "type": "string", "minLength": 1 },
     "human_action_type": { "type": "string" },
     "evidence": {}
+  }
+}`
+
+const toolchainReportSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.toolchain-report.v1",
+  "title": "DevOS Toolchain Report",
+  "type": "object",
+  "required": ["environment_id", "requirements"],
+  "additionalProperties": false,
+  "properties": {
+    "environment_id": { "type": "string", "minLength": 1 },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["toolchain_key", "required_for", "required_for_merge", "status", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "toolchain_key": { "type": "string", "minLength": 1 },
+          "required_for": {
+            "type": "string",
+            "enum": ["implementation", "verification", "runtime", "runtime_smoke", "deployment"]
+          },
+          "required_for_merge": { "type": "boolean" },
+          "status": {
+            "type": "string",
+            "enum": ["detected", "missing", "invalid", "setup_required", "waived", "unsupported", "revoked"]
+          },
+          "executable": { "type": "string" },
+          "detected_path": { "type": "string" },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}`
+
+const codexRuntimeReadinessSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.codex-runtime-readiness.v1",
+  "title": "DevOS Codex Runtime Readiness",
+  "type": "object",
+  "required": ["host_goos", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "host_goos": { "type": "string", "minLength": 1 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "environment_id",
+          "os_family",
+          "project_root",
+          "codex_adapter",
+          "sandbox_profile",
+          "expected_host_runtime",
+          "current_runtime_usable",
+          "classification"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "environment_id": { "type": "string", "minLength": 1 },
+          "os_family": { "type": "string", "minLength": 1 },
+          "project_root": { "type": "string", "minLength": 1 },
+          "codex_adapter": { "type": "string", "minLength": 1 },
+          "sandbox_profile": { "type": "string", "minLength": 1 },
+          "expected_host_runtime": { "type": "string", "minLength": 1 },
+          "current_runtime_usable": { "type": "boolean" },
+          "classification": { "type": "string", "minLength": 1 },
+          "blockers": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "argv": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
   }
 }`

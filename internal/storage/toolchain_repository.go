@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 	"github.com/ota-takeru/orchestrator/internal/statemachine"
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
@@ -63,6 +64,13 @@ func (db *DB) SaveToolchainReport(ctx context.Context, projectID string, report 
 	}
 	if strings.TrimSpace(report.EnvironmentID) == "" {
 		return fmt.Errorf("environment id is required")
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	if err := schemas.ValidateToolchainReport(string(payload)); err != nil {
+		return err
 	}
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {

@@ -278,6 +278,13 @@ func (db *DB) CodexRuntimeReadiness(ctx context.Context, projectID string) (Code
 	report := CodexRuntimeReadinessReport{HostGOOS: realCodexRuntimeGOOS}
 	for _, env := range envs {
 		classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
+		if len(blockers) == 0 && env.CodexAdapter != platform.CodexAdapterNone {
+			doctorReport := runRealCodexDoctor(ctx, env, toolchains.Options{IncludeCodex: true})
+			if toolchainBlockers := realCodexToolchainBlockers(doctorReport); len(toolchainBlockers) > 0 {
+				classification = "toolchain_required"
+				blockers = toolchainBlockers
+			}
+		}
 		item := CodexRuntimeReadinessItem{
 			EnvironmentID:        env.ID,
 			OSFamily:             string(env.OSFamily),
@@ -298,6 +305,13 @@ func (db *DB) CodexRuntimeReadiness(ctx context.Context, projectID string) (Code
 }
 
 func (db *DB) SaveCodexRuntimeReadiness(ctx context.Context, projectID string, report CodexRuntimeReadinessReport) ([]InboxItem, error) {
+	payload, err := json.Marshal(report)
+	if err != nil {
+		return nil, err
+	}
+	if err := schemas.ValidateCodexRuntimeReadiness(string(payload)); err != nil {
+		return nil, err
+	}
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

@@ -12,12 +12,69 @@ func TestInstallAndValidateSchemaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.CreatedPaths) != 7 {
+	if len(result.CreatedPaths) != 9 {
 		t.Fatalf("created paths = %#v", result.CreatedPaths)
 	}
 	validation := ValidateInstalled(root)
 	if !validation.Valid {
 		t.Fatalf("validation failed: %#v", validation.Findings)
+	}
+}
+
+func TestValidateToolchainReport(t *testing.T) {
+	valid := `{
+	  "environment_id":"wsl-main",
+	  "requirements":[
+	    {
+	      "toolchain_key":"corepack",
+	      "required_for":"verification",
+	      "required_for_merge":true,
+	      "status":"detected",
+	      "executable":"corepack",
+	      "detected_path":"/usr/bin/corepack",
+	      "message":"corepack detected"
+	    }
+	  ]
+	}`
+	if err := ValidateToolchainReport(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateToolchainReport(`{"environment_id":"wsl-main","requirements":[]}`); err == nil {
+		t.Fatal("expected empty requirements to fail")
+	}
+	if err := ValidateToolchainReport(`{"environment_id":"wsl-main","requirements":[{"toolchain_key":"node","required_for":"unknown","required_for_merge":true,"status":"detected","message":"ok"}]}`); err == nil {
+		t.Fatal("expected invalid required_for to fail")
+	}
+	if err := ValidateToolchainReport(`{"environment_id":"wsl-main","requirements":[{"toolchain_key":"node","required_for":"verification","required_for_merge":true,"status":"detected","message":"ok"},{"toolchain_key":"node","required_for":"verification","required_for_merge":true,"status":"detected","message":"ok"}]}`); err == nil {
+		t.Fatal("expected duplicate requirement to fail")
+	}
+}
+
+func TestValidateCodexRuntimeReadiness(t *testing.T) {
+	valid := `{
+	  "host_goos":"linux",
+	  "items":[
+	    {
+	      "environment_id":"wsl-main",
+	      "os_family":"wsl",
+	      "project_root":"/repo",
+	      "codex_adapter":"codex-wsl",
+	      "sandbox_profile":"linux-bubblewrap",
+	      "expected_host_runtime":"linux",
+	      "current_runtime_usable":true,
+	      "classification":"ready",
+	      "argv":["exec","--json"]
+	    }
+	  ]
+	}`
+	if err := ValidateCodexRuntimeReadiness(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCodexRuntimeReadiness(`{"host_goos":"linux","items":[{"environment_id":"wsl-main","os_family":"wsl","project_root":"/repo","codex_adapter":"codex-wsl","sandbox_profile":"linux-bubblewrap","expected_host_runtime":"linux","current_runtime_usable":false,"classification":"toolchain_required"}]}`); err == nil {
+		t.Fatal("expected unusable item without blockers to fail")
+	}
+	if err := ValidateCodexRuntimeReadiness(`{"host_goos":"linux","items":[{"environment_id":"wsl-main","os_family":"wsl","project_root":"/repo","codex_adapter":"codex-wsl","sandbox_profile":"linux-bubblewrap","expected_host_runtime":"linux","current_runtime_usable":true,"classification":"ready","blockers":["codex missing"]}]}`); err == nil {
+		t.Fatal("expected usable item with blockers to fail")
 	}
 }
 

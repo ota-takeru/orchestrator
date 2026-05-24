@@ -395,6 +395,7 @@ func TestCodexRuntimeReadinessReportsPerEnvironmentCompatibility(t *testing.T) {
 	})
 	restore := setRealCodexRuntimeGOOSForTest("linux")
 	defer restore()
+	setRealCodexDoctorDetectedForTest(t)
 
 	report, err := db.CodexRuntimeReadiness(ctx, "PROJECT-001")
 	if err != nil {
@@ -415,6 +416,56 @@ func TestCodexRuntimeReadinessReportsPerEnvironmentCompatibility(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeReadinessReportsToolchainBlockers(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
+		ID:             "wsl-main",
+		OSFamily:       platform.OSFamilyWSL,
+		Role:           platform.RolePrimary,
+		Shell:          platform.ShellBash,
+		ProjectRoot:    projectRoot,
+		GitProvider:    platform.GitProviderLinux,
+		CodexAdapter:   platform.CodexAdapterWSL,
+		SandboxProfile: platform.SandboxLinuxBubblewrap,
+		Status:         "configured",
+	})
+	restoreRuntime := setRealCodexRuntimeGOOSForTest("linux")
+	defer restoreRuntime()
+	restoreDoctor := setRealCodexDoctorForTest(func(ctx context.Context, env platform.ExecutionEnvironment, opts toolchains.Options) toolchains.Report {
+		_ = ctx
+		_ = env
+		_ = opts
+		return toolchains.Report{
+			EnvironmentID: "wsl-main",
+			Requirements: []toolchains.Requirement{
+				{
+					ToolchainKey:     "codex-auth",
+					RequiredFor:      toolchains.RequiredForImplementation,
+					RequiredForMerge: true,
+					Status:           toolchains.StatusSetupRequired,
+					Message:          "Codex auth is not detected",
+				},
+			},
+		}
+	})
+	defer restoreDoctor()
+
+	report, err := db.CodexRuntimeReadiness(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Items) != 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	item := report.Items[0]
+	if item.CurrentRuntimeUsable || item.Classification != "toolchain_required" || len(item.Blockers) != 1 || len(item.Argv) != 0 {
+		t.Fatalf("readiness item = %#v", item)
+	}
+}
+
 func TestSaveCodexRuntimeReadinessProjectsInboxIssues(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -431,6 +482,7 @@ func TestSaveCodexRuntimeReadinessProjectsInboxIssues(t *testing.T) {
 		Status:         "configured",
 	})
 	restore := setRealCodexRuntimeGOOSForTest("linux")
+	setRealCodexDoctorDetectedForTest(t)
 	report, err := db.CodexRuntimeReadiness(ctx, "PROJECT-001")
 	if err != nil {
 		t.Fatal(err)
@@ -524,10 +576,10 @@ func setRealCodexDoctorDetectedForTest(t *testing.T) {
 		return toolchains.Report{
 			EnvironmentID: env.ID,
 			Requirements: []toolchains.Requirement{
-				{ToolchainKey: "git", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected},
-				{ToolchainKey: shellKey, RequiredFor: toolchains.RequiredForVerification, RequiredForMerge: true, Status: toolchains.StatusDetected},
-				{ToolchainKey: "codex", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected},
-				{ToolchainKey: "codex-auth", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected},
+				{ToolchainKey: "git", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected, Message: "git detected"},
+				{ToolchainKey: shellKey, RequiredFor: toolchains.RequiredForVerification, RequiredForMerge: true, Status: toolchains.StatusDetected, Message: shellKey + " detected"},
+				{ToolchainKey: "codex", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected, Message: "codex detected"},
+				{ToolchainKey: "codex-auth", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected, Message: "codex auth detected"},
 			},
 		}
 	})

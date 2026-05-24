@@ -1128,14 +1128,29 @@ func runPublish(ctx context.Context, args []string, stdout io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
 	}
-	if *execute || !*dryRun {
-		return writeError(stdout, *jsonOut, exitValidation, "publish_failed", errors.New("publish execute is not implemented; use --dry-run"))
-	}
 	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
 	if err != nil {
 		return writeError(stdout, *jsonOut, errCode, "publish_failed", err)
 	}
 	defer db.Close()
+	if *execute {
+		result, err := db.PublishExecute(ctx, projectID, storage.PublishExecuteInput{Remote: *remote, Branch: *branch})
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "publish_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, result, 0)
+		}
+		fmt.Fprintf(stdout, "Publish execute: %s\n", result.Status)
+		fmt.Fprintf(stdout, "Relation before: %s\n", result.RelationBefore)
+		for _, blocker := range result.Blockers {
+			fmt.Fprintf(stdout, "blocker: %s\n", blocker)
+		}
+		return 0
+	}
+	if !*dryRun {
+		return writeError(stdout, *jsonOut, exitValidation, "publish_failed", errors.New("publish requires --dry-run or --execute"))
+	}
 	result, err := db.PublishDryRun(ctx, projectID, storage.PublishDryRunInput{Remote: *remote, Branch: *branch})
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "publish_failed", err)

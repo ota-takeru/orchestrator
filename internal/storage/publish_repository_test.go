@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,34 @@ func TestPublishDryRunBlocksDivergedRemote(t *testing.T) {
 	}
 	if result.Status != "blocked" || result.Relation != "diverged" || len(result.Blockers) == 0 {
 		t.Fatalf("publish dry-run = %#v", result)
+	}
+}
+
+func TestPublishExecutePushesLocalAheadBranch(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	repo := initStorageGitRepo(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	gitRun(t, "", "init", "--bare", remote)
+	gitRun(t, repo, "remote", "add", "origin", remote)
+	gitRun(t, repo, "push", "origin", "main")
+	writeAndCommit(t, repo, "local.txt", "local\n")
+	localOID := gitOutput(t, repo, "rev-parse", "refs/heads/main")
+
+	projectID := "PROJECT-001"
+	insertProjectWithRoot(t, db, projectID, repo)
+	insertEnvironmentWithRoot(t, db, "linux-main", projectID, "primary", repo)
+
+	result, err := db.PublishExecute(ctx, projectID, PublishExecuteInput{Remote: "origin", Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || result.RelationBefore != "local_ahead" || result.RemoteOIDAfter != localOID {
+		t.Fatalf("publish execute = %#v", result)
+	}
+	remoteOID := gitOutput(t, repo, "ls-remote", "--heads", "origin", "main")
+	if !strings.HasPrefix(remoteOID, localOID) {
+		t.Fatalf("remote oid output = %s, want prefix %s", remoteOID, localOID)
 	}
 }
 

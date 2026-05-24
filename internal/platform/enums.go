@@ -2,7 +2,9 @@ package platform
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strings"
 )
 
 type OSFamily string
@@ -173,7 +175,11 @@ func ValidMappingMode(v MappingMode) bool {
 }
 
 func DetectHostEnvironment(projectRoot string) ExecutionEnvironment {
-	switch runtime.GOOS {
+	return detectHostEnvironment(runtime.GOOS, projectRoot, readLinuxOSRelease())
+}
+
+func detectHostEnvironment(goos string, projectRoot string, linuxOSRelease string) ExecutionEnvironment {
+	switch goos {
 	case "windows":
 		return ExecutionEnvironment{
 			ID:             "windows-main",
@@ -199,6 +205,19 @@ func DetectHostEnvironment(projectRoot string) ExecutionEnvironment {
 			Status:         "detected",
 		}
 	default:
+		if isWSLRelease(linuxOSRelease) {
+			return ExecutionEnvironment{
+				ID:             "wsl-main",
+				OSFamily:       OSFamilyWSL,
+				Role:           RolePrimary,
+				Shell:          ShellBash,
+				ProjectRoot:    projectRoot,
+				GitProvider:    GitProviderLinux,
+				CodexAdapter:   CodexAdapterWSL,
+				SandboxProfile: SandboxLinuxBubblewrap,
+				Status:         "detected",
+			}
+		}
 		return ExecutionEnvironment{
 			ID:             "linux-main",
 			OSFamily:       OSFamilyLinux,
@@ -211,6 +230,22 @@ func DetectHostEnvironment(projectRoot string) ExecutionEnvironment {
 			Status:         "detected",
 		}
 	}
+}
+
+func readLinuxOSRelease() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	raw, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func isWSLRelease(release string) bool {
+	lower := strings.ToLower(strings.TrimSpace(release))
+	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
 }
 
 func ValidatePrimaryEnvironment(envs []ExecutionEnvironment) error {

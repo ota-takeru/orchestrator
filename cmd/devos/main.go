@@ -2390,7 +2390,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		if err := fs.Parse(args[1:]); err != nil {
 			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
 		}
-		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		db, projectID, root, errCode, err := openMigratedProjectDBWithRoot(ctx, *projectRoot, *dataRoot)
 		if err != nil {
 			return writeError(stdout, *jsonOut, errCode, "codex_readiness_failed", err)
 		}
@@ -2398,6 +2398,9 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		report, err := db.CodexRuntimeReadiness(ctx, projectID)
 		if err != nil {
 			return writeError(stdout, *jsonOut, exitStorage, "codex_readiness_failed", err)
+		}
+		if len(report.Items) == 0 {
+			return writeError(stdout, *jsonOut, exitValidation, "codex_readiness_failed", fmt.Errorf("no execution environments configured for project; run devos init --project-root %s first", root))
 		}
 		var inboxItems []storage.InboxItem
 		if *save {

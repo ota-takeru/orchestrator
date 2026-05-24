@@ -146,8 +146,8 @@ func (db *DB) verificationPlan(ctx context.Context, projectID string, taskID str
 		}
 		return []verifier.Command{command}, verifier.StaticRunnerRegistry{env.ID: fakeRunnerForEnvironment(env)}, nil
 	case "local":
-		if env.OSFamily != platform.OSFamilyLinux {
-			return nil, nil, fmt.Errorf("local verification v1 only supports linux current environment")
+		if !localVerificationOSSupported(env.OSFamily) {
+			return nil, nil, fmt.Errorf("local verification v1 only supports linux/wsl current environment")
 		}
 		commands := defaultLocalVerificationCommands(ctx, env)
 		return commands, verifier.StaticRunnerRegistry{env.ID: runners.NewLocalRunner(env)}, nil
@@ -223,8 +223,8 @@ func runnerForVerificationAdapter(adapter string, env platform.ExecutionEnvironm
 		}
 		return runner, fakeRunnerForEnvironment(env), nil
 	case "local":
-		if env.OSFamily != platform.OSFamilyLinux {
-			return "", nil, fmt.Errorf("local verification v1 only supports linux current environment")
+		if !localVerificationOSSupported(env.OSFamily) {
+			return "", nil, fmt.Errorf("local verification v1 only supports linux/wsl current environment")
 		}
 		if runner == "" || runner == "auto" {
 			runner = "direct"
@@ -236,6 +236,10 @@ func runnerForVerificationAdapter(adapter string, env platform.ExecutionEnvironm
 	default:
 		return "", nil, fmt.Errorf("unsupported verification adapter: %s", adapter)
 	}
+}
+
+func localVerificationOSSupported(osFamily platform.OSFamily) bool {
+	return osFamily == platform.OSFamilyLinux || osFamily == platform.OSFamilyWSL
 }
 
 func verificationWorkingDir(env platform.ExecutionEnvironment, workingDir string) string {

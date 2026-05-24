@@ -645,6 +645,28 @@ func TestPlatformCodexReadinessCLI(t *testing.T) {
 	}
 }
 
+func TestPlatformCodexReadinessRequiresConfiguredEnvironment(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"platform", "codex-readiness", "--project-root", projectRoot, "--data-root", dataRoot, "--json"}, &stdout, &stderr)
+	if code != exitValidation {
+		t.Fatalf("unexpected exit code %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	var result struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decodeJSON(t, stdout.Bytes(), &result)
+	if result.Error.Code != "codex_readiness_failed" || !strings.Contains(result.Error.Message, "devos init") {
+		t.Fatalf("error = %#v", result.Error)
+	}
+}
+
 func TestPlatformSetupInstructionsAndMarkInstalledCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

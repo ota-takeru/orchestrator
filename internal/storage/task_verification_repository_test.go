@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -118,5 +120,49 @@ func TestVerifyTaskLocalWithoutKnownCommandsNeedsDecision(t *testing.T) {
 	}
 	if inboxCount != 1 {
 		t.Fatalf("human decision inbox count = %d", inboxCount)
+	}
+}
+
+func TestVerifyTaskLocalSupportsWSLPrimaryEnvironment(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "verify.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertWSLEnvironmentWithRoot(t, db, "wsl-main", "PROJECT-001", "primary", root)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE tasks
+SET verification_commands_json = ?
+WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"wsl-smoke","environment":"primary","runner":"auto","required_for_merge":true,"working_dir":"project_root","command":{"argv":["sh","./verify.sh"]},"network":false}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.EnvironmentID != "wsl-main" || result.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Commands) != 1 || result.Commands[0].EnvironmentID != "wsl-main" || result.Commands[0].Runner != "direct" {
+		t.Fatalf("commands = %#v", result.Commands)
+	}
+}
+
+func insertWSLEnvironmentWithRoot(t *testing.T, db *DB, id string, projectID string, role string, root string) {
+	t.Helper()
+	_, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO execution_environments(
+  id, project_id, os_family, role, shell, project_root, git_provider,
+  codex_adapter, sandbox_profile, status, created_at, updated_at
+) VALUES (
+  ?, ?, 'wsl', ?, 'bash', ?, 'linux-git',
+  'codex-wsl', 'linux-bubblewrap', 'detected', ?, ?
+)`, id, projectID, role, root, now(), now())
+	if err != nil {
+		t.Fatal(err)
 	}
 }

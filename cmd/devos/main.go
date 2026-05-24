@@ -79,6 +79,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runMemory(ctx, args[1:], stdout)
 	case "dependency":
 		return runDependency(ctx, args[1:], stdout, stderr)
+	case "ui":
+		return runUI(ctx, args[1:], stdout, stderr)
 	case "env":
 		return runEnv(ctx, args[1:], stdout, stderr)
 	case "review":
@@ -2080,6 +2082,48 @@ func runDependencyRiskList(ctx context.Context, args []string, stdout io.Writer)
 	return 0
 }
 
+func runUI(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing ui subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "snapshot":
+		fs := flag.NewFlagSet("ui snapshot", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		limit := fs.Int("limit", 20, "maximum open inbox items")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "ui_snapshot_failed", err)
+		}
+		defer db.Close()
+		snapshot, err := db.LoadHumanInboxSnapshot(ctx, projectID, *limit)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "ui_snapshot_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, snapshot, 0)
+		}
+		fmt.Fprintf(stdout, "Human Inbox snapshot: %s\n", snapshot.ProjectID)
+		fmt.Fprintf(stdout, "Open inbox: %d\n", snapshot.Counts.OpenInboxItems)
+		fmt.Fprintf(stdout, "Running tasks: %d\n", snapshot.Counts.RunningTasks)
+		fmt.Fprintf(stdout, "Waiting for human: %d\n", snapshot.Counts.WaitingForHumanTasks)
+		for _, item := range snapshot.OpenInboxItems {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", item.ID, item.ItemType, item.Title)
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown ui subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
 func runEnv(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "missing env subcommand")
@@ -2695,6 +2739,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos memory [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk add [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT --risk medium [--lockfile-changed] [--lifecycle-scripts VALUE] [--approved-scope project] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk list [--project-root PATH] [--data-root PATH] [--manager npm] [--type production] [--risk medium] [--json]")
+	fmt.Fprintln(w, "  devos ui snapshot [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
 	fmt.Fprintln(w, "  devos review [--project-root PATH] [--data-root PATH] [--json] TASK_ID")

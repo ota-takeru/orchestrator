@@ -340,6 +340,20 @@ func TestDependencyRiskCLI(t *testing.T) {
 	}
 }
 
+func TestUISnapshotCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "UI snapshot workflow")
+	out := runCLI(t, "ui", "snapshot", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var snapshot storage.HumanInboxSnapshot
+	decodeJSON(t, out, &snapshot)
+	if snapshot.ProjectID == "" || snapshot.GeneratedAt == "" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
 func TestInboxApproveDecisionCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

@@ -48,6 +48,20 @@ type RealCodexRunResult struct {
 	Blockers          []string `json:"blockers,omitempty"`
 }
 
+type RealCodexPreviewResult struct {
+	TaskID         string   `json:"task_id"`
+	TaskStatus     string   `json:"task_status"`
+	EnvironmentID  string   `json:"environment_id"`
+	ProjectRoot    string   `json:"project_root"`
+	CodexAdapter   string   `json:"codex_adapter"`
+	SandboxProfile string   `json:"sandbox_profile"`
+	NetworkAccess  bool     `json:"network_access"`
+	ApprovalPolicy string   `json:"approval_policy"`
+	Classification string   `json:"classification"`
+	Blockers       []string `json:"blockers,omitempty"`
+	Argv           []string `json:"argv"`
+}
+
 var realCodexRuntimeGOOS = runtime.GOOS
 
 var runRealCodexDoctor = toolchains.RunDoctor
@@ -200,6 +214,42 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 		return RealCodexRunResult{}, err
 	}
 	return RealCodexRunResult{TaskID: taskID, TaskStatus: taskTo, ImplementationRun: runID, Classification: classification, Blockers: blockers}, nil
+}
+
+func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID string) (RealCodexPreviewResult, error) {
+	status, err := db.taskStatus(ctx, projectID, taskID)
+	if err != nil {
+		return RealCodexPreviewResult{}, err
+	}
+	env, err := db.ResolveImplementationEnvironment(ctx, projectID)
+	if err != nil {
+		return RealCodexPreviewResult{}, err
+	}
+	classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
+	if status != "ready" {
+		classification = "task_not_ready"
+		blockers = append(blockers, "task_not_ready:"+status)
+	}
+	if len(blockers) == 0 {
+		doctorReport := runRealCodexDoctor(ctx, env, toolchains.Options{IncludeCodex: true})
+		blockers = realCodexToolchainBlockers(doctorReport)
+		if len(blockers) > 0 {
+			classification = "toolchain_required"
+		}
+	}
+	return RealCodexPreviewResult{
+		TaskID:         taskID,
+		TaskStatus:     status,
+		EnvironmentID:  env.ID,
+		ProjectRoot:    env.ProjectRoot,
+		CodexAdapter:   string(env.CodexAdapter),
+		SandboxProfile: string(env.SandboxProfile),
+		NetworkAccess:  false,
+		ApprovalPolicy: "never",
+		Classification: classification,
+		Blockers:       blockers,
+		Argv:           codexExecArgv(env.ProjectRoot, "<prompt>", "<final-message-path>", "<output-schema-path>"),
+	}, nil
 }
 
 func evaluateRealCodexEnvironment(env platform.ExecutionEnvironment, hostGOOS string) (string, []string) {

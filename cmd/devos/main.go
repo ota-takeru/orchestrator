@@ -239,6 +239,7 @@ func runTaskCommand(ctx context.Context, args []string, stdout io.Writer) int {
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
 	adapter := fs.String("adapter", "fake", "fake or codex")
 	realCodex := fs.Bool("real-codex", false, "run Linux/current-environment real Codex adapter")
+	dryRun := fs.Bool("dry-run", false, "preview real Codex execution without starting Codex")
 	verifyAfter := fs.Bool("verify", false, "run orchestrator verification after implementation succeeds")
 	verifyAdapter := fs.String("verify-adapter", "local", "verification adapter when --verify is set")
 	verifyEnvironmentID := fs.String("verify-env", "", "verification environment id when --verify is set")
@@ -269,6 +270,20 @@ func runTaskCommand(ctx context.Context, args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "Run complete: %s -> %s\n", result.TaskID, result.TaskStatus)
 		return 0
 	case "real-codex", "codex":
+		if *dryRun {
+			result, err := db.PreviewRealCodexTask(ctx, projectID, fs.Arg(0))
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitValidation, "run_dry_run_failed", err)
+			}
+			if *jsonOut {
+				return writeJSON(stdout, result, 0)
+			}
+			fmt.Fprintf(stdout, "Real Codex dry-run: %s %s\n", result.TaskID, result.Classification)
+			if len(result.Blockers) > 0 {
+				fmt.Fprintf(stdout, "Blockers: %s\n", strings.Join(result.Blockers, ", "))
+			}
+			return 0
+		}
 		result, err := db.RunRealCodexTask(ctx, projectID, fs.Arg(0), nil)
 		if err != nil {
 			return writeError(stdout, *jsonOut, exitValidation, "run_failed", err)
@@ -2458,7 +2473,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos change request [--project-root PATH] [--data-root PATH] [--json] TEXT")
 	fmt.Fprintln(w, "  devos change analyze [--project-root PATH] [--data-root PATH] [--json] CR_ID")
 	fmt.Fprintln(w, "  devos change approve [--project-root PATH] [--data-root PATH] --option OPTION [--json] CR_ID")
-	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--verify] [--verify-adapter local|fake] [--verify-env ENV_ID] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--dry-run] [--verify] [--verify-adapter local|fake] [--verify-env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos verify [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")

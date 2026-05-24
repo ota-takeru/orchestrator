@@ -85,6 +85,41 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	}
 }
 
+func TestPreviewRealCodexTaskDoesNotMutateTask(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
+
+	result, err := db.PreviewRealCodexTask(ctx, "PROJECT-001", "TASK-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Classification != "ready" || result.NetworkAccess || result.ApprovalPolicy != "never" {
+		t.Fatalf("preview = %#v", result)
+	}
+	if len(result.Argv) == 0 || !containsString(result.Argv, "--ephemeral") || !containsString(result.Argv, "--ignore-user-config") {
+		t.Fatalf("argv = %#v", result.Argv)
+	}
+	var taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "ready" {
+		t.Fatalf("task status = %s", taskStatus)
+	}
+	var runCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE task_id = 'TASK-001'").Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 0 {
+		t.Fatalf("run count = %d", runCount)
+	}
+}
+
 func TestRunRealCodexTaskThenVerificationReachesReview(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -443,4 +478,13 @@ INSERT INTO project_run_profiles(
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }

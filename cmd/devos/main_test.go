@@ -451,6 +451,25 @@ func TestReviewCLIProducesSemanticDiff(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexDryRunCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Real Codex dry-run workflow")
+	seedCLIReadyTask(t, ctx, dataRoot, projectRoot, "TASK-CODEX-DRY-RUN")
+	out := runCLI(t, "run", "--project-root", projectRoot, "--data-root", dataRoot, "--real-codex", "--dry-run", "--json", "TASK-CODEX-DRY-RUN")
+	var result storage.RealCodexPreviewResult
+	decodeJSON(t, out, &result)
+	if result.TaskStatus != "ready" || len(result.Argv) == 0 {
+		t.Fatalf("dry-run result = %#v", result)
+	}
+	if !containsTestString(result.Argv, "--ephemeral") || !containsTestString(result.Argv, "--ignore-user-config") {
+		t.Fatalf("argv = %#v", result.Argv)
+	}
+}
+
 func TestPlatformMapAddCLI(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()
@@ -783,6 +802,25 @@ INSERT INTO tasks(
 	}
 }
 
+func seedCLIReadyTask(t *testing.T, ctx context.Context, dataRoot string, projectRoot string, taskID string) {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO tasks(
+  id, project_id, status, title, base_branch, created_at, updated_at
+) VALUES (?, ?, 'ready', 'Ready CLI workflow', 'main', ?, ?)`,
+		taskID, projectID, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func seedCLIReviewTask(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) {
 	t.Helper()
 	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
@@ -827,6 +865,15 @@ INSERT INTO run_artifacts(
 	); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsTestString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 func updateCLIRunEvidence(t *testing.T, ctx context.Context, dataRoot string, projectRoot string, baseCommit string, headCommit string) {

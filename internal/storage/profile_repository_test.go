@@ -12,7 +12,8 @@ func TestConfigureFakeRunProfileWindowsPrimary(t *testing.T) {
 	ctx := context.Background()
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
-	profile, err := db.ConfigureFakeRunProfile(ctx, "PROJECT-001", platform.PlatformModeWindowsPrimary, "/repo")
+	windowsRoot := `C:\Users\tester\repo`
+	profile, err := db.ConfigureFakeRunProfile(ctx, "PROJECT-001", platform.PlatformModeWindowsPrimary, windowsRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,6 +26,13 @@ func TestConfigureFakeRunProfileWindowsPrimary(t *testing.T) {
 	}
 	if primaryCount != 1 {
 		t.Fatalf("primary count = %d", primaryCount)
+	}
+	var projectRoot string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT project_root FROM execution_environments WHERE project_id = 'PROJECT-001' AND id = 'windows-main'").Scan(&projectRoot); err != nil {
+		t.Fatal(err)
+	}
+	if projectRoot != windowsRoot {
+		t.Fatalf("windows project root = %q, want %q", projectRoot, windowsRoot)
 	}
 }
 

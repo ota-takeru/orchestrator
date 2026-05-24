@@ -151,13 +151,13 @@ func fakeProfileDefinition(projectID string, mode platform.PlatformMode, project
 	}
 	switch mode {
 	case platform.PlatformModeWindowsPrimary:
-		env := fakeWindowsEnvironment("windows-main", platform.RolePrimary)
+		env := fakeWindowsEnvironment("windows-main", platform.RolePrimary, projectRoot)
 		return fakeProfile(projectID, "windows-primary", mode, env.ID, []string{env.ID}, nil), []platform.ExecutionEnvironment{env}, nil
 	case platform.PlatformModeWSLPrimary:
 		env := fakeWSLEnvironment("wsl-main", platform.RolePrimary, projectRoot)
 		return fakeProfile(projectID, "wsl-primary", mode, env.ID, []string{env.ID}, nil), []platform.ExecutionEnvironment{env}, nil
 	case platform.PlatformModeHybrid:
-		primary := fakeWindowsEnvironment("windows-main", platform.RolePrimary)
+		primary := fakeWindowsEnvironment("windows-main", platform.RolePrimary, projectRoot)
 		sidecar := fakeWSLEnvironment("wsl-sidecar", platform.RoleSidecar, projectRoot)
 		return fakeProfile(projectID, "hybrid", mode, primary.ID, []string{primary.ID}, []string{sidecar.ID}), []platform.ExecutionEnvironment{primary, sidecar}, nil
 	case platform.PlatformModeSingleEnvironment:
@@ -183,18 +183,29 @@ func fakeProfile(projectID string, name string, mode platform.PlatformMode, prim
 	}
 }
 
-func fakeWindowsEnvironment(id string, role platform.Role) platform.ExecutionEnvironment {
+func fakeWindowsEnvironment(id string, role platform.Role, projectRoot string) platform.ExecutionEnvironment {
+	if !looksLikeWindowsRoot(projectRoot) {
+		projectRoot = `C:\fake\project`
+	}
 	return platform.ExecutionEnvironment{
 		ID:             id,
 		OSFamily:       platform.OSFamilyWindows,
 		Role:           role,
 		Shell:          platform.ShellPowerShell,
-		ProjectRoot:    `C:\fake\project`,
+		ProjectRoot:    projectRoot,
 		GitProvider:    platform.GitProviderWindows,
 		CodexAdapter:   platform.CodexAdapterWindows,
 		SandboxProfile: platform.SandboxWindowsNative,
 		Status:         "configured",
 	}
+}
+
+func looksLikeWindowsRoot(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if len(trimmed) >= 3 && trimmed[1] == ':' && (trimmed[2] == '\\' || trimmed[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(trimmed, `\\`)
 }
 
 func fakeWSLEnvironment(id string, role platform.Role, projectRoot string) platform.ExecutionEnvironment {

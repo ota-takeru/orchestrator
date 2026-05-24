@@ -12,10 +12,10 @@ func TestRegisteredMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 4 {
-		t.Fatalf("migration count = %d, want 4", len(migrations))
+	if len(migrations) != 5 {
+		t.Fatalf("migration count = %d, want 5", len(migrations))
 	}
-	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 {
+	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 {
 		t.Fatalf("unexpected migration versions: %#v", migrations)
 	}
 }
@@ -94,12 +94,25 @@ func TestMigration004AddsTaskVerificationCommands(t *testing.T) {
 	}
 }
 
+func TestMigration005AddsPublishRunType(t *testing.T) {
+	migrations, err := RegisteredMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := migrations[4].SQL
+	for _, token := range []string{"'publish'", "ALTER TABLE runs RENAME TO runs_old"} {
+		if !strings.Contains(sql, token) {
+			t.Fatalf("migration 005 missing %q", token)
+		}
+	}
+}
+
 func TestStorageCheckValuesCoverAllStateMachines(t *testing.T) {
 	migrations, err := RegisteredMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	allSQL := migrations[0].SQL + "\n" + migrations[1].SQL + "\n" + migrations[2].SQL + "\n" + migrations[3].SQL
+	allSQL := migrations[0].SQL + "\n" + migrations[1].SQL + "\n" + migrations[2].SQL + "\n" + migrations[3].SQL + "\n" + migrations[4].SQL
 	machines := []statemachine.Machine{
 		statemachine.Task,
 		statemachine.Run,

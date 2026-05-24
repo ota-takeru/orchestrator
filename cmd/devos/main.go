@@ -75,6 +75,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runPatch(ctx, args[1:], stdout, stderr)
 	case "cleanup":
 		return runCleanup(ctx, args[1:], stdout)
+	case "publish":
+		return runPublish(ctx, args[1:], stdout)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -1113,6 +1115,42 @@ func runCleanupQuarantineRestore(ctx context.Context, args []string, stdout io.W
 	return 0
 }
 
+func runPublish(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	remote := fs.String("remote", "origin", "git remote")
+	branch := fs.String("branch", "main", "branch")
+	dryRun := fs.Bool("dry-run", true, "only capture publish readiness evidence")
+	execute := fs.Bool("execute", false, "execute publish")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if *execute || !*dryRun {
+		return writeError(stdout, *jsonOut, exitValidation, "publish_failed", errors.New("publish execute is not implemented; use --dry-run"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "publish_failed", err)
+	}
+	defer db.Close()
+	result, err := db.PublishDryRun(ctx, projectID, storage.PublishDryRunInput{Remote: *remote, Branch: *branch})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "publish_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Publish dry-run: %s\n", result.Status)
+	fmt.Fprintf(stdout, "Relation: %s\n", result.Relation)
+	for _, blocker := range result.Blockers {
+		fmt.Fprintf(stdout, "blocker: %s\n", blocker)
+	}
+	return 0
+}
+
 func runApproveEvidence(ctx context.Context, args []string, stdout io.Writer, approvalType storage.ApprovalType) int {
 	fs := flag.NewFlagSet(string(approvalType)+" approve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1741,6 +1779,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--quarantine] [--quarantine-root PATH] [--merged] [--applied] [--older-than AGE] [--json]")
 	fmt.Fprintln(w, "  devos cleanup quarantine list [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos cleanup quarantine restore [--project-root PATH] [--data-root PATH] [--run RUN_ID] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos publish [--project-root PATH] [--data-root PATH] [--remote origin] [--branch main] [--dry-run] [--json]")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")

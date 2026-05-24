@@ -91,6 +91,62 @@ func TestApproveInboxItemDispatchesHumanApprovalSource(t *testing.T) {
 	}
 }
 
+func TestInboxIsProjectionNotSourceOfTruth(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (
+  'INBOX-MISSING-DECISION', 'PROJECT-001', 'human_decision', 'open', 'decision', 'DEC-MISSING',
+  'decision:DEC-MISSING', 80, 'Missing decision', 'Projection without source', ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ApproveInboxItem(ctx, InboxApprovalInput{
+		ProjectID: "PROJECT-001",
+		InboxID:   "INBOX-MISSING-DECISION",
+		Option:    "A",
+	}); err == nil {
+		t.Fatal("expected inbox projection without decision source to fail")
+	}
+	var status string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM inbox_items WHERE id = 'INBOX-MISSING-DECISION'").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "open" {
+		t.Fatalf("projection status = %s", status)
+	}
+}
+
+func TestHardBlockCannotBeApprovedThrough(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (
+  'INBOX-HARD-BLOCK', 'PROJECT-001', 'hard_block', 'open', 'gate_result', 'GATE-HARD',
+  'gate:GATE-HARD', 100, 'Hard block', 'Cannot approve through inbox', ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ApproveInboxItem(ctx, InboxApprovalInput{
+		ProjectID: "PROJECT-001",
+		InboxID:   "INBOX-HARD-BLOCK",
+	}); err == nil {
+		t.Fatal("expected hard block approve to fail")
+	}
+}
+
 func TestValidateInboxStatusRejectsUnknown(t *testing.T) {
 	if err := ValidateInboxStatus("open"); err != nil {
 		t.Fatal(err)

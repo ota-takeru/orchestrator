@@ -115,7 +115,7 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	if status != "ready" {
 		return RealCodexRunResult{}, fmt.Errorf("task %s is not ready: %s", taskID, status)
 	}
-	env, err := db.primaryEnvironment(ctx, projectID)
+	env, err := db.ResolveImplementationEnvironment(ctx, projectID)
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}

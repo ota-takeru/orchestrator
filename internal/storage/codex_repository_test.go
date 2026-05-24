@@ -176,6 +176,43 @@ func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskUsesRunProfileImplementationEnvironment(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
+		ID:             "wsl-sidecar",
+		OSFamily:       platform.OSFamilyWSL,
+		Role:           platform.RoleSidecar,
+		Shell:          platform.ShellBash,
+		ProjectRoot:    projectRoot,
+		GitProvider:    platform.GitProviderLinux,
+		CodexAdapter:   platform.CodexAdapterWSL,
+		SandboxProfile: platform.SandboxLinuxBubblewrap,
+		Status:         "configured",
+	})
+	insertActiveRunProfile(t, db, "PROJECT-001", "linux-main", "wsl-sidecar")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	restore := setRealCodexRuntimeGOOSForTest("linux")
+	defer restore()
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var environmentID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT implementation_environment_id FROM runs WHERE id = ?", result.ImplementationRun).Scan(&environmentID); err != nil {
+		t.Fatal(err)
+	}
+	if environmentID != "wsl-sidecar" {
+		t.Fatalf("implementation environment = %s", environmentID)
+	}
+}
+
 func TestRunRealCodexTaskSupportsWindowsWhenRuntimeIsWindows(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -277,6 +314,22 @@ INSERT INTO execution_environments(
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		env.ID, projectID, env.OSFamily, env.Role, env.Shell, env.ProjectRoot, env.GitProvider,
 		env.CodexAdapter, env.SandboxProfile, env.Status, now(), now())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertActiveRunProfile(t *testing.T, db *DB, projectID string, primaryEnvID string, implementationEnvID string) {
+	t.Helper()
+	_, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO project_run_profiles(
+  id, project_id, name, mode, status, primary_environment_id, implementation_environment_id,
+  git_environment_id, merge_environment_id, required_verification_environment_ids_json,
+  optional_verification_environment_ids_json, canonical_operations_json, created_at, updated_at
+) VALUES (
+  'RUNPROFILE-TEST', ?, 'test-profile', 'hybrid', 'active', ?, ?, ?, ?, '[]', '[]', '{}', ?, ?
+)`,
+		projectID, primaryEnvID, implementationEnvID, primaryEnvID, primaryEnvID, now(), now())
 	if err != nil {
 		t.Fatal(err)
 	}

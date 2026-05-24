@@ -126,6 +126,23 @@ func TestQuarantineCleanupCandidatesMovesWorktree(t *testing.T) {
 	if _, err := os.Stat(record.Moves[0].QuarantinePath); err != nil {
 		t.Fatalf("quarantine path missing: %v", err)
 	}
+	entries, err := db.ListCleanupQuarantine(ctx, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].TaskID != "TASK-001" {
+		t.Fatalf("quarantine entries = %#v", entries)
+	}
+	restored, err := db.RestoreCleanupQuarantine(ctx, projectID, "TASK-001", record.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Status != "restored" {
+		t.Fatalf("restore = %#v", restored)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("restored worktree missing: %v", err)
+	}
 }
 
 func TestBuildCleanupDryRunPlanSkipsNonTerminalTasks(t *testing.T) {

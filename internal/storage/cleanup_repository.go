@@ -62,6 +62,24 @@ type CleanupQuarantineRecord struct {
 	Blockers            []string                `json:"blockers,omitempty"`
 }
 
+type CleanupQuarantineEntry struct {
+	RunID          string `json:"run_id"`
+	TaskID         string `json:"task_id"`
+	FromPath       string `json:"from_path"`
+	QuarantinePath string `json:"quarantine_path"`
+	Status         string `json:"status"`
+	CreatedAt      string `json:"created_at"`
+}
+
+type CleanupQuarantineRestoreRecord struct {
+	RunID          string   `json:"run_id"`
+	TaskID         string   `json:"task_id"`
+	FromPath       string   `json:"from_path"`
+	QuarantinePath string   `json:"quarantine_path"`
+	Status         string   `json:"status"`
+	Blockers       []string `json:"blockers,omitempty"`
+}
+
 func (db *DB) BuildCleanupDryRunPlan(ctx context.Context, projectID string, options CleanupPlanOptions) ([]CleanupPlanItem, error) {
 	statuses := cleanupStatuses(options)
 	args := []any{projectID}
@@ -343,6 +361,171 @@ func (db *DB) saveCleanupQuarantineEvidence(ctx context.Context, projectID strin
 		"status":          record.Status,
 		"quarantine_root": record.QuarantineRoot,
 		"move_count":      len(record.Moves),
+		"blockers":        record.Blockers,
+	}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (db *DB) ListCleanupQuarantine(ctx context.Context, projectID string) ([]CleanupQuarantineEntry, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT r.id, r.created_at, ra.path
+FROM runs r
+JOIN run_artifacts ra ON ra.run_id = r.id AND ra.project_id = r.project_id
+WHERE r.project_id = ?
+  AND r.run_type = 'cleanup'
+  AND ra.artifact_type = 'summary'
+  AND ra.artifact_key = 'cleanup-quarantine-summary.json'
+ORDER BY r.created_at DESC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []CleanupQuarantineEntry{}
+	for rows.Next() {
+		var runID, createdAt, artifactPath string
+		if err := rows.Scan(&runID, &createdAt, &artifactPath); err != nil {
+			return nil, err
+		}
+		record, err := db.readCleanupQuarantineRecord(artifactPath)
+		if err != nil {
+			return nil, err
+		}
+		for _, move := range record.Moves {
+			entries = append(entries, CleanupQuarantineEntry{
+				RunID:          runID,
+				TaskID:         move.TaskID,
+				FromPath:       move.FromPath,
+				QuarantinePath: move.QuarantinePath,
+				Status:         move.Status,
+				CreatedAt:      createdAt,
+			})
+		}
+	}
+	return entries, rows.Err()
+}
+
+func (db *DB) RestoreCleanupQuarantine(ctx context.Context, projectID string, taskID string, runID string) (CleanupQuarantineRestoreRecord, error) {
+	entries, err := db.ListCleanupQuarantine(ctx, projectID)
+	if err != nil {
+		return CleanupQuarantineRestoreRecord{}, err
+	}
+	var found CleanupQuarantineEntry
+	for _, entry := range entries {
+		if entry.TaskID != taskID {
+			continue
+		}
+		if strings.TrimSpace(runID) != "" && entry.RunID != runID {
+			continue
+		}
+		found = entry
+		break
+	}
+	if found.TaskID == "" {
+		return CleanupQuarantineRestoreRecord{}, fmt.Errorf("quarantined cleanup entry not found for task %s", taskID)
+	}
+	attemptNo, err := db.nextProjectRunAttempt(ctx, projectID, "cleanup")
+	if err != nil {
+		return CleanupQuarantineRestoreRecord{}, err
+	}
+	env, err := db.ResolveCanonicalGitEnvironment(ctx, projectID)
+	if err != nil {
+		return CleanupQuarantineRestoreRecord{}, err
+	}
+	blockers := []string{}
+	if _, err := os.Stat(found.QuarantinePath); err != nil {
+		blockers = append(blockers, "quarantine path is not readable: "+err.Error())
+	}
+	if _, err := os.Stat(found.FromPath); err == nil {
+		blockers = append(blockers, "restore target already exists")
+	} else if !os.IsNotExist(err) {
+		blockers = append(blockers, "restore target is not readable: "+err.Error())
+	}
+	status := "restored"
+	if len(blockers) == 0 {
+		if err := runGit(ctx, env.ProjectRoot, "worktree", "move", found.QuarantinePath, found.FromPath); err != nil {
+			status = "blocked"
+			blockers = append(blockers, "restore move failed: "+err.Error())
+		}
+	} else {
+		status = "blocked"
+	}
+	restoreRunID := "RUN-" + stableShortHash(projectID+"|cleanup-quarantine-restore|"+taskID+"|"+time.Now().UTC().Format(time.RFC3339Nano))
+	record := CleanupQuarantineRestoreRecord{
+		RunID:          restoreRunID,
+		TaskID:         found.TaskID,
+		FromPath:       found.FromPath,
+		QuarantinePath: found.QuarantinePath,
+		Status:         status,
+		Blockers:       blockers,
+	}
+	if err := db.saveCleanupQuarantineRestoreEvidence(ctx, projectID, record, attemptNo); err != nil {
+		return CleanupQuarantineRestoreRecord{}, err
+	}
+	return record, nil
+}
+
+func (db *DB) readCleanupQuarantineRecord(artifactPath string) (CleanupQuarantineRecord, error) {
+	raw, err := os.ReadFile(filepath.Join(db.dataRoot, artifactPath))
+	if err != nil {
+		return CleanupQuarantineRecord{}, err
+	}
+	var record CleanupQuarantineRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return CleanupQuarantineRecord{}, err
+	}
+	return record, nil
+}
+
+func (db *DB) saveCleanupQuarantineRestoreEvidence(ctx context.Context, projectID string, record CleanupQuarantineRestoreRecord, attemptNo int) error {
+	summary, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	runStatus := "succeeded"
+	if record.Status != "restored" {
+		runStatus = "failed"
+	}
+	if err := insertRun(ctx, tx, SaveVerificationInput{
+		ProjectID:  projectID,
+		RunID:      record.RunID,
+		RunType:    "cleanup",
+		AttemptNo:  attemptNo,
+		BaseCommit: "cleanup-quarantine-restore",
+	}, runStatus, now); err != nil {
+		return err
+	}
+	if _, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        record.RunID,
+		ArtifactType: "summary",
+		ArtifactKey:  "cleanup-quarantine-restore-summary.json",
+		Content:      summary,
+	}, now); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "cleanup_quarantine_restore", map[string]any{
+		"run_id":          record.RunID,
+		"task_id":         record.TaskID,
+		"status":          record.Status,
+		"from_path":       record.FromPath,
+		"quarantine_path": record.QuarantinePath,
 		"blockers":        record.Blockers,
 	}, now); err != nil {
 		return err

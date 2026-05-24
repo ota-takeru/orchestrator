@@ -901,6 +901,9 @@ func runPatchStatus(ctx context.Context, args []string, stdout io.Writer) int {
 }
 
 func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
+	if len(args) > 0 && args[0] == "quarantine" {
+		return runCleanupQuarantine(ctx, args[1:], stdout)
+	}
 	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
@@ -1030,6 +1033,84 @@ func parseCleanupAge(input string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid --older-than value: %s", input)
 	}
 	return duration, nil
+}
+
+func runCleanupQuarantine(ctx context.Context, args []string, stdout io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stdout, false, exitValidation, "invalid_arguments", errors.New("cleanup quarantine requires list or restore"))
+	}
+	switch args[0] {
+	case "list":
+		return runCleanupQuarantineList(ctx, args[1:], stdout)
+	case "restore":
+		return runCleanupQuarantineRestore(ctx, args[1:], stdout)
+	default:
+		return writeError(stdout, false, exitValidation, "invalid_arguments", fmt.Errorf("unknown cleanup quarantine subcommand: %s", args[0]))
+	}
+}
+
+func runCleanupQuarantineList(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("cleanup quarantine list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "cleanup_quarantine_list_failed", err)
+	}
+	defer db.Close()
+	entries, err := db.ListCleanupQuarantine(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "cleanup_quarantine_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"entries": entries}, 0)
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(stdout, "No quarantined cleanup worktrees.")
+		return 0
+	}
+	for _, entry := range entries {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", entry.RunID, entry.TaskID, entry.Status, entry.QuarantinePath)
+	}
+	return 0
+}
+
+func runCleanupQuarantineRestore(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("cleanup quarantine restore", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	runID := fs.String("run", "", "cleanup quarantine run id")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "cleanup_quarantine_restore_failed", err)
+	}
+	defer db.Close()
+	record, err := db.RestoreCleanupQuarantine(ctx, projectID, fs.Arg(0), *runID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_quarantine_restore_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, record, 0)
+	}
+	fmt.Fprintf(stdout, "Cleanup quarantine restore: %s\n", record.Status)
+	fmt.Fprintf(stdout, "Task: %s\n", record.TaskID)
+	for _, blocker := range record.Blockers {
+		fmt.Fprintf(stdout, "blocker: %s\n", blocker)
+	}
+	return 0
 }
 
 func runApproveEvidence(ctx context.Context, args []string, stdout io.Writer, approvalType storage.ApprovalType) int {
@@ -1658,6 +1739,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch status [--project-root PATH] [--data-root PATH] [--json] [TASK_ID]")
 	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--quarantine] [--quarantine-root PATH] [--merged] [--applied] [--older-than AGE] [--json]")
+	fmt.Fprintln(w, "  devos cleanup quarantine list [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos cleanup quarantine restore [--project-root PATH] [--data-root PATH] [--run RUN_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")

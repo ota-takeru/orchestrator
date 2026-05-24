@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,5 +90,49 @@ func TestProcessRealGitMergeRequiresExecute(t *testing.T) {
 	db := openMigratedTestDB(t)
 	if _, err := db.ProcessRealGitMerge(context.Background(), "PROJECT-001", RealGitMergeInput{FFOnly: true, NoPush: true}); err == nil {
 		t.Fatal("expected --execute to be required")
+	}
+}
+
+func TestSaveRealGitMergeEvidenceRecordsFailureClassAndRollback(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectID := "PROJECT-001"
+	insertProject(t, db.SQL(), projectID)
+	insertTask(t, db, projectID, "TASK-001", "queued_for_merge")
+	entry := MergeQueueEntry{ID: "MERGE-001", TaskID: "TASK-001", Status: "queued", BaseCommit: "BASE", HeadCommit: "HEAD"}
+
+	if err := db.saveRealGitMergeEvidence(ctx, projectID, entry, "RUN-ROLLBACK", 1, "main", "BASE", "HEAD", "failed", []string{"database merge state update failed after target ref update"}, "db_state_sync_failed", "failed", "git update-ref failed"); err != nil {
+		t.Fatal(err)
+	}
+
+	var relPath string
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT path FROM run_artifacts
+WHERE run_id = 'RUN-ROLLBACK' AND artifact_key = 'real-git-merge-summary.json'`).Scan(&relPath); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(db.dataRoot, relPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["failure_class"] != "db_state_sync_failed" || summary["rollback_status"] != "failed" || summary["rollback_error"] != "git update-ref failed" {
+		t.Fatalf("summary = %#v", summary)
+	}
+	var evidenceJSON string
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT evidence_json FROM workflow_events
+WHERE project_id = ? AND event_type = 'real_git_merge_failed'`, projectID).Scan(&evidenceJSON); err != nil {
+		t.Fatal(err)
+	}
+	var evidence map[string]any
+	if err := json.Unmarshal([]byte(evidenceJSON), &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence["failure_class"] != "db_state_sync_failed" || evidence["rollback_status"] != "failed" {
+		t.Fatalf("evidence = %#v", evidence)
 	}
 }

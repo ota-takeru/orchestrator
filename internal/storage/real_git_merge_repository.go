@@ -34,6 +34,9 @@ type RealGitMergeResult struct {
 	PreMainOID        string   `json:"pre_main_oid"`
 	CandidateOID      string   `json:"candidate_oid"`
 	Blockers          []string `json:"blockers,omitempty"`
+	FailureClass      string   `json:"failure_class,omitempty"`
+	RollbackStatus    string   `json:"rollback_status,omitempty"`
+	RollbackError     string   `json:"rollback_error,omitempty"`
 }
 
 func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input RealGitMergeInput) (RealGitMergeResult, error) {
@@ -60,19 +63,19 @@ func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input R
 	if blockers, err := db.unresolvedMergeBlockers(ctx, projectID); err != nil {
 		return RealGitMergeResult{}, err
 	} else if len(blockers) > 0 {
-		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, Blockers: blockers}, nil
+		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, Blockers: blockers, FailureClass: "merge_blocker"}, nil
 	}
 	status := strings.TrimSpace(gitOutputOrEmpty(ctx, env.ProjectRoot, "status", "--porcelain=v1"))
 	if status != "" {
-		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, Blockers: []string{"main worktree is not clean"}}, nil
+		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, Blockers: []string{"main worktree is not clean"}, FailureClass: "worktree_dirty"}, nil
 	}
 	preMain := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "refs/heads/"+input.Target)
 	candidate := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "--verify", entry.HeadCommit+"^{commit}")
 	if preMain == "UNKNOWN" || candidate == "UNKNOWN" {
-		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: []string{"target or candidate commit is missing"}}, nil
+		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: []string{"target or candidate commit is missing"}, FailureClass: "missing_commit"}, nil
 	}
 	if err := runGit(ctx, env.ProjectRoot, "merge-base", "--is-ancestor", preMain, candidate); err != nil {
-		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: []string{"candidate is not a fast-forward descendant of target"}}, nil
+		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: []string{"candidate is not a fast-forward descendant of target"}, FailureClass: "non_fast_forward"}, nil
 	}
 
 	reverifyRunID, reverifyBlockers, err := db.reverifyRealMergeCandidate(ctx, projectID, entry, env, preMain, candidate)
@@ -89,6 +92,7 @@ func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input R
 			PreMainOID:        preMain,
 			CandidateOID:      candidate,
 			Blockers:          reverifyBlockers,
+			FailureClass:      "reverification_failed",
 		}, nil
 	}
 
@@ -99,31 +103,37 @@ func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input R
 	}
 	if err := runGit(ctx, env.ProjectRoot, "update-ref", "refs/heads/"+input.Target, candidate, preMain); err != nil {
 		blockers := []string{"target ref changed before update"}
-		_ = db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "failed", blockers)
-		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "failed", RunID: runID, Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: blockers}, nil
+		_ = db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "failed", blockers, "ref_update_failed", "", "")
+		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "failed", RunID: runID, Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: blockers, FailureClass: "ref_update_failed"}, nil
 	}
 	currentBranch := strings.TrimSpace(gitOutputOrEmpty(ctx, env.ProjectRoot, "symbolic-ref", "--quiet", "--short", "HEAD"))
 	if currentBranch == input.Target {
 		if err := runGit(ctx, env.ProjectRoot, "reset", "--hard", candidate); err != nil {
-			_ = runGit(ctx, env.ProjectRoot, "update-ref", "refs/heads/"+input.Target, preMain, candidate)
+			rollbackStatus, rollbackError := rollbackLocalRefStatus(ctx, env.ProjectRoot, input.Target, preMain, candidate, true)
 			blockers := []string{"worktree reset after fast-forward failed"}
-			_ = db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "failed", blockers)
-			return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "failed", RunID: runID, Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: blockers}, nil
+			if rollbackStatus == "failed" {
+				blockers = append(blockers, "rollback to pre-merge ref failed")
+			}
+			_ = db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "failed", blockers, "worktree_reset_failed", rollbackStatus, rollbackError)
+			return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "failed", RunID: runID, Target: input.Target, PreMainOID: preMain, CandidateOID: candidate, Blockers: blockers, FailureClass: "worktree_reset_failed", RollbackStatus: rollbackStatus, RollbackError: rollbackError}, nil
 		}
 	}
 	if err := db.syncMergeQueueState(ctx, projectID, entry.ID, entry.TaskID, "queued", "rebasing"); err != nil {
-		_ = rollbackLocalRef(ctx, env.ProjectRoot, input.Target, preMain, candidate, currentBranch == input.Target)
+		rollbackStatus, rollbackError := rollbackLocalRefStatus(ctx, env.ProjectRoot, input.Target, preMain, candidate, currentBranch == input.Target)
+		_ = db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "failed", realGitDBSyncBlockers(rollbackStatus), "db_state_sync_failed", rollbackStatus, rollbackError)
 		return RealGitMergeResult{}, err
 	}
 	if err := db.syncMergeQueueState(ctx, projectID, entry.ID, entry.TaskID, "rebasing", "reverifying"); err != nil {
-		_ = rollbackLocalRef(ctx, env.ProjectRoot, input.Target, preMain, candidate, currentBranch == input.Target)
+		rollbackStatus, rollbackError := rollbackLocalRefStatus(ctx, env.ProjectRoot, input.Target, preMain, candidate, currentBranch == input.Target)
+		_ = db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "failed", realGitDBSyncBlockers(rollbackStatus), "db_state_sync_failed", rollbackStatus, rollbackError)
 		return RealGitMergeResult{}, err
 	}
 	if err := db.markMergeQueueMerged(ctx, projectID, entry.ID, entry.TaskID); err != nil {
-		_ = rollbackLocalRef(ctx, env.ProjectRoot, input.Target, preMain, candidate, currentBranch == input.Target)
+		rollbackStatus, rollbackError := rollbackLocalRefStatus(ctx, env.ProjectRoot, input.Target, preMain, candidate, currentBranch == input.Target)
+		_ = db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "failed", realGitDBSyncBlockers(rollbackStatus), "db_state_sync_failed", rollbackStatus, rollbackError)
 		return RealGitMergeResult{}, err
 	}
-	if err := db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "succeeded", nil); err != nil {
+	if err := db.saveRealGitMergeEvidence(ctx, projectID, entry, runID, attemptNo, input.Target, preMain, candidate, "succeeded", nil, "", "", ""); err != nil {
 		return RealGitMergeResult{}, err
 	}
 	return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "succeeded", RunID: runID, ReverifyRunID: reverifyRunID, Target: input.Target, PreMainOID: preMain, CandidateOID: candidate}, nil
@@ -253,7 +263,7 @@ func (db *DB) toolchainRequiredForMerge(ctx context.Context, projectID string, r
 	return required == 1, nil
 }
 
-func (db *DB) saveRealGitMergeEvidence(ctx context.Context, projectID string, entry MergeQueueEntry, runID string, attemptNo int, target string, preMain string, candidate string, status string, blockers []string) error {
+func (db *DB) saveRealGitMergeEvidence(ctx context.Context, projectID string, entry MergeQueueEntry, runID string, attemptNo int, target string, preMain string, candidate string, status string, blockers []string, failureClass string, rollbackStatus string, rollbackError string) error {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -278,7 +288,7 @@ func (db *DB) saveRealGitMergeEvidence(ctx context.Context, projectID string, en
 	if _, err := tx.ExecContext(ctx, "UPDATE runs SET head_commit = ? WHERE project_id = ? AND id = ?", candidate, projectID, runID); err != nil {
 		return err
 	}
-	summary, err := json.MarshalIndent(map[string]any{
+	summaryMap := map[string]any{
 		"merge_queue_entry_id": entry.ID,
 		"task_id":              entry.TaskID,
 		"target":               target,
@@ -288,7 +298,17 @@ func (db *DB) saveRealGitMergeEvidence(ctx context.Context, projectID string, en
 		"ff_only":              true,
 		"no_push":              true,
 		"blockers":             blockers,
-	}, "", "  ")
+	}
+	if failureClass != "" {
+		summaryMap["failure_class"] = failureClass
+	}
+	if rollbackStatus != "" {
+		summaryMap["rollback_status"] = rollbackStatus
+	}
+	if rollbackError != "" {
+		summaryMap["rollback_error"] = rollbackError
+	}
+	summary, err := json.MarshalIndent(summaryMap, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -301,7 +321,7 @@ func (db *DB) saveRealGitMergeEvidence(ctx context.Context, projectID string, en
 	}, now); err != nil {
 		return err
 	}
-	if err := insertWorkflowEvent(ctx, tx, projectID, "real_git_merge_"+status, map[string]any{
+	eventEvidence := map[string]any{
 		"task_id":              entry.TaskID,
 		"merge_queue_entry_id": entry.ID,
 		"run_id":               runID,
@@ -309,7 +329,17 @@ func (db *DB) saveRealGitMergeEvidence(ctx context.Context, projectID string, en
 		"pre_main_oid":         preMain,
 		"candidate_oid":        candidate,
 		"blockers":             blockers,
-	}, now); err != nil {
+	}
+	if failureClass != "" {
+		eventEvidence["failure_class"] = failureClass
+	}
+	if rollbackStatus != "" {
+		eventEvidence["rollback_status"] = rollbackStatus
+	}
+	if rollbackError != "" {
+		eventEvidence["rollback_error"] = rollbackError
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "real_git_merge_"+status, eventEvidence, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -327,6 +357,21 @@ func rollbackLocalRef(ctx context.Context, repo string, target string, preMain s
 		return runGit(ctx, repo, "reset", "--hard", preMain)
 	}
 	return nil
+}
+
+func rollbackLocalRefStatus(ctx context.Context, repo string, target string, preMain string, candidate string, resetWorktree bool) (string, string) {
+	if err := rollbackLocalRef(ctx, repo, target, preMain, candidate, resetWorktree); err != nil {
+		return "failed", err.Error()
+	}
+	return "succeeded", ""
+}
+
+func realGitDBSyncBlockers(rollbackStatus string) []string {
+	blockers := []string{"database merge state update failed after target ref update"}
+	if rollbackStatus == "failed" {
+		blockers = append(blockers, "rollback to pre-merge ref failed")
+	}
+	return blockers
 }
 
 func runGit(ctx context.Context, repo string, args ...string) error {

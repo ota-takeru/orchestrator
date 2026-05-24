@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.gate-result.v1",
+  "title": "DevOS Gate Result",
+  "type": "object",
+  "required": ["status", "severity", "detector", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["PASS", "AUTO_REPAIR", "AUTO_REPLAN", "REPORT_ONLY", "HUMAN_INPUT", "HUMAN_DECISION", "HARD_BLOCK"]
+    },
+    "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "detector": { "type": "string", "minLength": 1 },
+    "human_action_type": { "type": "string" },
+    "evidence": {}
+  }
+}

@@ -1,0 +1,4 @@
+id: TASK-001
+title: Bootstrap fake workflow
+status: proposed
+base_branch: main

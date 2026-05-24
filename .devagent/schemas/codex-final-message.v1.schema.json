@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.codex-final-message.v1",
+  "title": "DevOS Codex Final Message",
+  "type": "object",
+  "required": ["summary", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "status": { "type": "string", "enum": ["succeeded", "blocked", "failed"] },
+    "summary": { "type": "string" },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "command": { "type": "string" },
+          "status": { "type": "string", "enum": ["passed", "failed", "not_run"] },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

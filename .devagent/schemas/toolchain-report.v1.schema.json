@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.toolchain-report.v1",
+  "title": "DevOS Toolchain Report",
+  "type": "object",
+  "required": ["environment_id", "requirements"],
+  "additionalProperties": false,
+  "properties": {
+    "environment_id": { "type": "string", "minLength": 1 },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["toolchain_key", "required_for", "required_for_merge", "status", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "toolchain_key": { "type": "string", "minLength": 1 },
+          "required_for": {
+            "type": "string",
+            "enum": ["implementation", "verification", "runtime", "runtime_smoke", "deployment"]
+          },
+          "required_for_merge": { "type": "boolean" },
+          "status": {
+            "type": "string",
+            "enum": ["detected", "missing", "invalid", "setup_required", "waived", "unsupported", "revoked"]
+          },
+          "executable": { "type": "string" },
+          "detected_path": { "type": "string" },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

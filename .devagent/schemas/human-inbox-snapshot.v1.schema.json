@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.human-inbox-snapshot.v1",
+  "title": "DevOS Human Inbox Snapshot",
+  "type": "object",
+  "required": ["project_id", "generated_at", "counts", "open_inbox_items"],
+  "additionalProperties": false,
+  "properties": {
+    "project_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "minLength": 1 },
+    "counts": {
+      "type": "object",
+      "required": [
+        "open_inbox_items",
+        "running_tasks",
+        "waiting_for_human_tasks",
+        "blocked_tasks",
+        "queued_requests",
+        "open_decisions",
+        "running_workers",
+        "open_merge_queue",
+        "baseline_issues"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "open_inbox_items": { "type": "integer", "minimum": 0 },
+        "running_tasks": { "type": "integer", "minimum": 0 },
+        "waiting_for_human_tasks": { "type": "integer", "minimum": 0 },
+        "blocked_tasks": { "type": "integer", "minimum": 0 },
+        "queued_requests": { "type": "integer", "minimum": 0 },
+        "open_decisions": { "type": "integer", "minimum": 0 },
+        "running_workers": { "type": "integer", "minimum": 0 },
+        "open_merge_queue": { "type": "integer", "minimum": 0 },
+        "baseline_issues": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "last_successful_merge_at": { "type": "string" },
+    "open_inbox_items": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "recommended_next_commands": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

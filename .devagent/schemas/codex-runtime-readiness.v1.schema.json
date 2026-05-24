@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.codex-runtime-readiness.v1",
+  "title": "DevOS Codex Runtime Readiness",
+  "type": "object",
+  "required": ["host_goos", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "host_goos": { "type": "string", "minLength": 1 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "environment_id",
+          "os_family",
+          "project_root",
+          "codex_adapter",
+          "sandbox_profile",
+          "expected_host_runtime",
+          "current_runtime_usable",
+          "classification"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "environment_id": { "type": "string", "minLength": 1 },
+          "os_family": { "type": "string", "minLength": 1 },
+          "project_root": { "type": "string", "minLength": 1 },
+          "codex_adapter": { "type": "string", "minLength": 1 },
+          "sandbox_profile": { "type": "string", "minLength": 1 },
+          "expected_host_runtime": { "type": "string", "minLength": 1 },
+          "current_runtime_usable": { "type": "boolean" },
+          "classification": { "type": "string", "minLength": 1 },
+          "blockers": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "argv": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# Project Policy
+retry_budget:
+  max_implementation_attempts: 3
+  max_repair_attempts_per_task: 2
+  max_rebase_attempts: 2
+platform:
+  require_primary_environment: true
+  forbid_cross_environment_same_worktree_writes: true

@@ -1,0 +1,85 @@
+{
+  "generated_at": "static",
+  "schemas": [
+    {
+      "id": "devos.codex-final-message",
+      "kind": "codex_final_message",
+      "version": "1",
+      "file": "codex-final-message.v1.schema.json",
+      "sha256": "47c6f4976f3f6ffafed309db8274a13e9d8220cd044fa17c0aee8bfbb70d8f64",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    },
+    {
+      "id": "devos.codex-runtime-readiness",
+      "kind": "codex_runtime_readiness",
+      "version": "1",
+      "file": "codex-runtime-readiness.v1.schema.json",
+      "sha256": "49fd3f9f76a6783b72e0a4242352852230139fcbba9b33aa07044a9118b49788",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    },
+    {
+      "id": "devos.dependency-risk-ledger",
+      "kind": "dependency_risk_ledger",
+      "version": "1",
+      "file": "dependency-risk-ledger.v1.schema.json",
+      "sha256": "8a1a29a0ed48530376ba63eb669d1b02fd270f4a572d5b56a98a16e1d70e5bc6",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    },
+    {
+      "id": "devos.gate-result",
+      "kind": "gate_result",
+      "version": "1",
+      "file": "gate-result.v1.schema.json",
+      "sha256": "512419eeb666e710292f743c0d88a6740d39181133ab1900020710d472cd0b3c",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    },
+    {
+      "id": "devos.human-inbox-snapshot",
+      "kind": "human_inbox_snapshot",
+      "version": "1",
+      "file": "human-inbox-snapshot.v1.schema.json",
+      "sha256": "13d3da52269b02ef2b82c994d283ac19220733e69108057e098bb8076a940105",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    },
+    {
+      "id": "devos.semantic-behavior-diff",
+      "kind": "semantic_behavior_diff",
+      "version": "1",
+      "file": "semantic-behavior-diff.v1.schema.json",
+      "sha256": "77cdf2846d687d71419287814f21bb81fe0324ac14e7852b7cacf5d65644a670",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    },
+    {
+      "id": "devos.task-yaml",
+      "kind": "task_yaml",
+      "version": "2",
+      "file": "task-yaml.v2.schema.json",
+      "sha256": "3c0b452d5a1819c85d13804420e126718524cbb50d23b436e5dffba8b41dcffe",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    },
+    {
+      "id": "devos.toolchain-report",
+      "kind": "toolchain_report",
+      "version": "1",
+      "file": "toolchain-report.v1.schema.json",
+      "sha256": "7bb92936bfca36fcd0aa47afaf3417b53fb423b506cf2f354974b84bf84c39b4",
+      "owned_by": "orchestrator",
+      "trust_level": "trusted_after_validation",
+      "writable_by_ai": false
+    }
+  ]
+}

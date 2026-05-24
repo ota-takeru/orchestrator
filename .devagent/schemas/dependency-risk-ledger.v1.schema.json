@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.dependency-risk-ledger.v1",
+  "title": "DevOS Dependency Risk Ledger Entry",
+  "type": "object",
+  "required": ["id", "project_id", "name", "package_manager", "dependency_type", "reason", "risk", "lockfile_changed", "lifecycle_scripts", "approved_scope", "created_at", "updated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^DEPRISK-[A-Z0-9]+$" },
+    "project_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "package_manager": { "type": "string", "enum": ["go", "npm", "pnpm", "yarn", "cargo", "other"] },
+    "dependency_type": { "type": "string", "enum": ["production", "development", "tool"] },
+    "introduced_by_task_id": { "type": "string" },
+    "introduced_by_run_id": { "type": "string" },
+    "decision_id": { "type": "string" },
+    "reason": { "type": "string", "minLength": 1 },
+    "approved_by": { "type": "string" },
+    "risk": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "lockfile_changed": { "type": "boolean" },
+    "lifecycle_scripts": { "type": "string", "enum": ["none_detected", "detected", "unknown"] },
+    "current_version": { "type": "string" },
+    "approved_scope": { "type": "string", "enum": ["project", "task", "one_time", "dependency_family"] },
+    "expires_at": { "type": "string" },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 }
+  }
+}

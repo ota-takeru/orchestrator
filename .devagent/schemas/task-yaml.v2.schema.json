@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.task-yaml.v2",
+  "title": "DevOS Task YAML v2",
+  "type": "object",
+  "required": ["id", "title"],
+  "additionalProperties": true,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]*-[A-Z0-9_-]+$" },
+    "title": { "type": "string", "minLength": 1 },
+    "base_branch": { "type": "string", "minLength": 1 },
+    "verification_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "environment", "runner", "required_for_merge", "working_dir", "command"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "environment": { "type": "string", "minLength": 1 },
+          "runner": { "type": "string", "minLength": 1 },
+          "required_for_merge": { "type": "boolean" },
+          "working_dir": { "type": "string", "minLength": 1 },
+          "command": {
+            "type": "object",
+            "required": ["argv"],
+            "properties": {
+              "argv": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 }
+              }
+            }
+          },
+          "timeout": { "type": "string" },
+          "network": { "type": "boolean" },
+          "required_toolchains": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

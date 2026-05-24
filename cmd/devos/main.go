@@ -7,11 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ota-takeru/orchestrator/internal/api"
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/preflight"
 	"github.com/ota-takeru/orchestrator/internal/storage"
@@ -81,6 +83,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runDependency(ctx, args[1:], stdout, stderr)
 	case "ui":
 		return runUI(ctx, args[1:], stdout, stderr)
+	case "serve":
+		return runServe(ctx, args[1:], stdout)
 	case "env":
 		return runEnv(ctx, args[1:], stdout, stderr)
 	case "review":
@@ -2124,6 +2128,36 @@ func runUI(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	}
 }
 
+func runServe(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	addr := fs.String("addr", "127.0.0.1:8765", "listen address")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout before serving")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "serve_failed", err)
+	}
+	defer db.Close()
+	server := &http.Server{
+		Addr:    *addr,
+		Handler: api.NewServer(db, projectID).Handler(),
+	}
+	if *jsonOut {
+		_ = writeJSON(stdout, map[string]any{"addr": *addr, "project_id": projectID}, 0)
+	} else {
+		fmt.Fprintf(stdout, "DevOS API serving on http://%s\n", *addr)
+	}
+	if err := server.ListenAndServe(); err != nil {
+		return writeError(stdout, *jsonOut, exitInternal, "serve_failed", err)
+	}
+	return 0
+}
+
 func runEnv(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "missing env subcommand")
@@ -2740,6 +2774,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos dependency risk add [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT --risk medium [--lockfile-changed] [--lifecycle-scripts VALUE] [--approved-scope project] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk list [--project-root PATH] [--data-root PATH] [--manager npm] [--type production] [--risk medium] [--json]")
 	fmt.Fprintln(w, "  devos ui snapshot [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
+	fmt.Fprintln(w, "  devos serve [--project-root PATH] [--data-root PATH] [--addr 127.0.0.1:8765] [--json]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
 	fmt.Fprintln(w, "  devos review [--project-root PATH] [--data-root PATH] [--json] TASK_ID")

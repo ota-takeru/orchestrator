@@ -78,3 +78,65 @@ func TestWindowsPrimaryFakeBootstrapPasses(t *testing.T) {
 		t.Fatalf("primary os family = %s", osFamily)
 	}
 }
+
+func TestWSLPrimaryFakeBootstrapPasses(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	if _, err := db.ConfigureFakeRunProfile(ctx, "PROJECT-001", platform.PlatformModeWSLPrimary, root); err != nil {
+		t.Fatal(err)
+	}
+	approveRequiredArtifacts(t, db, ctx, "PROJECT-001", root, "approved")
+	tasks, err := db.MaterializeApprovedTasks(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.RunFakeTask(ctx, "PROJECT-001", tasks[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("result = %#v", result)
+	}
+	var osFamily string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT os_family FROM execution_environments WHERE project_id = 'PROJECT-001' AND role = 'primary'").Scan(&osFamily); err != nil {
+		t.Fatal(err)
+	}
+	if osFamily != "wsl" {
+		t.Fatalf("primary os family = %s", osFamily)
+	}
+}
+
+func TestHybridOptionalVerificationRecordsEnvironment(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	if _, err := db.ConfigureFakeRunProfile(ctx, "PROJECT-001", platform.PlatformModeHybrid, root); err != nil {
+		t.Fatal(err)
+	}
+	approveRequiredArtifacts(t, db, ctx, "PROJECT-001", root, "approved")
+	tasks, err := db.MaterializeApprovedTasks(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.RunFakeTask(ctx, "PROJECT-001", tasks[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var required, optional int
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT COUNT(*) FROM verification_results
+WHERE run_id = ? AND environment_id = 'windows-main' AND required_for_merge = 1`, result.VerificationRun).Scan(&required); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT COUNT(*) FROM verification_results
+WHERE run_id = ? AND environment_id = 'wsl-sidecar' AND required_for_merge = 0`, result.VerificationRun).Scan(&optional); err != nil {
+		t.Fatal(err)
+	}
+	if required != 1 || optional != 1 {
+		t.Fatalf("required=%d optional=%d run=%s", required, optional, result.VerificationRun)
+	}
+}

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -33,12 +34,15 @@ func (db *DB) RunFakeTask(ctx context.Context, projectID string, taskID string) 
 		return FakeRunResult{}, err
 	}
 
-	env, err := db.primaryEnvironment(ctx, projectID)
+	env, err := db.ResolveImplementationEnvironment(ctx, projectID)
 	if err != nil {
 		return FakeRunResult{}, err
 	}
 	implementationRunID, err := db.createTerminalRun(ctx, projectID, taskID, "implementation", "succeeded", 1, "BASE", "HEAD-"+stableShortHash(taskID), "DIFF-"+stableShortHash(taskID))
 	if err != nil {
+		return FakeRunResult{}, err
+	}
+	if _, err := db.sql.ExecContext(ctx, "UPDATE runs SET implementation_environment_id = ?, sandbox_profile = ? WHERE project_id = ? AND id = ?", env.ID, env.SandboxProfile, projectID, implementationRunID); err != nil {
 		return FakeRunResult{}, err
 	}
 	if _, err := db.SaveRunArtifact(ctx, RunArtifactInput{
@@ -55,16 +59,11 @@ func (db *DB) RunFakeTask(ctx context.Context, projectID string, taskID string) 
 	}
 
 	verificationRunID := "RUN-" + stableShortHash(taskID+"|verification|"+time.Now().UTC().Format(time.RFC3339Nano))
-	command := verifier.Command{
-		ID:               "fake-verification",
-		EnvironmentID:    env.ID,
-		Runner:           "fake",
-		WorkingDir:       env.ProjectRoot,
-		Argv:             []string{"verify"},
-		NetworkPolicy:    runners.NetworkOff,
-		RequiredForMerge: true,
+	commands, registry, err := db.fakeVerificationPlan(ctx, projectID)
+	if err != nil {
+		return FakeRunResult{}, err
 	}
-	report, err := verifier.Run(ctx, verificationRunID, verifier.StaticRunnerRegistry{env.ID: fakeRunnerForEnvironment(env)}, []verifier.Command{command})
+	report, err := verifier.Run(ctx, verificationRunID, registry, commands)
 	if err != nil {
 		return FakeRunResult{}, err
 	}
@@ -74,7 +73,7 @@ func (db *DB) RunFakeTask(ctx context.Context, projectID string, taskID string) 
 		RunID:      verificationRunID,
 		AttemptNo:  1,
 		BaseCommit: "BASE",
-		Commands:   []verifier.Command{command},
+		Commands:   commands,
 		Report:     report,
 	}); err != nil {
 		return FakeRunResult{}, err
@@ -96,6 +95,90 @@ func (db *DB) RunFakeTask(ctx context.Context, projectID string, taskID string) 
 		}
 	}
 	return FakeRunResult{TaskID: taskID, TaskStatus: next, ImplementationRun: implementationRunID, VerificationRun: verificationRunID}, nil
+}
+
+func (db *DB) fakeVerificationPlan(ctx context.Context, projectID string) ([]verifier.Command, verifier.StaticRunnerRegistry, error) {
+	required, optional, err := db.activeVerificationEnvironmentIDs(ctx, projectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(required) == 0 && len(optional) == 0 {
+		env, err := db.primaryEnvironment(ctx, projectID)
+		if err != nil {
+			return nil, nil, err
+		}
+		required = []string{env.ID}
+	}
+	commands := make([]verifier.Command, 0, len(required)+len(optional))
+	registry := verifier.StaticRunnerRegistry{}
+	addCommand := func(envID string, requiredForMerge bool) error {
+		env, err := db.environmentByID(ctx, projectID, envID)
+		if err != nil {
+			return err
+		}
+		registry[env.ID] = fakeRunnerForEnvironment(env)
+		commandID := "fake-verification-" + env.ID
+		if !requiredForMerge {
+			commandID = "fake-sidecar-verification-" + env.ID
+		}
+		commands = append(commands, verifier.Command{
+			ID:               commandID,
+			EnvironmentID:    env.ID,
+			Runner:           "fake",
+			WorkingDir:       env.ProjectRoot,
+			Argv:             []string{"verify"},
+			NetworkPolicy:    runners.NetworkOff,
+			RequiredForMerge: requiredForMerge,
+		})
+		return nil
+	}
+	for _, envID := range required {
+		if err := addCommand(envID, true); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, envID := range optional {
+		if err := addCommand(envID, false); err != nil {
+			return nil, nil, err
+		}
+	}
+	return commands, registry, nil
+}
+
+func (db *DB) activeVerificationEnvironmentIDs(ctx context.Context, projectID string) ([]string, []string, error) {
+	var requiredJSON, optionalJSON sql.NullString
+	err := db.sql.QueryRowContext(ctx, `
+SELECT required_verification_environment_ids_json, optional_verification_environment_ids_json
+FROM project_run_profiles
+WHERE project_id = ? AND status = 'active'
+ORDER BY updated_at DESC
+LIMIT 1`, projectID).Scan(&requiredJSON, &optionalJSON)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	required, err := decodeEnvironmentIDList(requiredJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	optional, err := decodeEnvironmentIDList(optionalJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	return required, optional, nil
+}
+
+func decodeEnvironmentIDList(raw sql.NullString) ([]string, error) {
+	if !raw.Valid || raw.String == "" {
+		return nil, nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw.String), &ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 func (db *DB) RunFakeRepairTask(ctx context.Context, projectID string, taskID string) (FakeRunResult, error) {

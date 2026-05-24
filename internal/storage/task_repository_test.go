@@ -39,6 +39,13 @@ func TestApprovedArtifactsMakeTaskReady(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].ID != "TASK-001" || tasks[0].Status != "ready" {
 		t.Fatalf("unexpected tasks: %#v", tasks)
 	}
+	queue, err := db.ListWorkQueueItems(ctx, "PROJECT-001", "queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queue) != 1 || queue[0].Lane != "execution" || queue[0].ItemType != "task_implementation" || queue[0].ItemID != "TASK-001" {
+		t.Fatalf("execution queue = %#v", queue)
+	}
 }
 
 func TestMaterializeApprovedTasksStoresVerificationCommands(t *testing.T) {

@@ -92,9 +92,14 @@ ON CONFLICT(id) DO UPDATE SET
 	); err != nil {
 		return nil, err
 	}
+	queueID, err := enqueueTaskImplementationWorkItem(ctx, tx, projectID, task.ID, now)
+	if err != nil {
+		return nil, err
+	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "tasks_materialized", map[string]any{
 		"task_id":             task.ID,
 		"artifact_version_id": taskArtifact.VersionID,
+		"work_queue_item_id":  queueID,
 	}, now); err != nil {
 		return nil, err
 	}
@@ -103,6 +108,22 @@ ON CONFLICT(id) DO UPDATE SET
 	}
 	committed = true
 	return []TaskRecord{{ID: task.ID, Status: "ready", Title: task.Title, VerificationCommands: task.VerificationCommands}}, nil
+}
+
+func enqueueTaskImplementationWorkItem(ctx context.Context, tx *sql.Tx, projectID string, taskID string, now string) (string, error) {
+	queueID := "WQ-" + stableShortHash(projectID+"|task_implementation|"+taskID)
+	idempotencyKey := "task_implementation:" + taskID
+	_, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO work_queue_items(
+  id, project_id, lane, item_type, item_id, status, priority,
+  attempt_no, max_attempts, idempotency_key, created_at, updated_at
+) VALUES (?, ?, 'execution', 'task_implementation', ?, 'queued', 'medium', 0, 3, ?, ?, ?)`,
+		queueID, projectID, taskID, idempotencyKey, now, now,
+	)
+	if err != nil {
+		return "", err
+	}
+	return queueID, nil
 }
 
 func (db *DB) ListTasks(ctx context.Context, projectID string, status string) ([]TaskRecord, error) {

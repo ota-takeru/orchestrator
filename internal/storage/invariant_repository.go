@@ -46,6 +46,7 @@ func (db *DB) CheckProjectInvariants(ctx context.Context, projectID string) ([]I
 		db.checkVerificationRunTypes,
 		db.checkRequiredVerificationFailuresClassified,
 		db.checkRunArtifactFiles,
+		db.checkPathMappingServiceBuilds,
 	}
 	for _, check := range checks {
 		found, err := check(ctx, projectID)
@@ -358,4 +359,16 @@ WHERE project_id = ?`, projectID)
 		}
 	}
 	return violations, rows.Err()
+}
+
+func (db *DB) checkPathMappingServiceBuilds(ctx context.Context, projectID string) ([]InvariantViolation, error) {
+	if _, err := db.BuildPathMappingService(ctx, projectID); err != nil {
+		return []InvariantViolation{{
+			Scope:   "path_mapping",
+			ID:      projectID,
+			Code:    "path_mapping_service_invalid",
+			Message: err.Error(),
+		}}, nil
+	}
+	return nil, nil
 }

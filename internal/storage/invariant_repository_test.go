@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ota-takeru/orchestrator/internal/platform"
 )
 
 func TestCheckArtifactInvariantsPassesForApprovedContext(t *testing.T) {
@@ -193,6 +195,23 @@ INSERT INTO runs(
 		t.Fatal(err)
 	}
 	if !hasInvariantViolation(violations, "run_artifact_hash_mismatch") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsInvalidPathMapping(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", "/repo")
+	insertEnvironmentWithRoot(t, db, "wsl-sidecar", "PROJECT-001", "sidecar", "/sidecar")
+	insertPathMapping(t, db, "PROJECT-001", "linux-main", "wsl-sidecar", "/repo", "/mnt/repo", platform.MappingSameFilesystem, "")
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "path_mapping_service_invalid") {
 		t.Fatalf("violations = %#v", violations)
 	}
 }

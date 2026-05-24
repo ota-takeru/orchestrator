@@ -402,6 +402,22 @@ func TestVerifyCLIWithFakeAdapter(t *testing.T) {
 	}
 }
 
+func TestReviewCLIProducesSemanticDiff(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Review workflow")
+	seedCLIReviewTask(t, ctx, dataRoot, projectRoot)
+	out := runCLI(t, "review", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "TASK-REVIEW")
+	var result storage.TaskReviewResult
+	decodeJSON(t, out, &result)
+	if result.TaskStatus != "ready_for_human_review" || result.ReviewRunID == "" || len(result.SemanticDiffs) == 0 {
+		t.Fatalf("review result = %#v", result)
+	}
+}
+
 func TestPlatformMapAddCLI(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()
@@ -729,6 +745,52 @@ INSERT INTO tasks(
   id, project_id, status, title, base_branch, created_at, updated_at
 ) VALUES ('TASK-VERIFY', ?, 'verifying', 'Verify CLI workflow', 'main', ?, ?)`,
 		projectID, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedCLIReviewTask(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO tasks(
+  id, project_id, status, title, base_branch, created_at, updated_at
+) VALUES ('TASK-REVIEW', ?, 'ready_for_human_review', 'Review CLI workflow', 'main', ?, ?)`,
+		projectID, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit, head_commit,
+  diff_hash, created_at, updated_at, started_at, completed_at
+) VALUES ('RUN-REVIEW-SOURCE', ?, 'TASK-REVIEW', 'implementation', 'succeeded', 1, 'BASE', 'HEAD', 'DIFF', ?, ?, ?, ?)`,
+		projectID, now, now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	diffContent := []byte("diff --git a/ui/src/App.tsx b/ui/src/App.tsx\n")
+	diffPath := filepath.Join(dataRoot, "projects", projectID, "runs", "RUN-REVIEW-SOURCE", "diff.patch")
+	if err := os.MkdirAll(filepath.Dir(diffPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(diffPath, diffContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relPath := filepath.Join("projects", projectID, "runs", "RUN-REVIEW-SOURCE", "diff.patch")
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO run_artifacts(
+  id, project_id, run_id, artifact_type, artifact_key, path,
+  content_hash, redaction_status, created_at
+) VALUES ('RUNART-REVIEW-DIFF', ?, 'RUN-REVIEW-SOURCE', 'diff', 'diff.patch', ?, 'DIFFHASH', 'not_needed', ?)`,
+		projectID, relPath, now,
 	); err != nil {
 		t.Fatal(err)
 	}

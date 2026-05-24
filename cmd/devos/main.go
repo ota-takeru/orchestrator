@@ -1025,9 +1025,37 @@ func runReview(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	case "reject":
 		return runRejectFinalReview(ctx, args[1:], stdout)
 	default:
-		fmt.Fprintf(stderr, "unknown review subcommand: %s\n", args[0])
-		return exitValidation
+		return runGenerateReview(ctx, args, stdout)
 	}
+}
+
+func runGenerateReview(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "review_failed", err)
+	}
+	defer db.Close()
+	result, err := db.ReviewTask(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "review_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Review generated: %s\n", result.ReviewRunID)
+	fmt.Fprintf(stdout, "Semantic diffs: %d\n", len(result.SemanticDiffs))
+	return 0
 }
 
 func runRejectFinalReview(ctx context.Context, args []string, stdout io.Writer) int {
@@ -2420,6 +2448,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] DECISION_ID")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
+	fmt.Fprintln(w, "  devos review [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos review reject [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

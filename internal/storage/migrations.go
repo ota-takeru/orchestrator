@@ -25,6 +25,7 @@ func RegisteredMigrations() ([]Migration, error) {
 		{9, "worker_runs", "migrations/009_worker_runs.sql"},
 		{10, "change_request_analysis", "migrations/010_change_request_analysis.sql"},
 		{11, "environment_bindings", "migrations/011_environment_bindings.sql"},
+		{12, "semantic_behavior_diff_details", "migrations/012_semantic_behavior_diff_details.sql"},
 	}
 	migrations := make([]Migration, 0, len(definitions))
 	for _, definition := range definitions {

@@ -54,6 +54,8 @@ allow_merge_without_toolchain
 
 `allow_merge_without_toolchain` を明示していないwaiverは、merge block解除として扱ってはいけません。
 
+waiverは `expiry` を過ぎたら失効します。失効時は `toolchain_requirements.status` を `revoked` にし、同じrequirementのToolchain Setup Cardを再度openします。merge前のblocker評価は、open Inboxだけでなく required_for_merge のtoolchain statusも確認し、`missing`、`invalid`、`setup_required`、`unsupported`、`revoked` をblock扱いにします。
+
 ## ToolchainRequirement Required For
 
 `toolchain_requirements.required_for` の正規値:

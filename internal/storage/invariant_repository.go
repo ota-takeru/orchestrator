@@ -54,6 +54,7 @@ func (db *DB) CheckProjectInvariants(ctx context.Context, projectID string) ([]I
 		db.checkRequiredVerificationFailuresClassified,
 		db.checkCommandEventJSON,
 		db.checkGateResultSchemas,
+		db.checkOpenInboxSources,
 		db.checkRunArtifactFiles,
 		db.checkPathMappingServiceBuilds,
 	}
@@ -637,6 +638,131 @@ WHERE project_id = ?`, projectID)
 		}
 	}
 	return violations, rows.Err()
+}
+
+func (db *DB) checkOpenInboxSources(ctx context.Context, projectID string) ([]InvariantViolation, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, item_type, source_type, source_id
+FROM inbox_items
+WHERE project_id = ? AND status IN ('open', 'snoozed')`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type inboxSource struct {
+		id         string
+		itemType   string
+		sourceType string
+		sourceID   string
+	}
+	var items []inboxSource
+	for rows.Next() {
+		var item inboxSource
+		if err := rows.Scan(&item.id, &item.itemType, &item.sourceType, &item.sourceID); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var violations []InvariantViolation
+	for _, item := range items {
+		status, exists, err := db.inboxSourceStatus(ctx, projectID, item.sourceType, item.sourceID)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			violations = append(violations, InvariantViolation{
+				Scope:   "inbox_item",
+				ID:      item.id,
+				Code:    "inbox_source_missing",
+				Message: fmt.Sprintf("%s source %s does not exist", item.sourceType, item.sourceID),
+			})
+			continue
+		}
+		if item.sourceType == "decision" && status != "open" {
+			violations = append(violations, InvariantViolation{
+				Scope:   "inbox_item",
+				ID:      item.id,
+				Code:    "inbox_source_not_open",
+				Message: fmt.Sprintf("decision source %s is %s", item.sourceID, status),
+			})
+		}
+		if item.sourceType == "human_approval" && status != "open" {
+			violations = append(violations, InvariantViolation{
+				Scope:   "inbox_item",
+				ID:      item.id,
+				Code:    "inbox_source_not_open",
+				Message: fmt.Sprintf("human approval source %s is %s", item.sourceID, status),
+			})
+		}
+		if item.sourceType == "gate_result" {
+			if expected := inboxItemTypeForGateStatus(status); expected != "" && expected != item.itemType {
+				violations = append(violations, InvariantViolation{
+					Scope:   "inbox_item",
+					ID:      item.id,
+					Code:    "inbox_gate_projection_mismatch",
+					Message: fmt.Sprintf("gate source %s status %s projects to %s, not %s", item.sourceID, status, expected, item.itemType),
+				})
+			}
+		}
+	}
+	return violations, nil
+}
+
+func (db *DB) inboxSourceStatus(ctx context.Context, projectID string, sourceType string, sourceID string) (string, bool, error) {
+	switch sourceType {
+	case "decision":
+		return db.querySourceStatus(ctx, "SELECT status FROM decisions WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "human_approval":
+		return db.querySourceStatus(ctx, "SELECT status FROM human_approvals WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "gate_result":
+		return db.querySourceStatus(ctx, "SELECT status FROM gate_results WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "toolchain_requirement":
+		return db.querySourceStatus(ctx, "SELECT status FROM toolchain_requirements WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "path_mapping":
+		return db.querySourceStatus(ctx, "SELECT status FROM path_mappings WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "execution_environment":
+		return db.querySourceStatus(ctx, "SELECT status FROM execution_environments WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "patch_application":
+		return db.querySourceStatus(ctx, "SELECT status FROM patch_applications WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "merge_conflict":
+		return db.querySourceStatus(ctx, "SELECT status FROM merge_queue_entries WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "environment_requirement":
+		return db.querySourceStatus(ctx, "SELECT status FROM environment_requirements WHERE project_id = ? AND id = ?", projectID, sourceID)
+	case "environment_binding":
+		return db.querySourceStatus(ctx, "SELECT status FROM environment_bindings WHERE project_id = ? AND id = ?", projectID, sourceID)
+	default:
+		return "", false, nil
+	}
+}
+
+func (db *DB) querySourceStatus(ctx context.Context, query string, projectID string, sourceID string) (string, bool, error) {
+	var status string
+	if err := db.sql.QueryRowContext(ctx, query, projectID, sourceID).Scan(&status); err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return status, true, nil
+}
+
+func inboxItemTypeForGateStatus(status string) string {
+	switch status {
+	case "REPORT_ONLY":
+		return "report"
+	case "HUMAN_INPUT":
+		return "human_input"
+	case "HUMAN_DECISION":
+		return "human_decision"
+	case "HARD_BLOCK":
+		return "hard_block"
+	default:
+		return ""
+	}
 }
 
 func (db *DB) checkRunArtifactFiles(ctx context.Context, projectID string) ([]InvariantViolation, error) {

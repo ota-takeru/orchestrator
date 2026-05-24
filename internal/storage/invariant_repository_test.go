@@ -300,6 +300,79 @@ INSERT INTO gate_results(
 	}
 }
 
+func TestCheckProjectInvariantsDetectsOpenInboxMissingSource(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (
+  'INBOX-MISSING-DECISION', 'PROJECT-001', 'human_decision', 'open', 'decision', 'DEC-MISSING',
+  'decision:DEC-MISSING', 80, 'Missing decision', 'Projection without source', ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "inbox_source_missing") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsGateInboxProjectionMismatch(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
+	insertTask(t, db, "PROJECT-001", "TASK-001", "needs_decision")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit,
+  created_at, updated_at
+) VALUES (
+  'RUN-001', 'PROJECT-001', 'TASK-001', 'verification', 'failed', 1, 'BASE',
+  ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO gate_results(
+  id, project_id, task_id, run_id, status, severity, detector,
+  human_action_type, evidence_json, created_at
+) VALUES (
+  'GATE-001', 'PROJECT-001', 'TASK-001', 'RUN-001', 'HARD_BLOCK', 'critical', 'protected_path_write',
+  NULL, '{}', ?
+)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (
+  'INBOX-GATE-001', 'PROJECT-001', 'TASK-001', 'report', 'open', 'gate_result', 'GATE-001',
+  'gate:GATE-001', 20, 'Wrong projection', 'Hard block projected as report', ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "inbox_gate_projection_mismatch") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
 func TestCheckProjectInvariantsDetectsRunArtifactHashMismatch(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

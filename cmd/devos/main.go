@@ -2403,15 +2403,20 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 			return writeError(stdout, *jsonOut, exitValidation, "codex_readiness_failed", fmt.Errorf("no execution environments configured for project; run devos init --project-root %s first", root))
 		}
 		var inboxItems []storage.InboxItem
+		toolchainReportsSaved := 0
 		if *save {
 			inboxItems, err = db.SaveCodexRuntimeReadiness(ctx, projectID, report)
 			if err != nil {
 				return writeError(stdout, *jsonOut, exitStorage, "codex_readiness_failed", err)
 			}
+			toolchainReportsSaved, err = saveCodexReadinessToolchainReports(ctx, db, projectID, report)
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitStorage, "codex_readiness_toolchain_save_failed", err)
+			}
 		}
 		if *jsonOut {
 			if *save {
-				return writeJSON(stdout, map[string]any{"report": report, "inbox_items": inboxItems}, 0)
+				return writeJSON(stdout, map[string]any{"report": report, "inbox_items": inboxItems, "toolchain_reports_saved": toolchainReportsSaved}, 0)
 			}
 			return writeJSON(stdout, report, 0)
 		}
@@ -2421,6 +2426,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		}
 		if *save {
 			fmt.Fprintf(stdout, "Open runtime inbox items: %d\n", len(inboxItems))
+			fmt.Fprintf(stdout, "Toolchain reports saved: %d\n", toolchainReportsSaved)
 		}
 		return 0
 	case "doctor":
@@ -2605,6 +2611,33 @@ func runPlatformSetup(ctx context.Context, args []string, stdout io.Writer, stde
 		fmt.Fprintf(stderr, "unknown platform setup subcommand: %s\n", args[0])
 		return exitValidation
 	}
+}
+
+func saveCodexReadinessToolchainReports(ctx context.Context, db *storage.DB, projectID string, report storage.CodexRuntimeReadinessReport) (int, error) {
+	envs, err := db.ListExecutionEnvironments(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+	envByID := map[string]platform.ExecutionEnvironment{}
+	for _, env := range envs {
+		envByID[env.ID] = env
+	}
+	saved := 0
+	for _, item := range report.Items {
+		if item.Classification != "toolchain_required" {
+			continue
+		}
+		env, ok := envByID[item.EnvironmentID]
+		if !ok {
+			continue
+		}
+		toolchainReport := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: true})
+		if err := db.SaveToolchainReport(ctx, projectID, toolchainReport); err != nil {
+			return saved, err
+		}
+		saved++
+	}
+	return saved, nil
 }
 
 func runPlatformMap(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {

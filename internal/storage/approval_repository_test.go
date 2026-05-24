@@ -105,6 +105,50 @@ func TestApprovalRequiresGateEvidence(t *testing.T) {
 	}
 }
 
+func TestApprovalRequiresBaselineIssueReport(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready_for_human_review")
+	insertSucceededRun(t, db, "PROJECT-001", "TASK-001", "RUN-BASELINE", "HEAD", "DIFF")
+	insertBaselineVerificationEvidence(t, db, "PROJECT-001", "RUN-BASELINE", "linux-main", "VERIF-BASELINE")
+	gates := []decisions.GateResult{{
+		Status:   decisions.GatePass,
+		Severity: decisions.SeverityLow,
+		Detector: "verification_passed",
+		Evidence: map[string]any{"run_id": "RUN-BASELINE"},
+	}}
+	if err := db.SaveGateResults(ctx, "PROJECT-001", ptr("TASK-001"), "RUN-BASELINE", gates); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{
+		ProjectID:    "PROJECT-001",
+		TaskID:       "TASK-001",
+		ApprovalType: ApprovalFinalReview,
+	}); err == nil {
+		t.Fatal("expected approval without baseline issue report to fail")
+	}
+
+	baselineGates := []decisions.GateResult{{
+		Status:   decisions.GateReportOnly,
+		Severity: decisions.SeverityMedium,
+		Detector: "verification_failed_existing_baseline",
+		Evidence: map[string]any{"run_id": "RUN-BASELINE"},
+	}}
+	if err := db.SaveGateResults(ctx, "PROJECT-001", ptr("TASK-001"), "RUN-BASELINE", baselineGates); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{
+		ProjectID:    "PROJECT-001",
+		TaskID:       "TASK-001",
+		ApprovalType: ApprovalFinalReview,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApproveHumanApprovalApprovesOpenSourceAndResolvesInbox(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -241,6 +285,20 @@ INSERT INTO verification_results(
   id, project_id, run_id, environment_id, command_id, required_for_merge,
   status, evidence_json, created_at
 ) VALUES (?, ?, ?, ?, 'go-test', 1, 'passed', '{}', ?)`,
+		resultID, projectID, runID, envID, now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertBaselineVerificationEvidence(t *testing.T, db *DB, projectID string, runID string, envID string, resultID string) {
+	t.Helper()
+	_, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO verification_results(
+  id, project_id, run_id, environment_id, command_id, required_for_merge,
+  status, failure_class, evidence_json, created_at
+) VALUES (?, ?, ?, ?, 'go-test', 1, 'failed', 'baseline', '{}', ?)`,
 		resultID, projectID, runID, envID, now(),
 	)
 	if err != nil {

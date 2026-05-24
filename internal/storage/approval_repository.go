@@ -357,9 +357,38 @@ LIMIT 1`, projectID, taskID).Scan(&evidence.RunID); err != nil {
 	if len(gateIDs) == 0 {
 		return approvalEvidence{}, fmt.Errorf("approval requires gate result evidence")
 	}
+	if err := ensureBaselineFailuresReported(ctx, tx, projectID, evidence.RunID); err != nil {
+		return approvalEvidence{}, err
+	}
 	evidence.VerificationResultIDs = verificationIDs
 	evidence.GateResultIDs = gateIDs
 	return evidence, nil
+}
+
+func ensureBaselineFailuresReported(ctx context.Context, tx *sql.Tx, projectID string, runID string) error {
+	var baselineCount int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM verification_results
+WHERE project_id = ? AND run_id = ? AND failure_class = 'baseline'`, projectID, runID).Scan(&baselineCount); err != nil {
+		return err
+	}
+	if baselineCount == 0 {
+		return nil
+	}
+	var reportCount int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM gate_results
+WHERE project_id = ? AND run_id = ?
+  AND status = 'REPORT_ONLY'
+  AND detector = 'verification_failed_existing_baseline'`, projectID, runID).Scan(&reportCount); err != nil {
+		return err
+	}
+	if reportCount == 0 {
+		return fmt.Errorf("approval requires baseline issue report for run %s", runID)
+	}
+	return nil
 }
 
 func collectIDs(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {

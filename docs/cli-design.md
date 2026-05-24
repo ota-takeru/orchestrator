@@ -131,6 +131,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos artifacts trusted` | `--json` | なし | `approved_version_id` からhash検証済みartifact snapshot bundleを返す。`approved_with_notes` の `approval_notes` も含める |
 | `devos artifacts check` | `--json` | なし | artifact lifecycleのcross-table invariantを検査し、違反を返す |
 | `devos artifacts approve` | `ARTIFACT_ID`, `--version`, `--status`, `--notes` | artifact status、artifact version approval、workflow_events | 同じ承認内容はno-op |
+| `devos check` | `--json` | なし | artifact / task / run / verification / run artifact fileのproject invariantを横断検査し、違反を返す |
 | `devos env status` | `--json` | なし | read-only |
 | `devos env set` | `KEY`, `--scope`, `--scope-id`, `--value-stdin` | secret store or `.env.local`、redacted binding、audit event | 同じfingerprintならno-op |
 | `devos request` | `TEXT`, `--json` | feature_request、work_queue_item | 同一本文でも新requestを作る |

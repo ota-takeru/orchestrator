@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -96,6 +98,101 @@ func TestCheckArtifactInvariantsDetectsApprovedWithNotesMissingNotes(t *testing.
 		t.Fatal(err)
 	}
 	if !hasInvariantViolation(violations, "approved_with_notes_missing_notes") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsInvalidCurrentRun(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "implementing")
+	if _, err := db.SQL().ExecContext(ctx, "UPDATE tasks SET current_run_id = 'RUN-MISSING' WHERE id = 'TASK-001'"); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "current_run_reference_invalid") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsUnclassifiedRequiredVerificationFailure(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit,
+  created_at, updated_at
+) VALUES (
+  'RUN-001', 'PROJECT-001', 'TASK-001', 'verification', 'failed', 1, 'BASE',
+  ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO verification_results(
+  id, project_id, run_id, environment_id, command_id, required_for_merge,
+  status, failure_class, evidence_json, created_at
+) VALUES (
+  'VERIF-001', 'PROJECT-001', 'RUN-001', 'linux-main', 'go-test', 1,
+  'failed', NULL, '{}', ?
+)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "required_verification_failure_unclassified") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsRunArtifactHashMismatch(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectID := "PROJECT-001"
+	insertProject(t, db.SQL(), projectID)
+	insertTask(t, db, projectID, "TASK-001", "implementing")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit,
+  created_at, updated_at
+) VALUES (
+  'RUN-001', ?, 'TASK-001', 'implementation', 'succeeded', 1, 'BASE',
+  ?, ?
+)`, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := db.SaveRunArtifact(ctx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        "RUN-001",
+		ArtifactType: "summary",
+		ArtifactKey:  "summary.json",
+		Content:      []byte(`{"status":"ok"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(db.dataRoot, artifact.Path), []byte(`{"status":"changed"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "run_artifact_hash_mismatch") {
 		t.Fatalf("violations = %#v", violations)
 	}
 }

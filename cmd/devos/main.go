@@ -98,6 +98,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCleanup(ctx, args[1:], stdout)
 	case "publish":
 		return runPublish(ctx, args[1:], stdout)
+	case "check":
+		return runCheck(ctx, args[1:], stdout)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -1104,6 +1106,44 @@ func runArtifactsCheck(ctx context.Context, args []string, stdout io.Writer) int
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", violation.Scope, violation.ID, violation.Code, violation.Message)
 	}
 	return exitValidation
+}
+
+func runCheck(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "check_failed", err)
+	}
+	defer db.Close()
+	violations, err := db.CheckProjectInvariants(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "check_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"violations": violations}, validationExitForViolations(violations))
+	}
+	if len(violations) == 0 {
+		fmt.Fprintln(stdout, "Project invariants OK.")
+		return 0
+	}
+	for _, violation := range violations {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", violation.Scope, violation.ID, violation.Code, violation.Message)
+	}
+	return exitValidation
+}
+
+func validationExitForViolations(violations []storage.InvariantViolation) int {
+	if len(violations) > 0 {
+		return exitValidation
+	}
+	return 0
 }
 
 func runReview(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -2933,6 +2973,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos artifacts trusted [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
+	fmt.Fprintln(w, "  devos check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos request [--project-root PATH] [--data-root PATH] [--json] TEXT")

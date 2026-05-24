@@ -104,6 +104,14 @@ func TestArtifactsListCLI(t *testing.T) {
 	if len(check.Violations) != 0 {
 		t.Fatalf("artifact invariant violations = %#v", check.Violations)
 	}
+	projectCheckOut := runCLI(t, "check", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var projectCheck struct {
+		Violations []storage.InvariantViolation `json:"violations"`
+	}
+	decodeJSON(t, projectCheckOut, &projectCheck)
+	if len(projectCheck.Violations) != 0 {
+		t.Fatalf("project invariant violations = %#v", projectCheck.Violations)
+	}
 }
 
 func TestRequestQueueCLIWorkflow(t *testing.T) {

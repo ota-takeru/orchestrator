@@ -87,6 +87,44 @@ func TestApproveArtifactVersionSetsApprovedVersion(t *testing.T) {
 	}
 }
 
+func TestApproveArtifactVersionIsIdempotentForSameReview(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	record, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactRoadmap,
+		Path:         ".devagent/roadmap.yaml",
+		Content:      []byte("roadmap: []"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", record.ArtifactID, 1, "approved_with_notes", "Keep order."); err != nil {
+		t.Fatal(err)
+	}
+	var firstReviewedAt string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT reviewed_at FROM artifact_versions WHERE id = ?", record.VersionID).Scan(&firstReviewedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", record.ArtifactID, 1, "approved_with_notes", "Keep order."); err != nil {
+		t.Fatal(err)
+	}
+
+	var secondReviewedAt string
+	var eventCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT reviewed_at FROM artifact_versions WHERE id = ?", record.VersionID).Scan(&secondReviewedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_events WHERE project_id = 'PROJECT-001' AND event_type = 'artifact_version_reviewed'").Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if secondReviewedAt != firstReviewedAt || eventCount != 1 {
+		t.Fatalf("reviewed_at first=%s second=%s events=%d", firstReviewedAt, secondReviewedAt, eventCount)
+	}
+}
+
 func TestListArtifactsReturnsLatestAndApprovedVersions(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

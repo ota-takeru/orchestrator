@@ -258,6 +258,18 @@ func (db *DB) ApproveArtifactVersion(ctx context.Context, projectID string, arti
 	if err != nil {
 		return ArtifactVersionRecord{}, err
 	}
+	currentStatus, currentNotes, err := artifactVersionReviewState(ctx, tx, record.VersionID)
+	if err != nil {
+		return ArtifactVersionRecord{}, err
+	}
+	if currentStatus == status && strings.TrimSpace(currentNotes) == strings.TrimSpace(notes) {
+		if err := tx.Commit(); err != nil {
+			return ArtifactVersionRecord{}, err
+		}
+		committed = true
+		record.Status = status
+		return record, nil
+	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE artifact_versions
 SET status = ?, reviewed_by = 'human', reviewed_at = ?, approval_notes = ?, rejected_reason = ?
@@ -348,6 +360,22 @@ WHERE artifact_id = ? AND version = ?`, artifactID, version).Scan(&record.Artifa
 		return ArtifactVersionRecord{}, err
 	}
 	return record, nil
+}
+
+func artifactVersionReviewState(ctx context.Context, tx *sql.Tx, versionID string) (string, string, error) {
+	var status string
+	var approvalNotes string
+	var rejectedReason string
+	if err := tx.QueryRowContext(ctx, `
+SELECT status, COALESCE(approval_notes, ''), COALESCE(rejected_reason, '')
+FROM artifact_versions
+WHERE id = ?`, versionID).Scan(&status, &approvalNotes, &rejectedReason); err != nil {
+		return "", "", err
+	}
+	if status == "rejected" {
+		return status, rejectedReason, nil
+	}
+	return status, approvalNotes, nil
 }
 
 func approvedArtifactVersionID(ctx context.Context, tx *sql.Tx, artifactID string) (string, error) {

@@ -128,6 +128,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos decisions` | `--status`, `--json` | なし | read-only |
 | `devos approve` | `DECISION_ID`, `--option`, `--notes` | decision resolved、workflow_events、inbox resolved | resolved decisionへの再approveはvalidation error |
 | `devos artifacts` | `--type`, `--json` | なし | read-only |
+| `devos artifacts trusted` | `--json` | なし | `approved_version_id` からhash検証済みartifact snapshot bundleを返す。`approved_with_notes` の `approval_notes` も含める |
 | `devos artifacts approve` | `ARTIFACT_ID`, `--version`, `--status`, `--notes` | artifact status、artifact version approval、workflow_events | 同じ承認内容はno-op |
 | `devos env status` | `--json` | なし | read-only |
 | `devos env set` | `KEY`, `--scope`, `--scope-id`, `--value-stdin` | secret store or `.env.local`、redacted binding、audit event | 同じfingerprintならno-op |
@@ -386,6 +387,7 @@ TaskStatusは [state-machine.md](state-machine.md) の正規一覧と [storage-s
 
 ```text
 devos artifacts
+devos artifacts trusted --json
 devos artifacts approve ART-PRD --version 1 --status approved
 devos artifacts approve ART-ARCH --version 1 --status approved_with_notes --notes "SQLite/local-firstは維持"
 devos artifacts approve ART-ROADMAP --version 1 --status approved

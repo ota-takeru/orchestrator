@@ -87,6 +87,15 @@ func TestArtifactsListCLI(t *testing.T) {
 	if len(result.Artifacts) != 1 || result.Artifacts[0].ArtifactType != storage.ArtifactPRD {
 		t.Fatalf("artifacts = %#v", result.Artifacts)
 	}
+	runCLI(t, "artifacts", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--version", "1", "--status", "approved_with_notes", "--notes", "Keep local-first scope.", "--json", result.Artifacts[0].ArtifactID)
+	trustedOut := runCLI(t, "artifacts", "trusted", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var trusted struct {
+		Artifacts []storage.TrustedArtifactContentRecord `json:"artifacts"`
+	}
+	decodeJSON(t, trustedOut, &trusted)
+	if len(trusted.Artifacts) != 1 || trusted.Artifacts[0].ArtifactID != result.Artifacts[0].ArtifactID || trusted.Artifacts[0].ApprovalNotes != "Keep local-first scope." || trusted.Artifacts[0].Content == "" {
+		t.Fatalf("trusted artifacts = %#v", trusted.Artifacts)
+	}
 }
 
 func TestRequestQueueCLIWorkflow(t *testing.T) {

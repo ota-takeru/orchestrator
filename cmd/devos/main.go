@@ -1002,6 +1002,8 @@ func runArtifacts(ctx context.Context, args []string, stdout io.Writer, stderr i
 		}
 		fmt.Fprintf(stdout, "Artifact reviewed: %s v%d %s\n", record.ArtifactID, record.Version, record.Status)
 		return 0
+	case "trusted":
+		return runArtifactsTrusted(ctx, args[1:], stdout)
 	default:
 		fmt.Fprintf(stderr, "unknown artifacts subcommand: %s\n", args[0])
 		return exitValidation
@@ -1036,6 +1038,37 @@ func runArtifactsList(ctx context.Context, args []string, stdout io.Writer) int 
 	}
 	for _, artifact := range artifacts {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\tlatest=%d\tapproved=%d\t%s\n", artifact.ArtifactID, artifact.ArtifactType, artifact.Status, artifact.LatestVersion, artifact.ApprovedVersion, artifact.Path)
+	}
+	return 0
+}
+
+func runArtifactsTrusted(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("artifacts trusted", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "artifacts_trusted_failed", err)
+	}
+	defer db.Close()
+	artifacts, err := db.TrustedArtifactContentBundle(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "artifacts_trusted_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"artifacts": artifacts}, 0)
+	}
+	if len(artifacts) == 0 {
+		fmt.Fprintln(stdout, "No trusted artifacts.")
+		return 0
+	}
+	for _, artifact := range artifacts {
+		fmt.Fprintf(stdout, "%s\t%s\tv%d\t%s\t%s\n", artifact.ArtifactID, artifact.ArtifactType, artifact.Version, artifact.Status, artifact.Path)
 	}
 	return 0
 }
@@ -2835,6 +2868,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos plan consolidate [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan checkpoint --task TASK_ID [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
+	fmt.Fprintln(w, "  devos artifacts trusted [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")

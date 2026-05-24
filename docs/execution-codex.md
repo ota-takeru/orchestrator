@@ -154,6 +154,29 @@ Auto-reviewは権限境界を広げる仕組みではありません。filesyste
 | dependency_install | Orchestrator-controlled runner | package registry lane | human decision後のみ |
 | research | separate lane | allowlist network | source captured note必須 |
 
+## Real Codex Adapter Policy
+
+`devos run --real-codex` はprimary environmentの `os_family`、`codex_adapter`、`shell`、`project_root`、DevOS process runtimeを照合してからCodex processを起動します。これはCodex側のapproval promptへ制御を渡さず、DevOS側が実行可否を先に決めるためです。
+
+対応policy:
+
+| Environment | Required adapter | Runtime | Project root | Shell |
+| --- | --- | --- | --- | --- |
+| `linux` | `codex-linux` | Linux | POSIX absolute path | `bash` / `sh` |
+| `wsl` | `codex-wsl` | Linux / WSL | POSIX absolute path | `bash` / `sh` |
+| `windows` | `codex-windows` | Windows | Windows absolute pathまたはUNC path | `powershell` / `cmd` |
+
+runtime不一致、adapter不一致、path style不一致、remote runner未設定などはCodex processを起動せず、`implementation` runを`blocked`として保存します。そのうえでTaskを `needs_decision` にし、Decision / Human Inboxへ次のような分類を保存します。
+
+- `windows_codex_adapter_requires_windows_runtime`
+- `wsl_codex_adapter_requires_linux_runtime`
+- `linux_codex_adapter_requires_linux_runtime`
+- `codex_adapter_mismatch`
+- `project_root_mismatch`
+- `remote_runner_required`
+
+Windows native CodexはWindows上で動くDevOS runtimeからだけ実行できます。Linux/WSL上のDevOS processがWindows pathへ直接 `codex.exe` を起動する設計にはしません。Windows/WSLはそれぞれ別の `CODEX_HOME`、sandbox、auth境界を持つものとして扱い、共有を仮定しません。
+
 approval eventが出た場合:
 
 1. Codex processのイベントを保存し、runを `blocked` にする。

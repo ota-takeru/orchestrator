@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -49,6 +50,41 @@ func TestServerRejectsInvalidSnapshotLimit(t *testing.T) {
 	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServerApprovesInboxDecision(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO decisions(
+  id, project_id, status, title, options_json, evidence_json, created_at, updated_at
+) VALUES ('DEC-001', ?, 'open', 'Need decision', '[{"id":"A","label":"A"}]', '{}', ?, ?)`, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (
+  'INBOX-001', ?, 'human_decision', 'open', 'decision', 'DEC-001',
+  'decision:DEC-001', 80, 'Need decision', 'Choose option', ?, ?
+)`, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/inbox/INBOX-001/approve", bytes.NewBufferString(`{"option":"A","notes":"ok"}`))
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var result storage.InboxApprovalResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Decision == nil || result.Decision.Status != "approved" {
+		t.Fatalf("approval result = %#v", result)
 	}
 }
 

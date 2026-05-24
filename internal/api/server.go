@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ota-takeru/orchestrator/internal/storage"
 )
@@ -22,6 +23,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/ui/snapshot", s.handleUISnapshot)
 	mux.HandleFunc("/api/inbox", s.handleInbox)
+	mux.HandleFunc("/api/inbox/", s.handleInboxItem)
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	return mux
 }
@@ -70,6 +72,37 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	id, action, ok := parseInboxActionPath(r.URL.Path)
+	if !ok || action != "approve" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown inbox action")
+		return
+	}
+	var input struct {
+		Option string `json:"option"`
+		Notes  string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	result, err := s.db.ApproveInboxItem(r.Context(), storage.InboxApprovalInput{
+		ProjectID: s.projectID,
+		InboxID:   id,
+		Option:    input.Option,
+		Notes:     input.Notes,
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "inbox_approve_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
@@ -82,6 +115,18 @@ func (s *Server) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"decisions": decisions})
+}
+
+func parseInboxActionPath(path string) (string, string, bool) {
+	trimmed := strings.Trim(path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "inbox" {
+		return "", "", false
+	}
+	if strings.TrimSpace(parts[2]) == "" || strings.TrimSpace(parts[3]) == "" {
+		return "", "", false
+	}
+	return parts[2], parts[3], true
 }
 
 func writeAPIJSON(w http.ResponseWriter, status int, value any) {

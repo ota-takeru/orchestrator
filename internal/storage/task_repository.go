@@ -126,6 +126,37 @@ INSERT OR IGNORE INTO work_queue_items(
 	return queueID, nil
 }
 
+func (db *DB) EnqueueTaskRepair(ctx context.Context, projectID string, taskID string, causeRunID string) (WorkQueueItemRecord, error) {
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(taskID) == "" {
+		return WorkQueueItemRecord{}, fmt.Errorf("project id and task id are required")
+	}
+	if strings.TrimSpace(causeRunID) == "" {
+		causeRunID = "unknown"
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	queueID := "WQ-" + stableShortHash(projectID+"|task_repair|"+taskID+"|"+causeRunID)
+	idempotencyKey := "task_repair:" + taskID + ":" + causeRunID
+	if _, err := db.sql.ExecContext(ctx, `
+INSERT OR IGNORE INTO work_queue_items(
+  id, project_id, lane, item_type, item_id, status, priority,
+  attempt_no, max_attempts, idempotency_key, created_at, updated_at
+) VALUES (?, ?, 'execution', 'task_repair', ?, 'queued', 'medium', 0, 3, ?, ?, ?)`,
+		queueID, projectID, taskID, idempotencyKey, now, now,
+	); err != nil {
+		return WorkQueueItemRecord{}, err
+	}
+	items, err := db.ListWorkQueueItems(ctx, projectID, "")
+	if err != nil {
+		return WorkQueueItemRecord{}, err
+	}
+	for _, item := range items {
+		if item.ID == queueID {
+			return item, nil
+		}
+	}
+	return WorkQueueItemRecord{}, fmt.Errorf("repair queue item not found: %s", queueID)
+}
+
 func (db *DB) ListTasks(ctx context.Context, projectID string, status string) ([]TaskRecord, error) {
 	query := "SELECT id, status, title, verification_commands_json FROM tasks WHERE project_id = ?"
 	args := []any{projectID}

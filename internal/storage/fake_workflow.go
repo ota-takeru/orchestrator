@@ -17,6 +17,7 @@ type FakeRunResult struct {
 	TaskID            string `json:"task_id"`
 	TaskStatus        string `json:"task_status"`
 	ImplementationRun string `json:"implementation_run_id"`
+	RepairRun         string `json:"repair_run_id,omitempty"`
 	VerificationRun   string `json:"verification_run_id"`
 }
 
@@ -89,7 +90,89 @@ func (db *DB) RunFakeTask(ctx context.Context, projectID string, taskID string) 
 	if err := db.transitionTask(ctx, projectID, taskID, "reviewing", next, "fake_gate_evaluated", map[string]any{"run_id": verificationRunID}); err != nil {
 		return FakeRunResult{}, err
 	}
+	if next == "repairing" {
+		if _, err := db.EnqueueTaskRepair(ctx, projectID, taskID, verificationRunID); err != nil {
+			return FakeRunResult{}, err
+		}
+	}
 	return FakeRunResult{TaskID: taskID, TaskStatus: next, ImplementationRun: implementationRunID, VerificationRun: verificationRunID}, nil
+}
+
+func (db *DB) RunFakeRepairTask(ctx context.Context, projectID string, taskID string) (FakeRunResult, error) {
+	status, err := db.taskStatus(ctx, projectID, taskID)
+	if err != nil {
+		return FakeRunResult{}, err
+	}
+	if status != "repairing" {
+		return FakeRunResult{}, fmt.Errorf("task %s is not repairing: %s", taskID, status)
+	}
+	env, err := db.primaryEnvironment(ctx, projectID)
+	if err != nil {
+		return FakeRunResult{}, err
+	}
+	repairAttempt, err := db.nextRunAttempt(ctx, projectID, taskID, "repair")
+	if err != nil {
+		return FakeRunResult{}, err
+	}
+	repairRunID, err := db.createTerminalRun(ctx, projectID, taskID, "repair", "succeeded", repairAttempt, "BASE", "HEAD-REPAIR-"+stableShortHash(taskID), "DIFF-REPAIR-"+stableShortHash(taskID))
+	if err != nil {
+		return FakeRunResult{}, err
+	}
+	if _, err := db.SaveRunArtifact(ctx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        repairRunID,
+		ArtifactType: "diff",
+		ArtifactKey:  "diff.patch",
+		Content:      []byte("diff --git a/fake.txt b/fake.txt\n"),
+	}); err != nil {
+		return FakeRunResult{}, err
+	}
+	if err := db.transitionTask(ctx, projectID, taskID, "repairing", "verifying", "fake_repair_completed", map[string]any{"run_id": repairRunID}); err != nil {
+		return FakeRunResult{}, err
+	}
+
+	verificationRunID := "RUN-" + stableShortHash(taskID+"|repair-verification|"+time.Now().UTC().Format(time.RFC3339Nano))
+	verificationAttempt, err := db.nextRunAttempt(ctx, projectID, taskID, "verification")
+	if err != nil {
+		return FakeRunResult{}, err
+	}
+	command := verifier.Command{
+		ID:               "fake-repair-verification",
+		EnvironmentID:    env.ID,
+		Runner:           "fake",
+		WorkingDir:       env.ProjectRoot,
+		Argv:             []string{"verify"},
+		NetworkPolicy:    runners.NetworkOff,
+		RequiredForMerge: true,
+	}
+	report, err := verifier.Run(ctx, verificationRunID, verifier.StaticRunnerRegistry{env.ID: fakeRunnerForEnvironment(env)}, []verifier.Command{command})
+	if err != nil {
+		return FakeRunResult{}, err
+	}
+	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
+		ProjectID:  projectID,
+		TaskID:     &taskID,
+		RunID:      verificationRunID,
+		RunType:    "verification",
+		AttemptNo:  verificationAttempt,
+		BaseCommit: "BASE",
+		Commands:   []verifier.Command{command},
+		Report:     report,
+	}); err != nil {
+		return FakeRunResult{}, err
+	}
+	if err := db.transitionTask(ctx, projectID, taskID, "verifying", "reviewing", "fake_repair_verification_completed", map[string]any{"run_id": verificationRunID}); err != nil {
+		return FakeRunResult{}, err
+	}
+	gates := decisions.EvaluateVerification(report)
+	if err := db.SaveGateResults(ctx, projectID, &taskID, verificationRunID, gates); err != nil {
+		return FakeRunResult{}, err
+	}
+	next := taskStatusFromGateResults(gates)
+	if err := db.transitionTask(ctx, projectID, taskID, "reviewing", next, "fake_repair_gate_evaluated", map[string]any{"run_id": verificationRunID}); err != nil {
+		return FakeRunResult{}, err
+	}
+	return FakeRunResult{TaskID: taskID, TaskStatus: next, RepairRun: repairRunID, VerificationRun: verificationRunID}, nil
 }
 
 func (db *DB) taskStatus(ctx context.Context, projectID string, taskID string) (string, error) {

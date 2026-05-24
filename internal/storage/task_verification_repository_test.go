@@ -63,6 +63,35 @@ WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"task-smoke","env
 	}
 }
 
+func TestVerificationCurrentDiffTriggersAutoRepairQueue(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE tasks
+SET verification_commands_json = ?
+WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"task-smoke","environment":"primary","runner":"auto","required_for_merge":true,"working_dir":"task_worktree","command":{"argv":["fail"]},"network":false}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "repairing" {
+		t.Fatalf("task status = %s", result.TaskStatus)
+	}
+	items, err := db.ListWorkQueueItems(ctx, "PROJECT-001", "queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemType != "task_repair" || items[0].ItemID != "TASK-001" {
+		t.Fatalf("repair queue = %#v", items)
+	}
+}
+
 func TestVerifyTaskLocalWithoutKnownCommandsNeedsDecision(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

@@ -211,7 +211,15 @@ func (db *DB) ProcessExecutionQueueFake(ctx context.Context, projectID string, l
 		if err != nil {
 			return nil, err
 		}
-		run, err := db.RunFakeTask(ctx, projectID, item.ItemID)
+		var run FakeRunResult
+		switch item.ItemType {
+		case "task_implementation":
+			run, err = db.RunFakeTask(ctx, projectID, item.ItemID)
+		case "task_repair":
+			run, err = db.RunFakeRepairTask(ctx, projectID, item.ItemID)
+		default:
+			err = fmt.Errorf("unsupported execution queue item type: %s", item.ItemType)
+		}
 		if err != nil {
 			_ = db.markWorkQueueItemFailed(ctx, projectID, item.ID, err)
 			return nil, err
@@ -337,9 +345,11 @@ FROM work_queue_items wq
 JOIN tasks t ON t.project_id = wq.project_id AND t.id = wq.item_id
 WHERE wq.project_id = ?
   AND wq.lane = 'execution'
-  AND wq.item_type = 'task_implementation'
   AND wq.status = 'queued'
-  AND t.status = 'ready'
+  AND (
+    (wq.item_type = 'task_implementation' AND t.status = 'ready')
+    OR (wq.item_type = 'task_repair' AND t.status = 'repairing')
+  )
 ORDER BY wq.created_at ASC
 LIMIT ?`, projectID, limit)
 	if err != nil {

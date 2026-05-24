@@ -276,6 +276,37 @@ func TestStartWorkProcessesExecutionQueue(t *testing.T) {
 	}
 }
 
+func TestStartWorkProcessesQueuedRepair(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
+	insertTask(t, db, "PROJECT-001", "TASK-001", "repairing")
+	if _, err := db.EnqueueTaskRepair(ctx, "PROJECT-001", "TASK-001", "RUN-FAILED"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.StartWork(ctx, WorkStartInput{
+		ProjectID:                 "PROJECT-001",
+		Mode:                      "sequential",
+		PlanningConcurrency:       1,
+		ImplementationConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Execution) != 1 || result.Execution[0].TaskStatus != "ready_for_human_review" || result.Execution[0].Run.RepairRun == "" {
+		t.Fatalf("work result = %#v", result)
+	}
+	var taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "ready_for_human_review" {
+		t.Fatalf("task status = %s", taskStatus)
+	}
+}
+
 func TestPauseAndResumeWorkerRun(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

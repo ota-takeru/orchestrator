@@ -93,6 +93,11 @@ func (db *DB) VerifyTask(ctx context.Context, projectID string, taskID string, i
 	}); err != nil {
 		return VerifyTaskResult{}, err
 	}
+	if next == "repairing" {
+		if _, err := db.EnqueueTaskRepair(ctx, projectID, taskID, runID); err != nil {
+			return VerifyTaskResult{}, err
+		}
+	}
 	return VerifyTaskResult{
 		TaskID:          taskID,
 		TaskStatus:      next,

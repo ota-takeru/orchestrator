@@ -12,7 +12,7 @@ func TestInstallAndValidateSchemaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.CreatedPaths) != 3 {
+	if len(result.CreatedPaths) != 4 {
 		t.Fatalf("created paths = %#v", result.CreatedPaths)
 	}
 	validation := ValidateInstalled(root)
@@ -45,5 +45,17 @@ func TestValidateCodexFinalMessage(t *testing.T) {
 	}
 	if err := ValidateCodexFinalMessage(`not json`); err == nil {
 		t.Fatal("expected non-json final message to fail")
+	}
+}
+
+func TestValidateSemanticBehaviorDiff(t *testing.T) {
+	if err := ValidateSemanticBehaviorDiff(`[{"category":"user_visible","summary":"UI changed","confidence":"high","evidence":[{"file":"ui/src/App.tsx","change_type":"modified","source":"git_diff","generated":false}]}]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSemanticBehaviorDiff(`[{"category":"unknown","summary":"bad","confidence":"high","evidence":[]}]`); err == nil {
+		t.Fatal("expected invalid category to fail")
+	}
+	if err := ValidateSemanticBehaviorDiff(`[]`); err == nil {
+		t.Fatal("expected empty diff report to fail")
 	}
 }

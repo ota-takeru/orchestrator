@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 )
 
 type TaskReviewResult struct {
@@ -82,6 +84,13 @@ func (db *DB) ReviewTask(ctx context.Context, projectID string, taskID string) (
 	for i := range records {
 		records[i].RunID = runID
 		records[i].ID = semanticBehaviorDiffID(projectID, taskID, runID, records[i].Category)
+	}
+	semanticPayload, err := semanticValidationPayload(records)
+	if err != nil {
+		return TaskReviewResult{}, err
+	}
+	if err := schemas.ValidateSemanticBehaviorDiff(string(semanticPayload)); err != nil {
+		return TaskReviewResult{}, err
 	}
 	reviewContent, err := json.MarshalIndent(map[string]any{
 		"task_id":                taskID,
@@ -301,6 +310,28 @@ func semanticDiffJSON(record SemanticBehaviorDiffRecord) (string, string, error)
 		return "", "", err
 	}
 	return string(summaryJSON), string(evidenceJSON), nil
+}
+
+func semanticValidationPayload(records []SemanticBehaviorDiffRecord) ([]byte, error) {
+	items := make([]schemas.SemanticBehaviorDiffItem, 0, len(records))
+	for _, record := range records {
+		evidence := make([]schemas.SemanticBehaviorDiffEvidence, 0, len(record.Evidence))
+		for _, item := range record.Evidence {
+			evidence = append(evidence, schemas.SemanticBehaviorDiffEvidence{
+				File:       item.File,
+				ChangeType: item.ChangeType,
+				Source:     item.Source,
+				Generated:  item.Generated,
+			})
+		}
+		items = append(items, schemas.SemanticBehaviorDiffItem{
+			Category:   record.Category,
+			Summary:    record.Summary,
+			Confidence: record.Confidence,
+			Evidence:   evidence,
+		})
+	}
+	return json.Marshal(items)
 }
 
 func evidenceFiles(evidence []SemanticDiffEvidence) []string {

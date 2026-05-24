@@ -17,6 +17,7 @@ type SchemaKind string
 const (
 	SchemaKindTaskYAML          SchemaKind = "task_yaml"
 	SchemaKindCodexFinalMessage SchemaKind = "codex_final_message"
+	SchemaKindSemanticDiff      SchemaKind = "semantic_behavior_diff"
 )
 
 type Definition struct {
@@ -72,6 +73,13 @@ func Definitions() []Definition {
 			File:    "codex-final-message.v1.schema.json",
 			Content: []byte(codexFinalMessageSchema),
 		},
+		{
+			ID:      "devos.semantic-behavior-diff",
+			Kind:    SchemaKindSemanticDiff,
+			Version: "1",
+			File:    "semantic-behavior-diff.v1.schema.json",
+			Content: []byte(semanticBehaviorDiffSchema),
+		},
 	}
 }
 
@@ -113,6 +121,63 @@ func ValidateCodexFinalMessage(raw string) error {
 		case "passed", "failed", "not_run":
 		default:
 			return fmt.Errorf("codex final message test %d has invalid status: %s", i, test.Status)
+		}
+	}
+	return nil
+}
+
+type SemanticBehaviorDiffItem struct {
+	Category   string                         `json:"category"`
+	Summary    string                         `json:"summary"`
+	Confidence string                         `json:"confidence"`
+	Evidence   []SemanticBehaviorDiffEvidence `json:"evidence"`
+}
+
+type SemanticBehaviorDiffEvidence struct {
+	File       string `json:"file"`
+	ChangeType string `json:"change_type"`
+	Source     string `json:"source"`
+	Generated  bool   `json:"generated"`
+}
+
+func SemanticBehaviorDiffSchema() []byte {
+	return []byte(semanticBehaviorDiffSchema)
+}
+
+func ValidateSemanticBehaviorDiff(raw string) error {
+	var items []SemanticBehaviorDiffItem
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return fmt.Errorf("semantic behavior diff must be JSON array: %w", err)
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("semantic behavior diff requires at least one item")
+	}
+	for i, item := range items {
+		switch item.Category {
+		case "user_visible", "non_user_visible", "risk", "test_change":
+		default:
+			return fmt.Errorf("semantic behavior diff item %d has invalid category: %s", i, item.Category)
+		}
+		if strings.TrimSpace(item.Summary) == "" {
+			return fmt.Errorf("semantic behavior diff item %d requires summary", i)
+		}
+		switch item.Confidence {
+		case "high", "medium", "low":
+		default:
+			return fmt.Errorf("semantic behavior diff item %d has invalid confidence: %s", i, item.Confidence)
+		}
+		for j, evidence := range item.Evidence {
+			if strings.TrimSpace(evidence.File) == "" {
+				return fmt.Errorf("semantic behavior diff item %d evidence %d requires file", i, j)
+			}
+			switch evidence.ChangeType {
+			case "added", "modified", "deleted", "renamed":
+			default:
+				return fmt.Errorf("semantic behavior diff item %d evidence %d has invalid change type: %s", i, j, evidence.ChangeType)
+			}
+			if strings.TrimSpace(evidence.Source) == "" {
+				return fmt.Errorf("semantic behavior diff item %d evidence %d requires source", i, j)
+			}
 		}
 	}
 	return nil
@@ -330,6 +395,38 @@ const codexFinalMessageSchema = `{
     "blockers": {
       "type": "array",
       "items": { "type": "string" }
+    }
+  }
+}`
+
+const semanticBehaviorDiffSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.semantic-behavior-diff.v1",
+  "title": "DevOS Semantic Behavior Diff",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "required": ["category", "summary", "confidence", "evidence"],
+    "additionalProperties": false,
+    "properties": {
+      "category": { "type": "string", "enum": ["user_visible", "non_user_visible", "risk", "test_change"] },
+      "summary": { "type": "string", "minLength": 1 },
+      "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+      "evidence": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["file", "change_type", "source", "generated"],
+          "additionalProperties": false,
+          "properties": {
+            "file": { "type": "string", "minLength": 1 },
+            "change_type": { "type": "string", "enum": ["added", "modified", "deleted", "renamed"] },
+            "source": { "type": "string", "minLength": 1 },
+            "generated": { "type": "boolean" }
+          }
+        }
+      }
     }
   }
 }`

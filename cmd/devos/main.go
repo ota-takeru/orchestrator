@@ -495,6 +495,10 @@ func runWork(ctx context.Context, args []string, stdout io.Writer) int {
 		return runWorkStart(ctx, args[1:], stdout)
 	case "status":
 		return runWorkStatus(ctx, args[1:], stdout)
+	case "pause":
+		return runWorkPause(ctx, args[1:], stdout)
+	case "resume":
+		return runWorkResume(ctx, args[1:], stdout)
 	default:
 		return writeError(stdout, false, exitValidation, "invalid_arguments", fmt.Errorf("unknown work subcommand: %s", args[0]))
 	}
@@ -565,6 +569,62 @@ func runWorkStatus(ctx context.Context, args []string, stdout io.Writer) int {
 		return writeJSON(stdout, status, 0)
 	}
 	fmt.Fprintf(stdout, "Worker runs: %d\n", len(status.WorkerRuns))
+	return 0
+}
+
+func runWorkPause(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("work pause", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("worker run id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "work_pause_failed", err)
+	}
+	defer db.Close()
+	record, err := db.PauseWorkerRun(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "work_pause_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, record, 0)
+	}
+	fmt.Fprintf(stdout, "Worker paused: %s %s\n", record.ID, record.Status)
+	return 0
+}
+
+func runWorkResume(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("work resume", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("worker run id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "work_resume_failed", err)
+	}
+	defer db.Close()
+	record, err := db.ResumeWorkerRun(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "work_resume_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, record, 0)
+	}
+	fmt.Fprintf(stdout, "Worker resumed: %s %s\n", record.ID, record.Status)
 	return 0
 }
 
@@ -2152,6 +2212,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos queue [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos work start [--project-root PATH] [--data-root PATH] [--mode sequential] [--planning-concurrency N] [--implementation-concurrency 1] [--until inbox] [--budget DURATION] [--json]")
 	fmt.Fprintln(w, "  devos work status [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos work pause [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")
+	fmt.Fprintln(w, "  devos work resume [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--verify] [--verify-adapter local|fake] [--verify-env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos verify [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")

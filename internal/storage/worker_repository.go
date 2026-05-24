@@ -101,6 +101,58 @@ func (db *DB) GetWorkStatus(ctx context.Context, projectID string) (WorkStatus, 
 	return WorkStatus{WorkerRuns: workerRuns, Planning: planning}, nil
 }
 
+func (db *DB) PauseWorkerRun(ctx context.Context, projectID string, workerRunID string) (WorkerRunRecord, error) {
+	if strings.TrimSpace(workerRunID) == "" {
+		return WorkerRunRecord{}, fmt.Errorf("worker run id is required")
+	}
+	record, err := db.getWorkerRun(ctx, projectID, workerRunID)
+	if err != nil {
+		return WorkerRunRecord{}, err
+	}
+	if record.Status == "paused" {
+		return record, nil
+	}
+	if record.Status != "running" {
+		return WorkerRunRecord{}, fmt.Errorf("worker run is not running: %s", record.Status)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.sql.ExecContext(ctx, `
+UPDATE worker_runs
+SET status = 'paused', stop_reason = 'paused_by_human', last_heartbeat_at = ?
+WHERE project_id = ? AND id = ? AND status = 'running'`,
+		now, projectID, workerRunID,
+	); err != nil {
+		return WorkerRunRecord{}, err
+	}
+	return db.getWorkerRun(ctx, projectID, workerRunID)
+}
+
+func (db *DB) ResumeWorkerRun(ctx context.Context, projectID string, workerRunID string) (WorkerRunRecord, error) {
+	if strings.TrimSpace(workerRunID) == "" {
+		return WorkerRunRecord{}, fmt.Errorf("worker run id is required")
+	}
+	record, err := db.getWorkerRun(ctx, projectID, workerRunID)
+	if err != nil {
+		return WorkerRunRecord{}, err
+	}
+	if record.Status == "running" {
+		return record, nil
+	}
+	if record.Status != "paused" {
+		return WorkerRunRecord{}, fmt.Errorf("worker run is not paused: %s", record.Status)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.sql.ExecContext(ctx, `
+UPDATE worker_runs
+SET status = 'running', stop_reason = NULL, last_heartbeat_at = ?
+WHERE project_id = ? AND id = ? AND status = 'paused'`,
+		now, projectID, workerRunID,
+	); err != nil {
+		return WorkerRunRecord{}, err
+	}
+	return db.getWorkerRun(ctx, projectID, workerRunID)
+}
+
 func (db *DB) ListWorkerRuns(ctx context.Context, projectID string) ([]WorkerRunRecord, error) {
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT id, lane, mode, max_concurrency, status, started_at, finished_at,
@@ -121,6 +173,31 @@ ORDER BY started_at ASC`, projectID)
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func (db *DB) getWorkerRun(ctx context.Context, projectID string, workerRunID string) (WorkerRunRecord, error) {
+	var record WorkerRunRecord
+	var finishedAt, stopReason, leaseOwner, lastHeartbeatAt sql.NullString
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT id, lane, mode, max_concurrency, status, started_at, finished_at,
+       stop_reason, lease_owner, last_heartbeat_at
+FROM worker_runs
+WHERE project_id = ? AND id = ?`, projectID, workerRunID).Scan(
+		&record.ID,
+		&record.Lane,
+		&record.Mode,
+		&record.MaxConcurrency,
+		&record.Status,
+		&record.StartedAt,
+		&finishedAt,
+		&stopReason,
+		&leaseOwner,
+		&lastHeartbeatAt,
+	); err != nil {
+		return WorkerRunRecord{}, err
+	}
+	applyNullableWorkerRunFields(&record, finishedAt, stopReason, leaseOwner, lastHeartbeatAt)
+	return record, nil
 }
 
 func (db *DB) createWorkerRun(ctx context.Context, projectID string, lane string, mode string, maxConcurrency int) (WorkerRunRecord, error) {
@@ -158,28 +235,7 @@ WHERE project_id = ? AND id = ? AND status = 'running'`,
 	); err != nil {
 		return WorkerRunRecord{}, err
 	}
-	var record WorkerRunRecord
-	var finishedAt, stopReasonValue, leaseOwner, lastHeartbeatAt sql.NullString
-	if err := db.sql.QueryRowContext(ctx, `
-SELECT id, lane, mode, max_concurrency, status, started_at, finished_at,
-       stop_reason, lease_owner, last_heartbeat_at
-FROM worker_runs
-WHERE project_id = ? AND id = ?`, projectID, workerRunID).Scan(
-		&record.ID,
-		&record.Lane,
-		&record.Mode,
-		&record.MaxConcurrency,
-		&record.Status,
-		&record.StartedAt,
-		&finishedAt,
-		&stopReasonValue,
-		&leaseOwner,
-		&lastHeartbeatAt,
-	); err != nil {
-		return WorkerRunRecord{}, err
-	}
-	applyNullableWorkerRunFields(&record, finishedAt, stopReasonValue, leaseOwner, lastHeartbeatAt)
-	return record, nil
+	return db.getWorkerRun(ctx, projectID, workerRunID)
 }
 
 func scanWorkerRun(scanner interface {

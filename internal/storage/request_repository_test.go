@@ -152,3 +152,35 @@ func TestStartWorkProcessesPlanningAndConsolidation(t *testing.T) {
 		t.Fatalf("work status = %#v", status)
 	}
 }
+
+func TestPauseAndResumeWorkerRun(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	running, err := db.createWorkerRun(ctx, "PROJECT-001", "planning", "bounded_parallel", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paused, err := db.PauseWorkerRun(ctx, "PROJECT-001", running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.Status != "paused" {
+		t.Fatalf("paused = %#v", paused)
+	}
+	pausedAgain, err := db.PauseWorkerRun(ctx, "PROJECT-001", running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pausedAgain.Status != "paused" {
+		t.Fatalf("paused again = %#v", pausedAgain)
+	}
+	resumed, err := db.ResumeWorkerRun(ctx, "PROJECT-001", running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != "running" {
+		t.Fatalf("resumed = %#v", resumed)
+	}
+}

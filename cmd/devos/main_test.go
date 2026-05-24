@@ -175,6 +175,29 @@ func TestWorkStartCLIWorkflow(t *testing.T) {
 	}
 }
 
+func TestWorkPauseResumeCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Work pause workflow")
+	workerID := insertCLIWorkerRun(t, ctx, dataRoot, projectRoot)
+	pauseOut := runCLI(t, "work", "pause", "--project-root", projectRoot, "--data-root", dataRoot, "--json", workerID)
+	var paused storage.WorkerRunRecord
+	decodeJSON(t, pauseOut, &paused)
+	if paused.Status != "paused" {
+		t.Fatalf("paused = %#v", paused)
+	}
+
+	resumeOut := runCLI(t, "work", "resume", "--project-root", projectRoot, "--data-root", dataRoot, "--json", workerID)
+	var resumed storage.WorkerRunRecord
+	decodeJSON(t, resumeOut, &resumed)
+	if resumed.Status != "running" {
+		t.Fatalf("resumed = %#v", resumed)
+	}
+}
+
 func TestReviewRejectCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()
@@ -743,6 +766,27 @@ INSERT INTO inbox_items(
 		t.Fatal(err)
 	}
 	return inboxID
+}
+
+func insertCLIWorkerRun(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) string {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	workerID := "WORKER-CLI-001"
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO worker_runs(
+  id, project_id, lane, mode, max_concurrency, status,
+  started_at, lease_owner, last_heartbeat_at
+) VALUES (?, ?, 'planning', 'bounded_parallel', 3, 'running', ?, 'test', ?)`,
+		workerID, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return workerID
 }
 
 func ptr[T any](v T) *T {

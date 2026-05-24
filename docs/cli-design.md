@@ -169,6 +169,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos platform map add` | `FROM_ENV`, `TO_ENV`, `--from-root`, `--to-root`, `--mode` | path_mappings作成 | validation failureなら保存しない |
 | `devos platform setup instructions` | `INBOX_ID`, `--json` | Toolchain Setup Cardの手動セットアップ手順表示 | 自動インストールはしない |
 | `devos platform setup mark-installed` | `INBOX_ID`, `--json` | doctor再実行、toolchain_requirements / setup card同期 | doctorが検出した場合だけresolved |
+| `devos platform setup waive` | `INBOX_ID`, `--reason`, `--scope`, `--expiry`, `--allowed-effect`, `--json` | approved decision、toolchain requirement waived、setup card resolved | reason/scope/expiry/allowed-effect必須。`allow_merge_without_toolchain` を明示したwaiverだけmerge向けwaiveとして扱う |
 | `devos platform map list` | `--json` | なし | read-only |
 
 `devos init "concept"` の初期生成物:

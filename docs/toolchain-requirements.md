@@ -37,6 +37,23 @@ revoked
 
 `waived` はproject policyまたは明示的な人間判断でのみ設定できます。required verificationに必要なtoolchainをwaiveする場合はGate policyでmerge可否を明示します。
 
+Toolchain waiverは通常のapproveではなくDecisionです。`devos platform setup waive` は次を必須にします。
+
+- reason
+- scope
+- expiry
+- allowed_effect
+
+`allowed_effect` の正規値:
+
+```text
+report_only
+allow_non_merge_without_toolchain
+allow_merge_without_toolchain
+```
+
+`allow_merge_without_toolchain` を明示していないwaiverは、merge block解除として扱ってはいけません。
+
 ## ToolchainRequirement Required For
 
 `toolchain_requirements.required_for` の正規値:

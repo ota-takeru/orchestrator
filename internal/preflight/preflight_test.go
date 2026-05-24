@@ -61,8 +61,8 @@ func TestInitProjectCreatesConceptAndPolicy(t *testing.T) {
 	if _, err := os.Stat(result.PolicyPath); err != nil {
 		t.Fatalf("policy not created: %v", err)
 	}
-	if len(result.CreatedPaths) != 8 {
-		t.Fatalf("created paths = %d, want 8", len(result.CreatedPaths))
+	if len(result.CreatedPaths) != 9 {
+		t.Fatalf("created paths = %d, want 9", len(result.CreatedPaths))
 	}
 	var schemaPass bool
 	for _, finding := range result.PreflightReport.Findings {

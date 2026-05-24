@@ -125,6 +125,26 @@ WHERE project_id = 'PROJECT-001' AND memory_type = 'baseline_issue'`).Scan(&memo
 	}
 }
 
+func TestSaveGateResultsValidatesSchema(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	insertRunForGate(t, db, "PROJECT-001", "RUN-001")
+
+	results := []decisions.GateResult{
+		{
+			Status:   decisions.GatePass,
+			Severity: decisions.SeverityLow,
+			Detector: "",
+			Evidence: map[string]any{"run_id": "RUN-001"},
+		},
+	}
+	if err := db.SaveGateResults(ctx, "PROJECT-001", nil, "RUN-001", results); err == nil {
+		t.Fatal("expected invalid gate result schema to fail")
+	}
+}
+
 func insertRunForGate(t *testing.T, db *DB, projectID string, runID string) {
 	t.Helper()
 	_, err := db.SQL().ExecContext(context.Background(), `

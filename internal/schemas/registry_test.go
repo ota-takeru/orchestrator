@@ -12,7 +12,7 @@ func TestInstallAndValidateSchemaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.CreatedPaths) != 6 {
+	if len(result.CreatedPaths) != 7 {
 		t.Fatalf("created paths = %#v", result.CreatedPaths)
 	}
 	validation := ValidateInstalled(root)
@@ -115,5 +115,27 @@ func TestValidateHumanInboxSnapshot(t *testing.T) {
 	}
 	if err := ValidateHumanInboxSnapshot(`{"project_id":"PROJECT-001","generated_at":"2026-05-24T00:00:00Z","counts":{"open_inbox_items":0,"running_tasks":0,"waiting_for_human_tasks":0,"blocked_tasks":0,"queued_requests":0,"open_decisions":0,"running_workers":0,"open_merge_queue":0,"baseline_issues":0},"open_inbox_items":[{"id":"INBOX-001"}]}`); err == nil {
 		t.Fatal("expected item/count mismatch to fail")
+	}
+}
+
+func TestValidateGateResult(t *testing.T) {
+	valid := `{
+	  "status":"HUMAN_DECISION",
+	  "severity":"high",
+	  "detector":"required_verification_unclassified",
+	  "human_action_type":"decision",
+	  "evidence":{"run_id":"RUN-001"}
+	}`
+	if err := ValidateGateResult(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateGateResult(`{"status":"OK","severity":"high","detector":"x","evidence":{"run_id":"RUN-001"}}`); err == nil {
+		t.Fatal("expected invalid gate status to fail")
+	}
+	if err := ValidateGateResult(`{"status":"PASS","severity":"low","detector":"","evidence":{"run_id":"RUN-001"}}`); err == nil {
+		t.Fatal("expected empty gate detector to fail")
+	}
+	if err := ValidateGateResult(`{"status":"PASS","severity":"low","detector":"verification_passed","evidence":[]}`); err == nil {
+		t.Fatal("expected empty gate evidence array to fail")
 	}
 }

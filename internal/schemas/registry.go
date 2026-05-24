@@ -20,6 +20,7 @@ const (
 	SchemaKindSemanticDiff       SchemaKind = "semantic_behavior_diff"
 	SchemaKindDependencyRisk     SchemaKind = "dependency_risk_ledger"
 	SchemaKindHumanInboxSnapshot SchemaKind = "human_inbox_snapshot"
+	SchemaKindGateResult         SchemaKind = "gate_result"
 )
 
 type Definition struct {
@@ -95,6 +96,13 @@ func Definitions() []Definition {
 			Version: "1",
 			File:    "human-inbox-snapshot.v1.schema.json",
 			Content: []byte(humanInboxSnapshotSchema),
+		},
+		{
+			ID:      "devos.gate-result",
+			Kind:    SchemaKindGateResult,
+			Version: "1",
+			File:    "gate-result.v1.schema.json",
+			Content: []byte(gateResultSchema),
 		},
 	}
 }
@@ -339,6 +347,49 @@ func ValidateHumanInboxSnapshot(raw string) error {
 		if strings.TrimSpace(command) == "" {
 			return fmt.Errorf("human inbox snapshot recommended command %d is empty", i)
 		}
+	}
+	return nil
+}
+
+type GateResult struct {
+	Status          string          `json:"status"`
+	Severity        string          `json:"severity"`
+	Detector        string          `json:"detector"`
+	HumanActionType string          `json:"human_action_type,omitempty"`
+	Evidence        json.RawMessage `json:"evidence"`
+}
+
+func GateResultSchema() []byte {
+	return []byte(gateResultSchema)
+}
+
+func ValidateGateResult(raw string) error {
+	var result GateResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return fmt.Errorf("gate result must be JSON: %w", err)
+	}
+	switch result.Status {
+	case "PASS", "AUTO_REPAIR", "AUTO_REPLAN", "REPORT_ONLY", "HUMAN_INPUT", "HUMAN_DECISION", "HARD_BLOCK":
+	default:
+		return fmt.Errorf("gate result has invalid status: %s", result.Status)
+	}
+	switch result.Severity {
+	case "low", "medium", "high", "critical":
+	default:
+		return fmt.Errorf("gate result has invalid severity: %s", result.Severity)
+	}
+	if strings.TrimSpace(result.Detector) == "" {
+		return fmt.Errorf("gate result requires detector")
+	}
+	if len(result.Evidence) == 0 || string(result.Evidence) == "null" {
+		return fmt.Errorf("gate result requires evidence")
+	}
+	var evidence any
+	if err := json.Unmarshal(result.Evidence, &evidence); err != nil {
+		return fmt.Errorf("gate result evidence must be JSON: %w", err)
+	}
+	if values, ok := evidence.([]any); ok && len(values) == 0 {
+		return fmt.Errorf("gate result evidence array cannot be empty")
 	}
 	return nil
 }
@@ -665,5 +716,24 @@ const humanInboxSnapshotSchema = `{
       "type": "array",
       "items": { "type": "string", "minLength": 1 }
     }
+  }
+}`
+
+const gateResultSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.gate-result.v1",
+  "title": "DevOS Gate Result",
+  "type": "object",
+  "required": ["status", "severity", "detector", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["PASS", "AUTO_REPAIR", "AUTO_REPLAN", "REPORT_ONLY", "HUMAN_INPUT", "HUMAN_DECISION", "HARD_BLOCK"]
+    },
+    "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "detector": { "type": "string", "minLength": 1 },
+    "human_action_type": { "type": "string" },
+    "evidence": {}
   }
 }`

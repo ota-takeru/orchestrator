@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 )
 
 func (db *DB) SaveGateResults(ctx context.Context, projectID string, taskID *string, runID string, results []decisions.GateResult) error {
@@ -30,6 +31,9 @@ func (db *DB) SaveGateResults(ctx context.Context, projectID string, taskID *str
 	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for i, result := range results {
+		if err := validateGateResultSchema(result); err != nil {
+			return err
+		}
 		gateID := gateResultID(runID, result.Detector, i)
 		if err := insertGateResult(ctx, tx, projectID, taskID, runID, gateID, result, now); err != nil {
 			return err
@@ -50,6 +54,20 @@ func (db *DB) SaveGateResults(ctx context.Context, projectID string, taskID *str
 	}
 	committed = true
 	return nil
+}
+
+func validateGateResultSchema(result decisions.GateResult) error {
+	payload, err := json.Marshal(map[string]any{
+		"status":            result.Status,
+		"severity":          result.Severity,
+		"detector":          result.Detector,
+		"human_action_type": result.HumanActionType,
+		"evidence":          result.Evidence,
+	})
+	if err != nil {
+		return err
+	}
+	return schemas.ValidateGateResult(string(payload))
 }
 
 func insertGateResult(ctx context.Context, tx *sql.Tx, projectID string, taskID *string, runID string, gateID string, result decisions.GateResult, now string) error {

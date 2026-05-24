@@ -1049,7 +1049,7 @@ SQLiteにはJSONをTEXTで保存します。保存前にGo structへdecodeし、
 | `decisions.evidence_json` | `.devagent/schemas/decision-report.schema.json` のevidence部分 |
 | `human_approvals.evidence_json` | `HumanApprovalEvidence` |
 | `workflow_events.evidence_json` | `WorkflowEventEvidence` |
-| `gate_results.evidence_json` | `.devagent/schemas/gate-result.schema.json` |
+| `gate_results.evidence_json` | `devos.gate-result.v1` |
 | `gate_results.recommended_next_action_json` | `GateRecommendedNextAction` |
 | `runs.changed_files_json` | `ChangedFile[]` |
 | `runs.touched_test_files_json` | `TouchedTestFile[]` |

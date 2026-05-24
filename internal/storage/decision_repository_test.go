@@ -12,14 +12,14 @@ func TestListDecisions(t *testing.T) {
 	if _, err := db.SQL().ExecContext(ctx, `
 INSERT INTO decisions(
   id, project_id, status, title, options_json, evidence_json, created_at, updated_at
-) VALUES ('DEC-001', 'PROJECT-001', 'open', 'Choose behavior', '[]', '{}', ?, ?)`, now(), now()); err != nil {
+) VALUES ('DEC-001', 'PROJECT-001', 'open', 'Choose behavior', '[{"id":"A","label":"Approve"}]', '{}', ?, ?)`, now(), now()); err != nil {
 		t.Fatal(err)
 	}
 	decisions, err := db.ListDecisions(ctx, "PROJECT-001", "open")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(decisions) != 1 || decisions[0].ID != "DEC-001" {
+	if len(decisions) != 1 || decisions[0].ID != "DEC-001" || len(decisions[0].Options) != 1 || decisions[0].Options[0].ID != "A" {
 		t.Fatalf("decisions = %#v", decisions)
 	}
 }

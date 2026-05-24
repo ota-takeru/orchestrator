@@ -27,14 +27,14 @@ export async function loadDashboardData(): Promise<DashboardData> {
   };
 }
 
-export async function approveInboxItem(id: string, notes: string): Promise<void> {
+export async function approveInboxItem(id: string, notes: string, option?: string): Promise<void> {
   const response = await fetch(`/api/inbox/${encodeURIComponent(id)}/approve`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json"
     },
-    body: JSON.stringify({ notes })
+    body: JSON.stringify({ notes, option })
   });
   if (!response.ok) {
     const text = await response.text();

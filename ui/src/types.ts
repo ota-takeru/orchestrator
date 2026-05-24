@@ -38,8 +38,15 @@ export type Decision = {
   task_id?: string;
   status: string;
   title: string;
+  options?: DecisionOption[];
   created_at: string;
   updated_at: string;
+};
+
+export type DecisionOption = {
+  id: string;
+  label: string;
+  description?: string;
 };
 
 export type MemoryRecord = {

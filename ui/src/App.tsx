@@ -2,7 +2,7 @@ import { AlertTriangle, Check, GitMerge, Inbox, ListChecks, RefreshCcw, ServerCo
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { approveInboxItem, loadDashboardData } from "./api";
-import type { DashboardData, InboxItem, MemoryRecord, SnapshotCounts } from "./types";
+import type { DashboardData, Decision, InboxItem, MemoryRecord, SnapshotCounts } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -47,7 +47,8 @@ function App() {
     setApproving(item.id);
     setError("");
     try {
-      await approveInboxItem(item.id, "Approved from DevOS UI");
+      const option = item.source_type === "decision" ? firstDecisionOption(data?.decisions ?? [], item.source_id) : undefined;
+      await approveInboxItem(item.id, "Approved from DevOS UI", option);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Approval failed");
@@ -76,7 +77,7 @@ function App() {
           {data ? (
             <>
               <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
-              <InboxPanel items={data.snapshot.open_inbox_items} approving={approving} onApprove={approve} />
+              <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={approve} />
             </>
           ) : (
             <LoadingPanel />
@@ -118,7 +119,18 @@ function Summary({ counts, generatedAt, lastMergeAt }: { counts: SnapshotCounts;
   );
 }
 
-function InboxPanel({ items, approving, onApprove }: { items: InboxItem[]; approving: string; onApprove: (item: InboxItem) => void }) {
+function InboxPanel({
+  items,
+  decisions,
+  approving,
+  onApprove
+}: {
+  items: InboxItem[];
+  decisions: Decision[];
+  approving: string;
+  onApprove: (item: InboxItem) => void;
+}) {
+  const decisionOptions = new Map(decisions.map((decision) => [decision.id, decision.options?.[0]?.id ?? ""]));
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -159,7 +171,7 @@ function InboxPanel({ items, approving, onApprove }: { items: InboxItem[]; appro
                   </td>
                   <td>{item.source_type}</td>
                   <td className="row-action">
-                    {item.source_type === "human_approval" ? (
+                    {item.source_type === "human_approval" || (item.source_type === "decision" && decisionOptions.get(item.source_id ?? "")) ? (
                       <button className="icon-button small" onClick={() => onApprove(item)} disabled={approving === item.id} title="Approve" aria-label={`Approve ${item.id}`}>
                         <Check size={16} />
                       </button>
@@ -198,7 +210,7 @@ function DecisionPanel({ decisions }: { decisions: DashboardData["decisions"] })
         {decisions.map((decision) => (
           <div className="stack-row" key={decision.id}>
             <span>{decision.title}</span>
-            <small>{decision.status}</small>
+            <small>{decision.options?.[0]?.label ?? decision.status}</small>
           </div>
         ))}
       </StackEmpty>
@@ -260,6 +272,13 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function firstDecisionOption(decisions: Decision[], decisionID?: string) {
+  if (!decisionID) {
+    return undefined;
+  }
+  return decisions.find((decision) => decision.id === decisionID)?.options?.[0]?.id;
 }
 
 export default App;

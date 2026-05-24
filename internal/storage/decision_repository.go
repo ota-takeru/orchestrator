@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -11,14 +12,21 @@ import (
 )
 
 type DecisionRecord struct {
-	ID             string  `json:"id"`
-	TaskID         *string `json:"task_id,omitempty"`
-	Status         string  `json:"status"`
-	Title          string  `json:"title"`
-	SelectedOption string  `json:"selected_option,omitempty"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	ResolvedAt     string  `json:"resolved_at,omitempty"`
+	ID             string           `json:"id"`
+	TaskID         *string          `json:"task_id,omitempty"`
+	Status         string           `json:"status"`
+	Title          string           `json:"title"`
+	Options        []DecisionOption `json:"options,omitempty"`
+	SelectedOption string           `json:"selected_option,omitempty"`
+	CreatedAt      string           `json:"created_at"`
+	UpdatedAt      string           `json:"updated_at"`
+	ResolvedAt     string           `json:"resolved_at,omitempty"`
+}
+
+type DecisionOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
 }
 
 type DecisionApprovalInput struct {
@@ -32,7 +40,7 @@ type DecisionApprovalInput struct {
 
 func (db *DB) ListDecisions(ctx context.Context, projectID string, status string) ([]DecisionRecord, error) {
 	query := `
-SELECT id, task_id, status, title, selected_option, created_at, updated_at, resolved_at
+SELECT id, task_id, status, title, options_json, selected_option, created_at, updated_at, resolved_at
 FROM decisions
 WHERE project_id = ?`
 	args := []any{projectID}
@@ -52,11 +60,13 @@ WHERE project_id = ?`
 		var decision DecisionRecord
 		var taskID sql.NullString
 		var selectedOption, resolvedAt sql.NullString
+		var optionsJSON string
 		if err := rows.Scan(
 			&decision.ID,
 			&taskID,
 			&decision.Status,
 			&decision.Title,
+			&optionsJSON,
 			&selectedOption,
 			&decision.CreatedAt,
 			&decision.UpdatedAt,
@@ -73,9 +83,24 @@ WHERE project_id = ?`
 		if resolvedAt.Valid {
 			decision.ResolvedAt = resolvedAt.String
 		}
+		decision.Options, err = parseDecisionOptions(optionsJSON)
+		if err != nil {
+			return nil, err
+		}
 		decisions = append(decisions, decision)
 	}
 	return decisions, rows.Err()
+}
+
+func parseDecisionOptions(raw string) ([]DecisionOption, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var options []DecisionOption
+	if err := json.Unmarshal([]byte(raw), &options); err != nil {
+		return nil, fmt.Errorf("decision options must be JSON: %w", err)
+	}
+	return options, nil
 }
 
 func (db *DB) ApproveDecision(ctx context.Context, input DecisionApprovalInput) (DecisionRecord, error) {

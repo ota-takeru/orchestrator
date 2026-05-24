@@ -80,6 +80,9 @@ func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartRes
 		return WorkStartResult{}, err
 	}
 	recovery, workErr := db.RecoverLostWorkQueueLeases(ctx, input.ProjectID)
+	if workErr == nil {
+		workErr = db.CompleteStaleExecutionQueueItems(ctx, input.ProjectID)
+	}
 	var planning PlanStartResult
 	if workErr == nil {
 		planning, workErr = db.StartPlanning(ctx, PlanStartInput{ProjectID: input.ProjectID, Concurrency: planningConcurrency})
@@ -236,6 +239,32 @@ func (db *DB) ProcessExecutionQueueFake(ctx context.Context, projectID string, l
 		})
 	}
 	return results, nil
+}
+
+func (db *DB) CompleteStaleExecutionQueueItems(ctx context.Context, projectID string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := db.sql.ExecContext(ctx, `
+UPDATE work_queue_items
+SET status = 'completed',
+    finished_at = ?,
+    updated_at = ?
+WHERE project_id = ?
+  AND lane = 'execution'
+  AND status = 'queued'
+  AND item_type IN ('task_implementation', 'task_repair')
+  AND EXISTS (
+    SELECT 1
+    FROM tasks t
+    WHERE t.project_id = work_queue_items.project_id
+      AND t.id = work_queue_items.item_id
+      AND NOT (
+        (work_queue_items.item_type = 'task_implementation' AND t.status = 'ready')
+        OR (work_queue_items.item_type = 'task_repair' AND t.status = 'repairing')
+      )
+  )`,
+		now, now, projectID,
+	)
+	return err
 }
 
 func (db *DB) RecoverLostWorkQueueLeases(ctx context.Context, projectID string) (WorkQueueRecoveryResult, error) {

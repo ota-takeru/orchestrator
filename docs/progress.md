@@ -27,7 +27,9 @@
 - `docs/ui-human-inbox.md` に実装済みdashboard panelとAPI surfaceを追記し、`docs/cli-design.md` のコマンド例を現在の `devos` usageに合わせて更新しました。
 - 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui build`。
 - WSL2上のこのリポジトリを実プロジェクトとして扱い、`devos bootstrap --adapter fake --profile wsl-primary` で `TASK-001` がmerge前reverifyを経て `merged` になることを確認しました。`devos check` はviolationsなし、`devos platform codex-readiness --save` は `wsl-main` / `codex-wsl` をreadyと判定しました。
-- WSL実プロジェクト検証で残ったopen inboxは、merge必須ではない `bubblewrap` missing、`core.autocrlf` 未設定、`ui/node_modules` 由来のsymlink support警告です。
+- WSL実プロジェクト運用向けに、依存物ディレクトリ配下のsymlinkをpreflight noiseから除外し、完了済みtaskに残ったstale execution queue itemを `devos work start` で自動完了するようにしました。
+- WSL実プロジェクトDBはopen Inbox / queued work / open decision / open merge queueが0件になりました。`devos serve` の主要API、`devos publish --dry-run`、`devos cleanup --dry-run --merged`、`devos platform doctor --include-codex --include-ui --save`、`devos platform codex-readiness --save` を確認済みです。
+- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui build`。
 
 残る完了判定は、Windows実機でのreadiness report生成・import・Windows native Codex/runtime境界の運用検証です。
 

@@ -386,6 +386,45 @@ func TestStartWorkProcessesExecutionQueue(t *testing.T) {
 	}
 }
 
+func TestStartWorkCompletesStaleExecutionQueueItems(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	approveRequiredArtifacts(t, db, ctx, "PROJECT-001", root, "approved")
+	tasks, err := db.MaterializeApprovedTasks(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RunFakeTask(ctx, "PROJECT-001", tasks[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.StartWork(ctx, WorkStartInput{
+		ProjectID:                 "PROJECT-001",
+		Mode:                      "sequential",
+		PlanningConcurrency:       3,
+		ImplementationConcurrency: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := db.ListWorkQueueItems(ctx, "PROJECT-001", "queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 0 {
+		t.Fatalf("queued items = %#v", queued)
+	}
+	completed, err := db.ListWorkQueueItems(ctx, "PROJECT-001", "completed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed) != 1 || completed[0].ItemID != tasks[0].ID {
+		t.Fatalf("completed items = %#v", completed)
+	}
+}
+
 func TestStartWorkProcessesQueuedRepair(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

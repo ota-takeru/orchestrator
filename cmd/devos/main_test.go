@@ -771,22 +771,7 @@ func TestPlatformSetupWaiveCLI(t *testing.T) {
 
 	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Platform setup waive workflow")
 	runCLI(t, "platform", "doctor", "--project-root", projectRoot, "--data-root", dataRoot, "--save", "--json")
-
-	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	projectID := storage.ProjectIDForRoot(projectRoot)
-	var inboxID string
-	if err := db.SQL().QueryRowContext(ctx, `
-SELECT ii.id
-FROM inbox_items ii
-JOIN toolchain_requirements tr ON tr.id = ii.source_id
-WHERE ii.project_id = ? AND ii.item_type = 'toolchain_setup' AND tr.toolchain_key = 'bubblewrap'
-LIMIT 1`, projectID).Scan(&inboxID); err != nil {
-		t.Fatal(err)
-	}
+	inboxID := insertCLIMissingToolchainSetup(t, ctx, dataRoot, projectRoot)
 
 	out := runCLI(t,
 		"platform", "setup", "waive",
@@ -1215,6 +1200,36 @@ INSERT INTO inbox_items(
   id, project_id, item_type, status, source_type, source_id, dedupe_key,
   priority, title, body, created_at, updated_at
 ) VALUES (?, ?, 'toolchain_setup', 'open', 'toolchain_requirement', ?, 'detected-git-test', 40, 'Toolchain setup required: git', 'git setup check', ?, ?)`,
+		inboxID, projectID, requirementID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return inboxID
+}
+
+func insertCLIMissingToolchainSetup(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) string {
+	t.Helper()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	requirementID := "TOOLREQ-MISSING-TEST"
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO toolchain_requirements(
+  id, project_id, environment_id, toolchain_key, required_for, required_for_merge,
+  status, detected_version, required_version, evidence_json, created_at, updated_at
+) VALUES (?, ?, 'wsl-main', 'missing-test-tool', 'implementation', 0, 'missing', '', '', '{"message":"missing test tool"}', ?, ?)`,
+		requirementID, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	inboxID := "INBOX-MISSING-TEST-TOOL"
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id, dedupe_key,
+  priority, title, body, created_at, updated_at
+) VALUES (?, ?, 'toolchain_setup', 'open', 'toolchain_requirement', ?, 'missing-test-tool', 40, 'Toolchain setup required: missing-test-tool', 'missing test tool', ?, ?)`,
 		inboxID, projectID, requirementID, now, now); err != nil {
 		t.Fatal(err)
 	}

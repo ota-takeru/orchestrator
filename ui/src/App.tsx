@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, GitMerge, Inbox, ListChecks, RefreshCcw, ServerCog, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, ServerCog, ShieldAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { approveInboxItem, loadDashboardData } from "./api";
@@ -86,6 +86,7 @@ function App() {
 
         <aside className="space-y-5">
           <CommandPanel command={nextCommand} />
+          <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
           <DecisionPanel decisions={data?.decisions ?? []} />
           <BaselinePanel issues={data?.baselineIssues ?? []} />
         </aside>
@@ -211,6 +212,28 @@ function DecisionPanel({ decisions }: { decisions: DashboardData["decisions"] })
           <div className="stack-row" key={decision.id}>
             <span>{decision.title}</span>
             <small>{decision.options?.[0]?.label ?? decision.status}</small>
+          </div>
+        ))}
+      </StackEmpty>
+    </section>
+  );
+}
+
+function TrustedArtifactsPanel({ artifacts }: { artifacts: DashboardData["trustedArtifacts"] }) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Trusted Artifacts</h2>
+        <FileCheck2 size={18} className="text-zinc-500" />
+      </div>
+      <StackEmpty empty={artifacts.length === 0} label="No trusted artifacts">
+        {artifacts.map((artifact) => (
+          <div className="stack-row" key={artifact.version_id}>
+            <span>
+              {artifact.artifact_type} v{artifact.version}
+            </span>
+            <small>{artifact.approval_notes ? `${artifact.status} + notes` : artifact.status}</small>
+            <small>{artifact.path}</small>
           </div>
         ))}
       </StackEmpty>

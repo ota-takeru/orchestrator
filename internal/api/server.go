@@ -26,6 +26,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/inbox/", s.handleInboxItem)
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	mux.HandleFunc("/api/memory", s.handleMemory)
+	mux.HandleFunc("/api/artifacts/trusted", s.handleTrustedArtifacts)
 	return mux
 }
 
@@ -130,6 +131,19 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"memories": memories})
+}
+
+func (s *Server) handleTrustedArtifacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	artifacts, err := s.db.TrustedArtifactContentBundle(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "trusted_artifacts_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
 }
 
 func parseInboxActionPath(path string) (string, string, bool) {

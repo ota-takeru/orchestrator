@@ -118,6 +118,40 @@ INSERT INTO memories(
 	}
 }
 
+func TestServerExposesTrustedArtifacts(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	ctx := context.Background()
+	record, err := db.SaveArtifactVersion(ctx, storage.ArtifactVersionInput{
+		ProjectID:    projectID,
+		ArtifactType: storage.ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, projectID, record.ArtifactID, record.Version, "approved_with_notes", "Keep scope."); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/artifacts/trusted", nil)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Artifacts []storage.TrustedArtifactContentRecord `json:"artifacts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Artifacts) != 1 || body.Artifacts[0].ArtifactID != record.ArtifactID || body.Artifacts[0].ApprovalNotes != "Keep scope." || body.Artifacts[0].Content != "# PRD" {
+		t.Fatalf("trusted artifacts = %#v", body.Artifacts)
+	}
+}
+
 func openAPITestDB(t *testing.T) (*storage.DB, string) {
 	t.Helper()
 	ctx := context.Background()

@@ -62,8 +62,22 @@ export type MemoryRecord = {
   updated_at: string;
 };
 
+export type TrustedArtifact = {
+  artifact_id: string;
+  artifact_type: string;
+  version_id: string;
+  version: number;
+  status: string;
+  path: string;
+  content_hash: string;
+  approval_notes?: string;
+  reviewed_at?: string;
+  content: string;
+};
+
 export type DashboardData = {
   snapshot: HumanInboxSnapshot;
   decisions: Decision[];
   baselineIssues: MemoryRecord[];
+  trustedArtifacts: TrustedArtifact[];
 };

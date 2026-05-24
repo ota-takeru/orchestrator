@@ -174,6 +174,32 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 	if len(result.ProposedTasks) != 1 || result.ProposedTasks[0].Status != "proposed" {
 		t.Fatalf("proposed tasks = %#v", result.ProposedTasks)
 	}
+	checkpoint, err := db.CreateRollingCheckpoint(ctx, RollingCheckpointInput{
+		ProjectID: "PROJECT-001",
+		TaskID:    result.ProposedTasks[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Run.RunType != "rolling_checkpoint" || checkpoint.Run.Status != "succeeded" {
+		t.Fatalf("checkpoint run = %#v", checkpoint.Run)
+	}
+	if checkpoint.Artifact.ArtifactType != "rolling_checkpoint_report" || checkpoint.Artifact.Status != "proposed" {
+		t.Fatalf("checkpoint artifact = %#v", checkpoint.Artifact)
+	}
+	if checkpoint.Snapshot.Task.ID != result.ProposedTasks[0].ID || checkpoint.Snapshot.NextAction != "review_task_proposal" {
+		t.Fatalf("checkpoint snapshot = %#v", checkpoint.Snapshot)
+	}
+	secondCheckpoint, err := db.CreateRollingCheckpoint(ctx, RollingCheckpointInput{
+		ProjectID: "PROJECT-001",
+		TaskID:    result.ProposedTasks[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondCheckpoint.Run.ID != checkpoint.Run.ID || secondCheckpoint.Artifact.ID != checkpoint.Artifact.ID {
+		t.Fatalf("checkpoint should be idempotent: first=%#v second=%#v", checkpoint, secondCheckpoint)
+	}
 	if result.TaskGroups[0].Status != "proposed" || result.TaskGroups[0].PlanningUnit != "feature_chunk" {
 		t.Fatalf("task group = %#v", result.TaskGroups[0])
 	}

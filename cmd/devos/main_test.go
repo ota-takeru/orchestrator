@@ -179,6 +179,16 @@ func TestPlanStartCLIWorkflow(t *testing.T) {
 	if len(consolidated.TaskGroups) != 1 || consolidated.TaskGroups[0].Status != "proposed" {
 		t.Fatalf("consolidated = %#v", consolidated)
 	}
+	if len(consolidated.ProposedTasks) != 1 {
+		t.Fatalf("proposed tasks = %#v", consolidated.ProposedTasks)
+	}
+
+	checkpointOut := runCLI(t, "plan", "checkpoint", "--project-root", projectRoot, "--data-root", dataRoot, "--task", consolidated.ProposedTasks[0].ID, "--json")
+	var checkpoint storage.RollingCheckpointResult
+	decodeJSON(t, checkpointOut, &checkpoint)
+	if checkpoint.Run.RunType != "rolling_checkpoint" || checkpoint.Artifact.ArtifactType != "rolling_checkpoint_report" {
+		t.Fatalf("checkpoint = %#v", checkpoint)
+	}
 }
 
 func TestWorkStartCLIWorkflow(t *testing.T) {

@@ -74,6 +74,60 @@ type PlanConsolidateResult struct {
 	AcceptedArtifacts []PlanningArtifactRecord `json:"accepted_artifacts"`
 }
 
+type RollingCheckpointInput struct {
+	ProjectID string
+	TaskID    string
+}
+
+type RollingCheckpointResult struct {
+	Run      PlanningRunRecord      `json:"run"`
+	Artifact PlanningArtifactRecord `json:"artifact"`
+	Task     TaskRecord             `json:"task"`
+	Snapshot RollingCheckpointData  `json:"snapshot"`
+}
+
+type RollingCheckpointData struct {
+	Task              RollingCheckpointTask              `json:"task"`
+	TaskGroup         *RollingCheckpointTaskGroup        `json:"task_group,omitempty"`
+	QueueCounts       []RollingCheckpointCount           `json:"queue_counts"`
+	PlanningArtifacts []RollingCheckpointArtifactSummary `json:"planning_artifacts"`
+	NextAction        string                             `json:"next_action"`
+}
+
+type RollingCheckpointTask struct {
+	ID                   string `json:"id"`
+	Status               string `json:"status"`
+	Title                string `json:"title"`
+	TaskGroupID          string `json:"task_group_id,omitempty"`
+	CurrentRunID         string `json:"current_run_id,omitempty"`
+	BaseBranch           string `json:"base_branch"`
+	HeadBranch           string `json:"head_branch,omitempty"`
+	UpdatedAt            string `json:"updated_at"`
+	VerificationCommands int    `json:"verification_commands"`
+}
+
+type RollingCheckpointTaskGroup struct {
+	ID               string  `json:"id"`
+	FeatureRequestID *string `json:"feature_request_id,omitempty"`
+	ChangeRequestID  *string `json:"change_request_id,omitempty"`
+	Status           string  `json:"status"`
+	Title            string  `json:"title"`
+	PlanningUnit     string  `json:"planning_unit"`
+	UpdatedAt        string  `json:"updated_at"`
+}
+
+type RollingCheckpointCount struct {
+	Lane   string `json:"lane"`
+	Status string `json:"status"`
+	Count  int    `json:"count"`
+}
+
+type RollingCheckpointArtifactSummary struct {
+	ArtifactType string `json:"artifact_type"`
+	Status       string `json:"status"`
+	Count        int    `json:"count"`
+}
+
 type planningQueueCandidate struct {
 	QueueItem      WorkQueueItemRecord
 	FeatureRequest FeatureRequestRecord
@@ -157,6 +211,99 @@ func (db *DB) ConsolidatePlanning(ctx context.Context, projectID string) (PlanCo
 	return result, nil
 }
 
+func (db *DB) CreateRollingCheckpoint(ctx context.Context, input RollingCheckpointInput) (RollingCheckpointResult, error) {
+	projectID := strings.TrimSpace(input.ProjectID)
+	taskID := strings.TrimSpace(input.TaskID)
+	if projectID == "" {
+		return RollingCheckpointResult{}, fmt.Errorf("project id is required")
+	}
+	if taskID == "" {
+		return RollingCheckpointResult{}, fmt.Errorf("task id is required")
+	}
+	snapshot, task, featureRequestID, changeRequestID, err := db.buildRollingCheckpointData(ctx, projectID, taskID)
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	snapshotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	inputHash := sha256Hex(snapshotJSON)
+	runID := "PLANRUN-" + stableShortHash(projectID+"|"+taskID+"|rolling_checkpoint|"+inputHash)
+	artifactID := "PLANART-" + stableShortHash(runID+"|rolling_checkpoint_report")
+	artifactPath := filepath.ToSlash(filepath.Join("planning_artifacts", artifactID+".json"))
+	artifactContent, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	contentHash := sha256Hex(artifactContent)
+	if err := db.writePlanningArtifactFile(artifactPath, artifactContent); err != nil {
+		return RollingCheckpointResult{}, err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	result, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO planning_runs(
+  id, project_id, feature_request_id, run_type, status, artifact_snapshot_json,
+  input_hash, output_summary, started_at, finished_at, created_at, updated_at,
+  change_request_id
+) VALUES (?, ?, ?, 'rolling_checkpoint', 'succeeded', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		runID, projectID, nullableString(featureRequestID), string(snapshotJSON), inputHash,
+		"Rolling checkpoint captured for task "+taskID+".", now, now, now, now, nullableString(changeRequestID),
+	)
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	runInserted, err := result.RowsAffected()
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO planning_artifacts(
+  id, project_id, planning_run_id, feature_request_id, artifact_type, status,
+  path, content_hash, artifact_snapshot_json, created_at, updated_at,
+  change_request_id
+) VALUES (?, ?, ?, ?, 'rolling_checkpoint_report', 'proposed', ?, ?, ?, ?, ?, ?)`,
+		artifactID, projectID, runID, nullableString(featureRequestID), artifactPath,
+		contentHash, string(snapshotJSON), now, now, nullableString(changeRequestID),
+	); err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	if runInserted == 1 {
+		if err := insertWorkflowEvent(ctx, tx, projectID, "rolling_checkpoint_created", map[string]any{
+			"planning_run_id":      runID,
+			"planning_artifact_id": artifactID,
+			"task_id":              taskID,
+		}, now); err != nil {
+			return RollingCheckpointResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	committed = true
+
+	run, err := db.getPlanningRun(ctx, projectID, runID)
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	artifact, err := db.getPlanningArtifact(ctx, projectID, artifactID)
+	if err != nil {
+		return RollingCheckpointResult{}, err
+	}
+	return RollingCheckpointResult{Run: run, Artifact: artifact, Task: task, Snapshot: snapshot}, nil
+}
+
 func (db *DB) ListPlanningRuns(ctx context.Context, projectID string) ([]PlanningRunRecord, error) {
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT id, feature_request_id, run_type, status, artifact_snapshot_json,
@@ -180,6 +327,16 @@ ORDER BY created_at ASC`, projectID)
 	return records, rows.Err()
 }
 
+func (db *DB) getPlanningRun(ctx context.Context, projectID string, runID string) (PlanningRunRecord, error) {
+	row := db.sql.QueryRowContext(ctx, `
+SELECT id, feature_request_id, run_type, status, artifact_snapshot_json,
+       input_hash, output_summary, started_at, finished_at, created_at, updated_at,
+       change_request_id
+FROM planning_runs
+WHERE project_id = ? AND id = ?`, projectID, runID)
+	return scanPlanningRun(row)
+}
+
 func (db *DB) ListPlanningArtifacts(ctx context.Context, projectID string) ([]PlanningArtifactRecord, error) {
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT id, planning_run_id, feature_request_id, artifact_type, status,
@@ -201,6 +358,16 @@ ORDER BY created_at ASC`, projectID)
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func (db *DB) getPlanningArtifact(ctx context.Context, projectID string, artifactID string) (PlanningArtifactRecord, error) {
+	row := db.sql.QueryRowContext(ctx, `
+SELECT id, planning_run_id, feature_request_id, artifact_type, status,
+       path, content_hash, artifact_snapshot_json, created_at, updated_at,
+       change_request_id
+FROM planning_artifacts
+WHERE project_id = ? AND id = ?`, projectID, artifactID)
+	return scanPlanningArtifact(row)
 }
 
 func (db *DB) listPlanningCandidates(ctx context.Context, projectID string, limit int) ([]planningQueueCandidate, error) {
@@ -497,6 +664,177 @@ WHERE project_id = ? AND id = ? AND status = 'proposed'`,
 			Status: "proposed",
 			Title:  taskTitle,
 		}, acceptedArtifact, nil
+}
+
+func (db *DB) buildRollingCheckpointData(ctx context.Context, projectID string, taskID string) (RollingCheckpointData, TaskRecord, *string, *string, error) {
+	var task RollingCheckpointTask
+	var taskGroupID, currentRunID, headBranch sql.NullString
+	var verificationCommandsJSON string
+	row := db.sql.QueryRowContext(ctx, `
+SELECT id, status, title, task_group_id, current_run_id, base_branch, head_branch,
+       verification_commands_json, updated_at
+FROM tasks
+WHERE project_id = ? AND id = ?`, projectID, taskID)
+	if err := row.Scan(
+		&task.ID,
+		&task.Status,
+		&task.Title,
+		&taskGroupID,
+		&currentRunID,
+		&task.BaseBranch,
+		&headBranch,
+		&verificationCommandsJSON,
+		&task.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return RollingCheckpointData{}, TaskRecord{}, nil, nil, fmt.Errorf("task not found: %s", taskID)
+		}
+		return RollingCheckpointData{}, TaskRecord{}, nil, nil, err
+	}
+	if taskGroupID.Valid {
+		task.TaskGroupID = taskGroupID.String
+	}
+	if currentRunID.Valid {
+		task.CurrentRunID = currentRunID.String
+	}
+	if headBranch.Valid {
+		task.HeadBranch = headBranch.String
+	}
+	var commands []TaskVerificationCommand
+	if strings.TrimSpace(verificationCommandsJSON) != "" {
+		if err := json.Unmarshal([]byte(verificationCommandsJSON), &commands); err != nil {
+			return RollingCheckpointData{}, TaskRecord{}, nil, nil, err
+		}
+	}
+	task.VerificationCommands = len(commands)
+
+	var group *RollingCheckpointTaskGroup
+	var featureRequestID, changeRequestID *string
+	if task.TaskGroupID != "" {
+		loaded, err := db.loadRollingCheckpointTaskGroup(ctx, projectID, task.TaskGroupID)
+		if err != nil {
+			return RollingCheckpointData{}, TaskRecord{}, nil, nil, err
+		}
+		group = &loaded
+		featureRequestID = loaded.FeatureRequestID
+		changeRequestID = loaded.ChangeRequestID
+	}
+	queueCounts, err := db.listRollingCheckpointQueueCounts(ctx, projectID)
+	if err != nil {
+		return RollingCheckpointData{}, TaskRecord{}, nil, nil, err
+	}
+	artifactCounts, err := db.listRollingCheckpointArtifactCounts(ctx, projectID)
+	if err != nil {
+		return RollingCheckpointData{}, TaskRecord{}, nil, nil, err
+	}
+	snapshot := RollingCheckpointData{
+		Task:              task,
+		TaskGroup:         group,
+		QueueCounts:       queueCounts,
+		PlanningArtifacts: artifactCounts,
+		NextAction:        rollingCheckpointNextAction(task.Status),
+	}
+	return snapshot, TaskRecord{ID: task.ID, Status: task.Status, Title: task.Title, VerificationCommands: commands}, featureRequestID, changeRequestID, nil
+}
+
+func (db *DB) loadRollingCheckpointTaskGroup(ctx context.Context, projectID string, taskGroupID string) (RollingCheckpointTaskGroup, error) {
+	var group RollingCheckpointTaskGroup
+	var featureRequestID, changeRequestID sql.NullString
+	row := db.sql.QueryRowContext(ctx, `
+SELECT id, feature_request_id, change_request_id, status, title, planning_unit, updated_at
+FROM task_groups
+WHERE project_id = ? AND id = ?`, projectID, taskGroupID)
+	if err := row.Scan(
+		&group.ID,
+		&featureRequestID,
+		&changeRequestID,
+		&group.Status,
+		&group.Title,
+		&group.PlanningUnit,
+		&group.UpdatedAt,
+	); err != nil {
+		return RollingCheckpointTaskGroup{}, err
+	}
+	if featureRequestID.Valid {
+		group.FeatureRequestID = &featureRequestID.String
+	}
+	if changeRequestID.Valid {
+		group.ChangeRequestID = &changeRequestID.String
+	}
+	return group, nil
+}
+
+func (db *DB) listRollingCheckpointQueueCounts(ctx context.Context, projectID string) ([]RollingCheckpointCount, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT lane, status, COUNT(*)
+FROM work_queue_items
+WHERE project_id = ?
+GROUP BY lane, status
+ORDER BY lane, status`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var counts []RollingCheckpointCount
+	for rows.Next() {
+		var count RollingCheckpointCount
+		if err := rows.Scan(&count.Lane, &count.Status, &count.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, count)
+	}
+	return counts, rows.Err()
+}
+
+func (db *DB) listRollingCheckpointArtifactCounts(ctx context.Context, projectID string) ([]RollingCheckpointArtifactSummary, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT artifact_type, status, COUNT(*)
+FROM planning_artifacts
+WHERE project_id = ?
+  AND artifact_type != 'rolling_checkpoint_report'
+GROUP BY artifact_type, status
+ORDER BY artifact_type, status`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var counts []RollingCheckpointArtifactSummary
+	for rows.Next() {
+		var count RollingCheckpointArtifactSummary
+		if err := rows.Scan(&count.ArtifactType, &count.Status, &count.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, count)
+	}
+	return counts, rows.Err()
+}
+
+func rollingCheckpointNextAction(taskStatus string) string {
+	switch taskStatus {
+	case "proposed":
+		return "review_task_proposal"
+	case "ready":
+		return "execute_task"
+	case "implementing", "verifying", "diagnosing", "repairing", "reviewing", "rebasing", "reverifying":
+		return "resume_task_work"
+	case "needs_input", "needs_decision", "blocked_on_environment", "blocked_on_policy", "merge_conflict":
+		return "human_inbox"
+	case "ready_for_human_review":
+		return "human_review"
+	case "approved_for_merge", "queued_for_merge":
+		return "merge_queue"
+	case "merged", "applied", "failed", "cancelled":
+		return "terminal"
+	default:
+		return "inspect_task"
+	}
+}
+
+func nullableString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func (db *DB) writePlanningArtifactFile(relPath string, content []byte) error {

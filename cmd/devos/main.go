@@ -777,6 +777,8 @@ func runPlan(ctx context.Context, args []string, stdout io.Writer) int {
 			return runPlanStatus(ctx, args[1:], stdout)
 		case "consolidate":
 			return runPlanConsolidate(ctx, args[1:], stdout)
+		case "checkpoint":
+			return runPlanCheckpoint(ctx, args[1:], stdout)
 		}
 	}
 
@@ -905,6 +907,38 @@ func runPlanConsolidate(ctx context.Context, args []string, stdout io.Writer) in
 	for _, group := range result.TaskGroups {
 		fmt.Fprintf(stdout, "Task group proposed: %s %s\n", group.ID, group.Title)
 	}
+	return 0
+}
+
+func runPlanCheckpoint(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("plan checkpoint", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	taskID := fs.String("task", "", "task id to checkpoint")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if strings.TrimSpace(*taskID) == "" {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("--task is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "plan_checkpoint_failed", err)
+	}
+	defer db.Close()
+	result, err := db.CreateRollingCheckpoint(ctx, storage.RollingCheckpointInput{
+		ProjectID: projectID,
+		TaskID:    *taskID,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "plan_checkpoint_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Rolling checkpoint saved: %s %s\n", result.Run.ID, result.Artifact.Path)
 	return 0
 }
 
@@ -2362,6 +2396,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos plan start [--project-root PATH] [--data-root PATH] [--concurrency N] [--json]")
 	fmt.Fprintln(w, "  devos plan status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan consolidate [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos plan checkpoint --task TASK_ID [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")

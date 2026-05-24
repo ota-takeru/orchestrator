@@ -137,6 +137,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos plan start` | `--concurrency N`, `--json` | planning_runs、planning_artifacts、decision_report_drafts | 同じinput hashのrunning planning runがあれば重複開始しない |
 | `devos plan status` | `--json` | なし | read-only |
 | `devos plan consolidate` | `--json` | consolidation result、必要なinbox_items、canonical commit候補 | 同じsnapshotなら再利用可 |
+| `devos plan checkpoint` | `--task TASK_ID`, `--json` | rolling_checkpoint planning_run、rolling_checkpoint_report | 同じtask状態snapshotなら再利用可 |
 | `devos work start` | `--mode sequential`, `--planning-concurrency N`, `--implementation-concurrency 1`, `--until inbox`, `--budget DURATION`, `--json` | worker_run、work_queue_items、runs | 同じlaneのrunning worker制約に従う |
 | `devos work status` | `--json` | なし | read-only |
 | `devos work pause` | `WORKER_RUN_ID`, `--json` | worker_run status | paused workerへの再pauseはno-op |
@@ -310,9 +311,11 @@ orchestrator-data/
 
 `devos plan start` は、Feature Requestの詳細化、影響分析、Decision Report draft、Task Group proposal、Risk Report作成をbounded parallelで開始します。planning workerはcanonical artifactやtaskを直接変更せず、planning artifactだけを作ります。
 
-`devos plan` 単体は初期PRD / Architecture / Roadmap / Task draft生成を扱います。`devos plan start|status|consolidate` はFeature Request Queue向けの非同期planning laneを扱います。
+`devos plan` 単体は初期PRD / Architecture / Roadmap / Task draft生成を扱います。`devos plan start|status|consolidate|checkpoint` はFeature Request Queue向けの非同期planning laneを扱います。
 
 `devos plan consolidate` は、planning artifactをsingle writerで統合し、重複、依存、snapshotの古さ、decision batchingを整理します。必要ならHuman Inbox itemを作り、承認不要なものだけcanonical commit候補にします。
+
+`devos plan checkpoint` は、指定taskの現在状態、Task Group、work queue、planning artifact集計を `rolling_checkpoint_report` として保存します。checkpointはcanonical artifactやtask statusを直接更新しません。
 
 `devos work start` は、planning lane、consolidation lane、execution lane、merge laneを内部的に処理できます。ただしimplementation concurrencyとmerge concurrencyは初期完成スコープでは必ず1です。
 

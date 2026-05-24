@@ -62,6 +62,24 @@ type RealCodexPreviewResult struct {
 	Argv           []string `json:"argv"`
 }
 
+type CodexRuntimeReadinessReport struct {
+	HostGOOS string                      `json:"host_goos"`
+	Items    []CodexRuntimeReadinessItem `json:"items"`
+}
+
+type CodexRuntimeReadinessItem struct {
+	EnvironmentID        string   `json:"environment_id"`
+	OSFamily             string   `json:"os_family"`
+	ProjectRoot          string   `json:"project_root"`
+	CodexAdapter         string   `json:"codex_adapter"`
+	SandboxProfile       string   `json:"sandbox_profile"`
+	ExpectedHostRuntime  string   `json:"expected_host_runtime"`
+	CurrentRuntimeUsable bool     `json:"current_runtime_usable"`
+	Classification       string   `json:"classification"`
+	Blockers             []string `json:"blockers,omitempty"`
+	Argv                 []string `json:"argv,omitempty"`
+}
+
 var realCodexRuntimeGOOS = runtime.GOOS
 
 var runRealCodexDoctor = toolchains.RunDoctor
@@ -252,6 +270,33 @@ func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID
 	}, nil
 }
 
+func (db *DB) CodexRuntimeReadiness(ctx context.Context, projectID string) (CodexRuntimeReadinessReport, error) {
+	envs, err := db.ListExecutionEnvironments(ctx, projectID)
+	if err != nil {
+		return CodexRuntimeReadinessReport{}, err
+	}
+	report := CodexRuntimeReadinessReport{HostGOOS: realCodexRuntimeGOOS}
+	for _, env := range envs {
+		classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
+		item := CodexRuntimeReadinessItem{
+			EnvironmentID:        env.ID,
+			OSFamily:             string(env.OSFamily),
+			ProjectRoot:          env.ProjectRoot,
+			CodexAdapter:         string(env.CodexAdapter),
+			SandboxProfile:       string(env.SandboxProfile),
+			ExpectedHostRuntime:  expectedCodexHostRuntime(env),
+			CurrentRuntimeUsable: len(blockers) == 0,
+			Classification:       classification,
+			Blockers:             blockers,
+		}
+		if item.CurrentRuntimeUsable {
+			item.Argv = codexExecArgv(env.ProjectRoot, "<prompt>", "<final-message-path>", "<output-schema-path>")
+		}
+		report.Items = append(report.Items, item)
+	}
+	return report, nil
+}
+
 func evaluateRealCodexEnvironment(env platform.ExecutionEnvironment, hostGOOS string) (string, []string) {
 	if strings.TrimSpace(env.ProjectRoot) == "" {
 		return "project_root_missing", []string{"project_root_missing"}
@@ -303,6 +348,21 @@ func evaluateRealCodexEnvironment(env platform.ExecutionEnvironment, hostGOOS st
 		return "remote_runner_required", []string{"real_codex_remote_runner_not_configured"}
 	default:
 		return "unsupported_os_family", []string{"real_codex_adapter_unsupported_os_family"}
+	}
+}
+
+func expectedCodexHostRuntime(env platform.ExecutionEnvironment) string {
+	switch env.OSFamily {
+	case platform.OSFamilyWindows:
+		return "windows"
+	case platform.OSFamilyLinux, platform.OSFamilyWSL:
+		return "linux"
+	case platform.OSFamilyRemoteWindows:
+		return "remote_windows_runner"
+	case platform.OSFamilyRemoteLinux:
+		return "remote_linux_runner"
+	default:
+		return "unsupported"
 	}
 }
 

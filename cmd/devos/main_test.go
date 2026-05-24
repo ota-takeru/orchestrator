@@ -598,6 +598,30 @@ func TestPlatformDoctorEnvCLI(t *testing.T) {
 	}
 }
 
+func TestPlatformCodexReadinessCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Codex readiness workflow")
+	runCLI(t, "platform", "profile", "set", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "windows-primary")
+	out := runCLI(t, "platform", "codex-readiness", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var report storage.CodexRuntimeReadinessReport
+	decodeJSON(t, out, &report)
+	var windowsItem *storage.CodexRuntimeReadinessItem
+	for i := range report.Items {
+		if report.Items[i].EnvironmentID == "windows-main" {
+			windowsItem = &report.Items[i]
+		}
+	}
+	if windowsItem == nil {
+		t.Fatalf("readiness report = %#v", report)
+	}
+	if windowsItem.ExpectedHostRuntime != "windows" {
+		t.Fatalf("readiness item = %#v", windowsItem)
+	}
+}
+
 func TestPlatformSetupInstructionsAndMarkInstalledCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

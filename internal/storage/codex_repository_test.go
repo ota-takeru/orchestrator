@@ -366,6 +366,55 @@ func TestRunRealCodexTaskBlocksWindowsWhenRuntimeIsNotWindows(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeReadinessReportsPerEnvironmentCompatibility(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
+		ID:             "windows-main",
+		OSFamily:       platform.OSFamilyWindows,
+		Role:           platform.RolePrimary,
+		Shell:          platform.ShellPowerShell,
+		ProjectRoot:    `C:\dev\project`,
+		GitProvider:    platform.GitProviderWindows,
+		CodexAdapter:   platform.CodexAdapterWindows,
+		SandboxProfile: platform.SandboxWindowsNative,
+		Status:         "configured",
+	})
+	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
+		ID:             "wsl-sidecar",
+		OSFamily:       platform.OSFamilyWSL,
+		Role:           platform.RoleSidecar,
+		Shell:          platform.ShellBash,
+		ProjectRoot:    projectRoot,
+		GitProvider:    platform.GitProviderLinux,
+		CodexAdapter:   platform.CodexAdapterWSL,
+		SandboxProfile: platform.SandboxLinuxBubblewrap,
+		Status:         "configured",
+	})
+	restore := setRealCodexRuntimeGOOSForTest("linux")
+	defer restore()
+
+	report, err := db.CodexRuntimeReadiness(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.HostGOOS != "linux" || len(report.Items) != 2 {
+		t.Fatalf("report = %#v", report)
+	}
+	byID := map[string]CodexRuntimeReadinessItem{}
+	for _, item := range report.Items {
+		byID[item.EnvironmentID] = item
+	}
+	if byID["windows-main"].CurrentRuntimeUsable || byID["windows-main"].Classification != "windows_codex_adapter_requires_windows_runtime" {
+		t.Fatalf("windows readiness = %#v", byID["windows-main"])
+	}
+	if !byID["wsl-sidecar"].CurrentRuntimeUsable || byID["wsl-sidecar"].ExpectedHostRuntime != "linux" || len(byID["wsl-sidecar"].Argv) == 0 {
+		t.Fatalf("wsl readiness = %#v", byID["wsl-sidecar"])
+	}
+}
+
 func TestRunRealCodexTaskBlocksMissingRequiredToolchain(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

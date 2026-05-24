@@ -12,10 +12,10 @@ func TestRegisteredMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 6 {
-		t.Fatalf("migration count = %d, want 6", len(migrations))
+	if len(migrations) != 7 {
+		t.Fatalf("migration count = %d, want 7", len(migrations))
 	}
-	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 {
+	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 {
 		t.Fatalf("unexpected migration versions: %#v", migrations)
 	}
 }
@@ -120,12 +120,25 @@ func TestMigration006AddsRequestQueue(t *testing.T) {
 	}
 }
 
+func TestMigration007AddsPlanningRuns(t *testing.T) {
+	migrations, err := RegisteredMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := migrations[6].SQL
+	for _, token := range []string{"CREATE TABLE planning_runs", "CREATE TABLE planning_artifacts", "CREATE TABLE decision_report_drafts", "idx_planning_runs_input"} {
+		if !strings.Contains(sql, token) {
+			t.Fatalf("migration 007 missing %q", token)
+		}
+	}
+}
+
 func TestStorageCheckValuesCoverAllStateMachines(t *testing.T) {
 	migrations, err := RegisteredMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	allSQL := migrations[0].SQL + "\n" + migrations[1].SQL + "\n" + migrations[2].SQL + "\n" + migrations[3].SQL + "\n" + migrations[4].SQL + "\n" + migrations[5].SQL
+	allSQL := migrations[0].SQL + "\n" + migrations[1].SQL + "\n" + migrations[2].SQL + "\n" + migrations[3].SQL + "\n" + migrations[4].SQL + "\n" + migrations[5].SQL + "\n" + migrations[6].SQL
 	machines := []statemachine.Machine{
 		statemachine.Task,
 		statemachine.Run,

@@ -20,6 +20,7 @@ func RegisteredMigrations() ([]Migration, error) {
 		{4, "task_verification_commands", "migrations/004_task_verification_commands.sql"},
 		{5, "publish_run_type", "migrations/005_publish_run_type.sql"},
 		{6, "request_queue", "migrations/006_request_queue.sql"},
+		{7, "planning_runs", "migrations/007_planning_runs.sql"},
 	}
 	migrations := make([]Migration, 0, len(definitions))
 	for _, definition := range definitions {

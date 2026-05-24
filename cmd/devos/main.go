@@ -515,6 +515,15 @@ func runSpec(ctx context.Context, args []string, stdout io.Writer) int {
 }
 
 func runPlan(ctx context.Context, args []string, stdout io.Writer) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "start":
+			return runPlanStart(ctx, args[1:], stdout)
+		case "status":
+			return runPlanStatus(ctx, args[1:], stdout)
+		}
+	}
+
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
@@ -551,6 +560,64 @@ func runPlan(ctx context.Context, args []string, stdout io.Writer) int {
 	for _, record := range records {
 		fmt.Fprintf(stdout, "Artifact proposed: %s v%d %s\n", record.ArtifactID, record.Version, record.Path)
 	}
+	return 0
+}
+
+func runPlanStart(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("plan start", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	concurrency := fs.Int("concurrency", 3, "maximum planning items to process")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "plan_start_failed", err)
+	}
+	defer db.Close()
+	result, err := db.StartPlanning(ctx, storage.PlanStartInput{ProjectID: projectID, Concurrency: *concurrency})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "plan_start_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	if len(result.StartedRuns) == 0 {
+		fmt.Fprintln(stdout, "No queued planning work.")
+		return 0
+	}
+	for _, run := range result.StartedRuns {
+		fmt.Fprintf(stdout, "Planning run complete: %s %s\n", run.ID, run.Status)
+	}
+	return 0
+}
+
+func runPlanStatus(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("plan status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "plan_status_failed", err)
+	}
+	defer db.Close()
+	status, err := db.GetPlanningStatus(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "plan_status_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, status, 0)
+	}
+	fmt.Fprintf(stdout, "Planning runs: %d\n", len(status.Runs))
+	fmt.Fprintf(stdout, "Planning artifacts: %d\n", len(status.Artifacts))
 	return 0
 }
 
@@ -1956,6 +2023,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos spec [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos plan start [--project-root PATH] [--data-root PATH] [--concurrency N] [--json]")
+	fmt.Fprintln(w, "  devos plan status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")

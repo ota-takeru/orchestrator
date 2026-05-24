@@ -124,6 +124,28 @@ func TestRequestQueueCLIWorkflow(t *testing.T) {
 	}
 }
 
+func TestPlanStartCLIWorkflow(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Plan start workflow")
+	runCLI(t, "request", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Today Viewを追加して")
+	out := runCLI(t, "plan", "start", "--project-root", projectRoot, "--data-root", dataRoot, "--concurrency", "2", "--json")
+	var started storage.PlanStartResult
+	decodeJSON(t, out, &started)
+	if len(started.StartedRuns) != 1 || started.StartedRuns[0].Status != "succeeded" {
+		t.Fatalf("started = %#v", started)
+	}
+
+	statusOut := runCLI(t, "plan", "status", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var status storage.PlanningStatus
+	decodeJSON(t, statusOut, &status)
+	if len(status.Runs) != 1 || len(status.Artifacts) != 1 {
+		t.Fatalf("planning status = %#v", status)
+	}
+}
+
 func TestReviewRejectCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

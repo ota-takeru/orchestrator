@@ -34,10 +34,10 @@ codex exec \
   --ignore-rules \
   --ephemeral \
   --sandbox workspace-write \
-  --ask-for-approval untrusted \
   --json \
   --color never \
   --output-schema /absolute/path/to/.devagent/schemas/run-result.schema.json \
+  -c 'approval_policy="never"' \
   -c 'sandbox_workspace_write.network_access=false' \
   -C /absolute/path/to/.devagent-worktrees/TASK-003 \
   -

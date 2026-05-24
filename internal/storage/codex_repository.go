@@ -152,7 +152,8 @@ func codexExecArgv(projectRoot string, finalPath string, schemaPath string) []st
 		"--ignore-user-config",
 		"--ignore-rules",
 		"--sandbox", "workspace-write",
-		"--ask-for-approval", "never",
+		"--color", "never",
+		"-c", `approval_policy="never"`,
 		"-c", "sandbox_workspace_write.network_access=false",
 		"--cd", projectRoot,
 		"-o", finalPath,
@@ -515,14 +516,20 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 	if err := db.openCodexBlockedDecision(ctx, projectID, taskID, runID, classification, blockers); err != nil {
 		return RealCodexRunResult{}, err
 	}
-	if err := db.transitionTask(ctx, projectID, taskID, "ready", "needs_decision", "real_codex_adapter_blocked", map[string]any{
-		"task_id":        taskID,
-		"run_id":         runID,
-		"environment_id": env.ID,
-		"classification": classification,
-		"blockers":       blockers,
-	}); err != nil {
+	currentStatus, err := db.taskStatus(ctx, projectID, taskID)
+	if err != nil {
 		return RealCodexRunResult{}, err
+	}
+	if currentStatus != "needs_decision" {
+		if err := db.transitionTask(ctx, projectID, taskID, currentStatus, "needs_decision", "real_codex_adapter_blocked", map[string]any{
+			"task_id":        taskID,
+			"run_id":         runID,
+			"environment_id": env.ID,
+			"classification": classification,
+			"blockers":       blockers,
+		}); err != nil {
+			return RealCodexRunResult{}, err
+		}
 	}
 	return RealCodexRunResult{TaskID: taskID, TaskStatus: "needs_decision", ImplementationRun: runID, Classification: classification, WorktreeRoot: env.ProjectRoot, Blockers: blockers}, nil
 }

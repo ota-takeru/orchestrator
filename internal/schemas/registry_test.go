@@ -3,6 +3,7 @@ package schemas
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,18 @@ func TestValidateCodexFinalMessage(t *testing.T) {
 	}
 	if err := ValidateCodexFinalMessage(`not json`); err == nil {
 		t.Fatal("expected non-json final message to fail")
+	}
+}
+
+func TestCodexFinalMessageSchemaIsStrictForStructuredOutputs(t *testing.T) {
+	schema := string(CodexFinalMessageSchema())
+	for _, required := range []string{
+		`"required": ["summary", "status", "tests", "blockers"]`,
+		`"required": ["command", "status", "notes"]`,
+	} {
+		if !strings.Contains(schema, required) {
+			t.Fatalf("codex final schema missing strict required set %s:\n%s", required, schema)
+		}
 	}
 }
 

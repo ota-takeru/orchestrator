@@ -135,6 +135,36 @@ func TestRunRealCodexTaskUsesTaskWorktreeWhenGitRepo(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskDirtyCanonicalWorktreeOpensDecision(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := initStorageGitRepo(t)
+	setRealCodexDoctorDetectedForTest(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	if err := os.WriteFile(filepath.Join(projectRoot, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "needs_decision" || result.Classification != "worktree_required" {
+		t.Fatalf("result = %#v", result)
+	}
+	var taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "needs_decision" {
+		t.Fatalf("task status = %s", taskStatus)
+	}
+}
+
 func TestRunRealCodexTaskIncludesTrustedArtifactContext(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -222,6 +252,13 @@ func TestCodexPromptStdinUsesPromptContentNotPath(t *testing.T) {
 	argv := codexExecArgv(projectRoot, "<final-message-path>", "<output-schema-path>")
 	if len(argv) == 0 || argv[len(argv)-1] != "-" {
 		t.Fatalf("codex argv should read prompt from stdin: %#v", argv)
+	}
+	joinedArgv := strings.Join(argv, "\x00")
+	if strings.Contains(joinedArgv, "--ask-for-approval") {
+		t.Fatalf("codex argv uses removed approval flag: %#v", argv)
+	}
+	if !strings.Contains(joinedArgv, `approval_policy="never"`) || !strings.Contains(joinedArgv, "sandbox_workspace_write.network_access=false") {
+		t.Fatalf("codex argv missing non-interactive config overrides: %#v", argv)
 	}
 	for _, arg := range argv {
 		if strings.Contains(arg, "Task ID: TASK-001") || strings.HasSuffix(arg, "prompt.md") {

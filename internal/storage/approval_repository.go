@@ -346,7 +346,7 @@ LIMIT 1`, projectID, taskID).Scan(&baseCommit, &headCommit, &diffHash); err != n
 SELECT id
 FROM runs
 WHERE project_id = ? AND task_id = ? AND status = 'succeeded'
-  AND run_type IN ('verification', 'reverify', 'review')
+  AND run_type IN ('verification', 'reverify')
 ORDER BY created_at DESC
 LIMIT 1`, projectID, taskID).Scan(&evidence.RunID); err != nil {
 		if err == sql.ErrNoRows {

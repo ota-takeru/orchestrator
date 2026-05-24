@@ -732,7 +732,7 @@ const codexFinalMessageSchema = `{
   "$id": "devos.codex-final-message.v1",
   "title": "DevOS Codex Final Message",
   "type": "object",
-  "required": ["summary", "status"],
+  "required": ["summary", "status", "tests", "blockers"],
   "additionalProperties": false,
   "properties": {
     "status": { "type": "string", "enum": ["succeeded", "blocked", "failed"] },
@@ -741,7 +741,7 @@ const codexFinalMessageSchema = `{
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["command", "status"],
+        "required": ["command", "status", "notes"],
         "additionalProperties": false,
         "properties": {
           "command": { "type": "string" },

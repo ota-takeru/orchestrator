@@ -61,6 +61,32 @@ func TestMergeApprovalRequiresMatchingFinalReview(t *testing.T) {
 	}
 }
 
+func TestFinalReviewApprovalUsesVerificationEvidenceWhenReviewRunIsLatest(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit, head_commit,
+  diff_hash, created_at, updated_at, started_at, completed_at
+) VALUES ('RUN-REVIEW', 'PROJECT-001', 'TASK-001', 'review', 'succeeded', 2, 'BASE', 'HEAD', 'DIFF', ?, ?, ?, ?)`,
+		now(), now(), now(), now()); err != nil {
+		t.Fatal(err)
+	}
+
+	finalReview, err := db.ApproveTaskEvidence(ctx, ApprovalInput{
+		ProjectID:    "PROJECT-001",
+		TaskID:       "TASK-001",
+		ApprovalType: ApprovalFinalReview,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalReview.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("unexpected final review result: %#v", finalReview)
+	}
+}
+
 func TestRejectFinalReviewMovesTaskToNeedsDecision(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

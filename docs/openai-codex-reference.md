@@ -1,6 +1,6 @@
 # OpenAI Codex Reference
 
-確認日: 2026-05-23
+確認日: 2026-05-24
 
 このメモは、Personal Dev OSのCodex実行層に関係する公式ドキュメント確認結果です。実装時にCLIフラグやSDK仕様が変わる可能性があるため、該当箇所は再確認してください。
 
@@ -25,15 +25,14 @@
 - `--ignore-user-config` は `$CODEX_HOME/config.toml` を読み込まない。認証は引き続き `CODEX_HOME` を使う。
 - `--ignore-rules` はuser/project execpolicy `.rules` を読み込まない。
 - `--color never` でstdoutのANSI colorを無効化できる。
-- `--ask-for-approval` は `untrusted` / `on-request` / `never` を指定できる。
-- `--full-auto` は互換用として残っているが、新しい自動化では `--sandbox workspace-write` を優先する。
+- `codex-cli 0.133.0` の `codex exec --help` では `--ask-for-approval` は提供されていない。非対話実行のapproval policyは `-c 'approval_policy="never"'` のrun config overrideで明示する。
 - `danger-full-access` は隔離済みCI runnerやコンテナなど、外側で制御された環境だけで検討する。
 - sandboxとapprovalは別の制御であり、workspace-writeでもワークスペース外編集やネットワークアクセスには承認が必要になる構成がある。
-- `--ask-for-approval untrusted` は、安全と見なされるread操作以外の、状態変更や外部実行につながるコマンドで承認を求める用途に使える。
+- `approval_policy` の正規値は公式Configuration referenceで `untrusted` / `on-request` / `never` と定義され、`on-failure` はdeprecatedです。Orchestratorの非対話runではraw approval promptを出さず `never` を使い、判断が必要な状態はHuman Inboxへ正規化する。
 - Auto-review modeは承認判断者を人間からreviewer agentへ差し替えるもので、sandbox境界や権限を広げるものではない。高リスク判断の最終代替にはしない。
 - CLI flags / `--config`、profile、project config、user config、system config、built-in defaults の順で設定が解決される。
 - workspace-writeのnetwork accessはデフォルトoffで、必要な場合は `sandbox_workspace_write.network_access` とnetwork proxy policyを明示する。
-- CLI `-c key=value` はそのrunのconfig overrideとして使えるため、`-c 'sandbox_workspace_write.network_access=false'` をrunごとに明示できる。
+- CLI `-c key=value` はそのrunのconfig overrideとして使えるため、`-c 'approval_policy="never"'` と `-c 'sandbox_workspace_write.network_access=false'` をrunごとに明示できる。
 - MCP serverを `required = true` にすると、初期化失敗時に `codex exec` はそのまま続行せずエラー終了する。
 - Codex CLI referenceは `codex sandbox` にmacOS、Linux、Windowsのsandbox helperを持つ。
 - Configuration referenceはnative Windows sandbox用の `windows.sandbox` と `windows.sandbox_private_desktop` を持つ。

@@ -42,7 +42,7 @@ codex_execution_profiles:
 共通設定:
 
 - sandbox: `workspace-write`
-- approval_policy: `untrusted`
+- approval_policy: `never`
 - ignore_user_config: true
 - ignore_rules: true
 - ephemeral: true
@@ -65,11 +65,11 @@ codex exec `
   --ignore-rules `
   --ephemeral `
   --sandbox workspace-write `
-  --ask-for-approval untrusted `
   --json `
   --color never `
   --output-schema C:\dev\app\.devagent\schemas\run-result.schema.json `
   -o C:\devos-data\projects\PROJECT-001\runs\RUN-001\final.json `
+  -c 'approval_policy="never"' `
   -c 'sandbox_workspace_write.network_access=false' `
   -C C:\dev\app\.devagent-worktrees\TASK-003 `
   -
@@ -83,11 +83,11 @@ codex exec \
   --ignore-rules \
   --ephemeral \
   --sandbox workspace-write \
-  --ask-for-approval untrusted \
   --json \
   --color never \
   --output-schema /home/user/app/.devagent/schemas/run-result.schema.json \
   -o /home/user/devos-data/projects/PROJECT-001/runs/RUN-001/final.json \
+  -c 'approval_policy="never"' \
   -c 'sandbox_workspace_write.network_access=false' \
   -C /home/user/app/.devagent-worktrees/TASK-003 \
   -

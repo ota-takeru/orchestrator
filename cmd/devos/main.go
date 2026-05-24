@@ -2307,6 +2307,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		fs.SetOutput(io.Discard)
 		projectRoot := fs.String("project-root", "", "project root")
 		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		save := fs.Bool("save", false, "save runtime issues to Human Inbox")
 		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 		if err := fs.Parse(args[1:]); err != nil {
 			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -2320,12 +2321,25 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		if err != nil {
 			return writeError(stdout, *jsonOut, exitStorage, "codex_readiness_failed", err)
 		}
+		var inboxItems []storage.InboxItem
+		if *save {
+			inboxItems, err = db.SaveCodexRuntimeReadiness(ctx, projectID, report)
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitStorage, "codex_readiness_failed", err)
+			}
+		}
 		if *jsonOut {
+			if *save {
+				return writeJSON(stdout, map[string]any{"report": report, "inbox_items": inboxItems}, 0)
+			}
 			return writeJSON(stdout, report, 0)
 		}
 		fmt.Fprintf(stdout, "Codex runtime host: %s\n", report.HostGOOS)
 		for _, item := range report.Items {
 			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.EnvironmentID, item.OSFamily, item.Classification, item.ExpectedHostRuntime)
+		}
+		if *save {
+			fmt.Fprintf(stdout, "Open runtime inbox items: %d\n", len(inboxItems))
 		}
 		return 0
 	case "doctor":
@@ -2700,7 +2714,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")
-	fmt.Fprintln(w, "  devos platform codex-readiness [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos platform codex-readiness [--project-root PATH] [--data-root PATH] [--save] [--json]")
 	fmt.Fprintln(w, "  devos platform map add [--project-root PATH] [--data-root PATH] --from-root PATH --to-root PATH --mode MODE [--write-owner ENV_ID] [--json] FROM_ENV TO_ENV")
 	fmt.Fprintln(w, "  devos platform setup instructions [--project-root PATH] [--data-root PATH] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform setup mark-installed [--project-root PATH] [--data-root PATH] [--include-codex] [--json] INBOX_ID")

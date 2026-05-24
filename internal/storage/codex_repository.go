@@ -297,6 +297,71 @@ func (db *DB) CodexRuntimeReadiness(ctx context.Context, projectID string) (Code
 	return report, nil
 }
 
+func (db *DB) SaveCodexRuntimeReadiness(ctx context.Context, projectID string, report CodexRuntimeReadinessReport) ([]InboxItem, error) {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, item := range report.Items {
+		dedupeKey := strings.Join([]string{projectID, "codex_runtime_readiness", item.EnvironmentID}, ":")
+		if item.CurrentRuntimeUsable {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE inbox_items
+SET status = 'resolved', updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND source_type = 'execution_environment' AND source_id = ? AND dedupe_key = ? AND status = 'open'`,
+				now, now, projectID, item.EnvironmentID, dedupeKey,
+			); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		body := fmt.Sprintf("Classification: %s\nExpected runtime: %s\nBlockers: %s", item.Classification, item.ExpectedHostRuntime, strings.Join(item.Blockers, ", "))
+		inboxID := "INBOX-" + stableShortHash(dedupeKey)
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id,
+  dedupe_key, batch_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, 'runner_capability_issue', 'open', 'execution_environment', ?, ?, ?, 75, ?, ?, ?, ?)
+ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
+  title = excluded.title,
+  body = excluded.body,
+  updated_at = excluded.updated_at`,
+			inboxID, projectID, item.EnvironmentID, dedupeKey, projectID+":codex_runtime_readiness",
+			"Codex runtime not usable: "+item.EnvironmentID, body, now, now,
+		); err != nil {
+			return nil, err
+		}
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "codex_runtime_readiness_saved", map[string]any{
+		"host_goos": report.HostGOOS,
+		"items":     len(report.Items),
+	}, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	committed = true
+	items, err := db.ListInboxItems(ctx, projectID, "open")
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]InboxItem, 0, len(items))
+	for _, item := range items {
+		if item.SourceType == "execution_environment" {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
 func evaluateRealCodexEnvironment(env platform.ExecutionEnvironment, hostGOOS string) (string, []string) {
 	if strings.TrimSpace(env.ProjectRoot) == "" {
 		return "project_root_missing", []string{"project_root_missing"}

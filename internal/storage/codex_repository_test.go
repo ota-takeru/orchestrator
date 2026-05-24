@@ -415,6 +415,49 @@ func TestCodexRuntimeReadinessReportsPerEnvironmentCompatibility(t *testing.T) {
 	}
 }
 
+func TestSaveCodexRuntimeReadinessProjectsInboxIssues(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
+		ID:             "windows-main",
+		OSFamily:       platform.OSFamilyWindows,
+		Role:           platform.RolePrimary,
+		Shell:          platform.ShellPowerShell,
+		ProjectRoot:    `C:\dev\project`,
+		GitProvider:    platform.GitProviderWindows,
+		CodexAdapter:   platform.CodexAdapterWindows,
+		SandboxProfile: platform.SandboxWindowsNative,
+		Status:         "configured",
+	})
+	restore := setRealCodexRuntimeGOOSForTest("linux")
+	report, err := db.CodexRuntimeReadiness(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := db.SaveCodexRuntimeReadiness(ctx, "PROJECT-001", report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemType != "runner_capability_issue" || items[0].SourceID != "windows-main" {
+		t.Fatalf("inbox items = %#v", items)
+	}
+	restore()
+	restore = setRealCodexRuntimeGOOSForTest("windows")
+	defer restore()
+	report, err = db.CodexRuntimeReadiness(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err = db.SaveCodexRuntimeReadiness(ctx, "PROJECT-001", report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected resolved runtime issues, got %#v", items)
+	}
+}
+
 func TestRunRealCodexTaskBlocksMissingRequiredToolchain(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

@@ -620,6 +620,15 @@ func TestPlatformCodexReadinessCLI(t *testing.T) {
 	if windowsItem.ExpectedHostRuntime != "windows" {
 		t.Fatalf("readiness item = %#v", windowsItem)
 	}
+
+	saveOut := runCLI(t, "platform", "codex-readiness", "--project-root", projectRoot, "--data-root", dataRoot, "--save", "--json")
+	var saved struct {
+		InboxItems []storage.InboxItem `json:"inbox_items"`
+	}
+	decodeJSON(t, saveOut, &saved)
+	if len(saved.InboxItems) == 0 || saved.InboxItems[0].ItemType != "runner_capability_issue" {
+		t.Fatalf("saved readiness = %#v", saved)
+	}
 }
 
 func TestPlatformSetupInstructionsAndMarkInstalledCLI(t *testing.T) {

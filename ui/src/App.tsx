@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { approveInboxItem, loadDashboardData } from "./api";
@@ -86,6 +86,8 @@ function App() {
 
         <aside className="space-y-5">
           <CommandPanel command={nextCommand} />
+          <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
+          <MergeGatePanel status={data?.mergeStatus} />
           <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
           <PathMappingsPanel mappings={data?.pathMappings ?? []} />
           <DecisionPanel decisions={data?.decisions ?? []} />
@@ -216,6 +218,60 @@ function DecisionPanel({ decisions }: { decisions: DashboardData["decisions"] })
           </div>
         ))}
       </StackEmpty>
+    </section>
+  );
+}
+
+function ToolchainSetupPanel({ cards }: { cards: DashboardData["toolchainSetupCards"] }) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Setup Cards</h2>
+        <Wrench size={18} className="text-zinc-500" />
+      </div>
+      <StackEmpty empty={cards.length === 0} label="No setup blockers">
+        {cards.map((card) => (
+          <div className="stack-row" key={card.inbox_id}>
+            <span>
+              {card.toolchain_key} on {card.environment_id}
+            </span>
+            <small>{card.required_for_merge ? "merge blocker" : card.required_for}</small>
+            <small>{card.instructions[0] ?? card.message}</small>
+            <code className="inline-command">{card.rerun_command}</code>
+          </div>
+        ))}
+      </StackEmpty>
+    </section>
+  );
+}
+
+function MergeGatePanel({ status }: { status?: DashboardData["mergeStatus"] }) {
+  const blockers = status?.blockers ?? [];
+  const inboxItems = status?.blocking_inbox_items ?? [];
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Merge Gate</h2>
+        <GitMerge size={18} className="text-zinc-500" />
+      </div>
+      <div className="stack">
+        <div className="stack-row">
+          <span>{status?.ready ? "Ready" : "Blocked"}</span>
+          <small>{status?.queue.length ?? 0} queued tasks</small>
+        </div>
+        {blockers.map((blocker) => (
+          <div className="stack-row" key={blocker}>
+            <span>{blocker}</span>
+            <small>gate blocker</small>
+          </div>
+        ))}
+        {inboxItems.map((item) => (
+          <div className="stack-row" key={item.id}>
+            <span>{item.title}</span>
+            <small>{item.source_type}</small>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

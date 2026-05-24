@@ -19,6 +19,34 @@ type MergeQueueEntry struct {
 	HeadCommit string `json:"head_commit"`
 }
 
+type MergeGateStatus struct {
+	Queue              []MergeQueueEntry `json:"queue"`
+	Blockers           []string          `json:"blockers,omitempty"`
+	BlockingInboxItems []InboxItem       `json:"blocking_inbox_items,omitempty"`
+	Ready              bool              `json:"ready"`
+}
+
+func (db *DB) MergeGateStatus(ctx context.Context, projectID string) (MergeGateStatus, error) {
+	queue, err := db.ListMergeQueue(ctx, projectID)
+	if err != nil {
+		return MergeGateStatus{}, err
+	}
+	blockers, err := db.unresolvedMergeBlockers(ctx, projectID)
+	if err != nil {
+		return MergeGateStatus{}, err
+	}
+	items, err := db.mergeBlockingInboxItems(ctx, projectID)
+	if err != nil {
+		return MergeGateStatus{}, err
+	}
+	return MergeGateStatus{
+		Queue:              queue,
+		Blockers:           blockers,
+		BlockingInboxItems: items,
+		Ready:              len(blockers) == 0,
+	}, nil
+}
+
 func (db *DB) PreviewTaskMerge(ctx context.Context, projectID string, taskID string) (MergeQueueEntry, error) {
 	if strings.TrimSpace(projectID) == "" {
 		return MergeQueueEntry{}, fmt.Errorf("project id is required")

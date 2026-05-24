@@ -28,6 +28,38 @@ type ToolchainSetupInstructions struct {
 	RerunCommand     string            `json:"rerun_command"`
 }
 
+func (db *DB) ListToolchainSetupCards(ctx context.Context, projectID string) ([]ToolchainSetupInstructions, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id
+FROM inbox_items
+WHERE project_id = ? AND source_type = 'toolchain_requirement' AND status = 'open'
+ORDER BY priority DESC, created_at ASC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var inboxIDs []string
+	for rows.Next() {
+		var inboxID string
+		if err := rows.Scan(&inboxID); err != nil {
+			return nil, err
+		}
+		inboxIDs = append(inboxIDs, inboxID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	cards := make([]ToolchainSetupInstructions, 0, len(inboxIDs))
+	for _, inboxID := range inboxIDs {
+		card, err := db.ToolchainSetupInstructions(ctx, projectID, inboxID)
+		if err != nil {
+			return nil, err
+		}
+		cards = append(cards, card)
+	}
+	return cards, nil
+}
+
 type ToolchainWaiverInput struct {
 	ProjectID     string
 	InboxID       string

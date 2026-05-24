@@ -86,10 +86,41 @@ export type PathMapping = {
   status: string;
 };
 
+export type ToolchainSetupCard = {
+  inbox_id: string;
+  requirement_id: string;
+  environment_id: string;
+  os_family: string;
+  toolchain_key: string;
+  required_for: string;
+  required_for_merge: boolean;
+  status: string;
+  message: string;
+  instructions: string[];
+  rerun_command: string;
+};
+
+export type MergeQueueEntry = {
+  id: string;
+  task_id: string;
+  status: string;
+  base_commit: string;
+  head_commit: string;
+};
+
+export type MergeGateStatus = {
+  queue: MergeQueueEntry[];
+  blockers?: string[];
+  blocking_inbox_items?: InboxItem[];
+  ready: boolean;
+};
+
 export type DashboardData = {
   snapshot: HumanInboxSnapshot;
   decisions: Decision[];
   baselineIssues: MemoryRecord[];
   trustedArtifacts: TrustedArtifact[];
   pathMappings: PathMapping[];
+  toolchainSetupCards: ToolchainSetupCard[];
+  mergeStatus: MergeGateStatus;
 };

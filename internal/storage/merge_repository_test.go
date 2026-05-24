@@ -97,3 +97,27 @@ func TestListMergeQueue(t *testing.T) {
 		t.Fatalf("unexpected entries: %#v", entries)
 	}
 }
+
+func TestMergeGateStatusSurfacesBlockingInboxItems(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (
+  'INBOX-MERGE', 'PROJECT-001', 'human_decision', 'open', 'decision', 'DEC-MERGE',
+  'decision:DEC-MERGE', 80, 'Merge decision', 'Review merge blocker', ?, ?
+)`, now(), now()); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := db.MergeGateStatus(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Ready || len(status.Blockers) == 0 || len(status.BlockingInboxItems) != 1 {
+		t.Fatalf("merge gate status = %#v", status)
+	}
+}

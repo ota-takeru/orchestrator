@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/storage"
+	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
 
 func TestServerExposesHumanInboxSnapshot(t *testing.T) {
@@ -183,6 +184,69 @@ func TestServerExposesPathMappings(t *testing.T) {
 	}
 	if len(body.Mappings) != 1 || body.Mappings[0].Mode != "same_filesystem" {
 		t.Fatalf("path mappings = %#v", body.Mappings)
+	}
+}
+
+func TestServerExposesToolchainSetupCards(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	ctx := context.Background()
+	insertAPIEnvironment(t, db, projectID, "linux-main", "linux", "/repo")
+	if err := db.SaveToolchainReport(ctx, projectID, toolchains.Report{
+		EnvironmentID: "linux-main",
+		Requirements: []toolchains.Requirement{{
+			ToolchainKey:     "corepack",
+			RequiredFor:      toolchains.RequiredForVerification,
+			RequiredForMerge: true,
+			Status:           toolchains.StatusMissing,
+			Message:          "Corepack is missing",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/platform/toolchain-setup", nil)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Cards []storage.ToolchainSetupInstructions `json:"cards"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Cards) != 1 || body.Cards[0].ToolchainKey != "corepack" || len(body.Cards[0].Instructions) == 0 {
+		t.Fatalf("toolchain setup cards = %#v", body.Cards)
+	}
+}
+
+func TestServerExposesMergeStatus(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (
+  'INBOX-MERGE', ?, 'human_decision', 'open', 'decision', 'DEC-MERGE',
+  'decision:DEC-MERGE', 80, 'Merge decision', 'Review merge blocker', ?, ?
+)`, projectID, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/merge/status", nil)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var status storage.MergeGateStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Ready || len(status.Blockers) == 0 || len(status.BlockingInboxItems) != 1 {
+		t.Fatalf("merge status = %#v", status)
 	}
 }
 

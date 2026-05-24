@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -215,6 +216,41 @@ WHERE project_id = ?
 		return []string{"required toolchain is not ready for merge"}, nil
 	}
 	return nil, nil
+}
+
+func (db *DB) mergeBlockingInboxItems(ctx context.Context, projectID string) ([]InboxItem, error) {
+	items, err := db.ListInboxItems(ctx, projectID, "open")
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]InboxItem, 0, len(items))
+	for _, item := range items {
+		switch item.SourceType {
+		case "decision", "human_approval", "merge_conflict":
+			filtered = append(filtered, item)
+		case "toolchain_requirement":
+			required, err := db.toolchainRequiredForMerge(ctx, projectID, item.SourceID)
+			if err != nil {
+				return nil, err
+			}
+			if required {
+				filtered = append(filtered, item)
+			}
+		}
+	}
+	return filtered, nil
+}
+
+func (db *DB) toolchainRequiredForMerge(ctx context.Context, projectID string, requirementID string) (bool, error) {
+	var required int
+	err := db.sql.QueryRowContext(ctx, "SELECT required_for_merge FROM toolchain_requirements WHERE project_id = ? AND id = ?", projectID, requirementID).Scan(&required)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return required == 1, nil
 }
 
 func (db *DB) saveRealGitMergeEvidence(ctx context.Context, projectID string, entry MergeQueueEntry, runID string, attemptNo int, target string, preMain string, candidate string, status string, blockers []string) error {

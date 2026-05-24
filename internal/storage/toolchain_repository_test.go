@@ -150,6 +150,13 @@ func TestToolchainSetupInstructions(t *testing.T) {
 	if instructions.ToolchainKey != "bubblewrap" || len(instructions.Instructions) == 0 || instructions.RerunCommand == "" {
 		t.Fatalf("instructions = %#v", instructions)
 	}
+	cards, err := db.ListToolchainSetupCards(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cards) != 1 || cards[0].InboxID != inboxID {
+		t.Fatalf("cards = %#v", cards)
+	}
 }
 
 func TestWaiveToolchainRequirementRecordsDecision(t *testing.T) {

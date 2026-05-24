@@ -234,6 +234,14 @@ td:nth-child(5) {
   font-size: 12px;
 }
 
+.inline-command {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: #344054;
+  font-size: 12px;
+}
+
 .error-banner {
   display: flex;
   align-items: flex-start;

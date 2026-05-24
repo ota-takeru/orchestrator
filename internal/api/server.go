@@ -28,6 +28,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/memory", s.handleMemory)
 	mux.HandleFunc("/api/artifacts/trusted", s.handleTrustedArtifacts)
 	mux.HandleFunc("/api/platform/path-mappings", s.handlePathMappings)
+	mux.HandleFunc("/api/platform/toolchain-setup", s.handleToolchainSetup)
+	mux.HandleFunc("/api/merge/status", s.handleMergeStatus)
 	return mux
 }
 
@@ -158,6 +160,32 @@ func (s *Server) handlePathMappings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"mappings": mappings})
+}
+
+func (s *Server) handleToolchainSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	cards, err := s.db.ListToolchainSetupCards(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "toolchain_setup_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"cards": cards})
+}
+
+func (s *Server) handleMergeStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	status, err := s.db.MergeGateStatus(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "merge_status_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, status)
 }
 
 func parseInboxActionPath(path string) (string, string, bool) {

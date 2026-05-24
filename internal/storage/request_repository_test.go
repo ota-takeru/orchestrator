@@ -153,6 +153,34 @@ func TestStartWorkProcessesPlanningAndConsolidation(t *testing.T) {
 	}
 }
 
+func TestStartWorkProcessesExecutionQueue(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	approveRequiredArtifacts(t, db, ctx, "PROJECT-001", root, "approved")
+	if _, err := db.MaterializeApprovedTasks(ctx, "PROJECT-001"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.StartWork(ctx, WorkStartInput{
+		ProjectID:                 "PROJECT-001",
+		Mode:                      "sequential",
+		PlanningConcurrency:       3,
+		ImplementationConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Execution) != 1 {
+		t.Fatalf("execution = %#v", result.Execution)
+	}
+	if result.Execution[0].QueueItem.Status != "completed" || result.Execution[0].Run.ImplementationRun == "" {
+		t.Fatalf("execution result = %#v", result.Execution[0])
+	}
+}
+
 func TestPauseAndResumeWorkerRun(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

@@ -1,11 +1,11 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -473,15 +473,15 @@ WHERE project_id = ? AND task_id = ? AND approval_type = ? AND status = 'approve
 }
 
 func sameJSON(left string, right string) bool {
-	var compactLeft bytes.Buffer
-	var compactRight bytes.Buffer
-	if err := json.Compact(&compactLeft, []byte(left)); err != nil {
+	var leftValue any
+	var rightValue any
+	if err := json.Unmarshal([]byte(left), &leftValue); err != nil {
 		return strings.TrimSpace(left) == strings.TrimSpace(right)
 	}
-	if err := json.Compact(&compactRight, []byte(right)); err != nil {
+	if err := json.Unmarshal([]byte(right), &rightValue); err != nil {
 		return strings.TrimSpace(left) == strings.TrimSpace(right)
 	}
-	return compactLeft.String() == compactRight.String()
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 func bothApprovalsExist(ctx context.Context, tx *sql.Tx, projectID string, taskID string, evidenceJSON string) (bool, error) {

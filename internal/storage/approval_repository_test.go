@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
@@ -231,6 +232,22 @@ func TestApproveHumanApprovalApprovesOpenSourceAndResolvesInbox(t *testing.T) {
 	}
 	if approvalStatus != "approved" || openInbox != 0 {
 		t.Fatalf("approval=%s open_inbox=%d", approvalStatus, openInbox)
+	}
+}
+
+func TestHumanApprovalEvidenceAllowsDifferentJSONFieldOrder(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	var gateID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT id FROM gate_results WHERE project_id = 'PROJECT-001' AND run_id = 'RUN-001'").Scan(&gateID); err != nil {
+		t.Fatal(err)
+	}
+	evidenceJSON := fmt.Sprintf(`{"gate_result_ids":["%s"],"verification_result_ids":["VERIF-001"],"diff_hash":"DIFF","head_commit":"HEAD","run_id":"RUN-001","base_commit":"BASE"}`, gateID)
+	insertOpenHumanApprovalWithInbox(t, db, "PROJECT-001", "APPROVAL-FINAL", "TASK-001", ApprovalFinalReview, evidenceJSON)
+
+	if _, err := db.ApproveHumanApproval(ctx, "PROJECT-001", "APPROVAL-FINAL", "same evidence"); err != nil {
+		t.Fatal(err)
 	}
 }
 

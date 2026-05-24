@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestCreateFeatureRequestCreatesQueueItem(t *testing.T) {
@@ -210,5 +211,43 @@ func TestPauseAndResumeWorkerRun(t *testing.T) {
 	}
 	if resumed.Status != "running" {
 		t.Fatalf("resumed = %#v", resumed)
+	}
+}
+
+func TestRecoverLostWorkQueueLeasesRequeuesOrFails(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	first, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "recover me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "fail me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE work_queue_items
+SET status = 'running', lease_expires_at = ?, attempt_no = 1, max_attempts = 3
+WHERE id = ?`, expired, first.QueueItem.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE work_queue_items
+SET status = 'running', lease_expires_at = ?, attempt_no = 3, max_attempts = 3
+WHERE id = ?`, expired, second.QueueItem.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.RecoverLostWorkQueueLeases(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Recovered) != 1 || result.Recovered[0].ID != first.QueueItem.ID || result.Recovered[0].Status != "queued" {
+		t.Fatalf("recovered = %#v", result.Recovered)
+	}
+	if len(result.Failed) != 1 || result.Failed[0].ID != second.QueueItem.ID || result.Failed[0].Status != "failed" {
+		t.Fatalf("failed = %#v", result.Failed)
 	}
 }

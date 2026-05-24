@@ -30,10 +30,11 @@ type WorkerRunRecord struct {
 }
 
 type WorkStartResult struct {
-	WorkerRun     WorkerRunRecord       `json:"worker_run"`
-	Planning      PlanStartResult       `json:"planning"`
-	Consolidation PlanConsolidateResult `json:"consolidation"`
-	Execution     []ExecutionWorkResult `json:"execution"`
+	WorkerRun     WorkerRunRecord         `json:"worker_run"`
+	Recovery      WorkQueueRecoveryResult `json:"recovery"`
+	Planning      PlanStartResult         `json:"planning"`
+	Consolidation PlanConsolidateResult   `json:"consolidation"`
+	Execution     []ExecutionWorkResult   `json:"execution"`
 }
 
 type WorkStatus struct {
@@ -46,6 +47,11 @@ type ExecutionWorkResult struct {
 	TaskStatus string              `json:"task_status"`
 	QueueItem  WorkQueueItemRecord `json:"queue_item"`
 	Run        FakeRunResult       `json:"run"`
+}
+
+type WorkQueueRecoveryResult struct {
+	Recovered []WorkQueueItemRecord `json:"recovered"`
+	Failed    []WorkQueueItemRecord `json:"failed"`
 }
 
 func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartResult, error) {
@@ -73,7 +79,11 @@ func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartRes
 	if err != nil {
 		return WorkStartResult{}, err
 	}
-	planning, workErr := db.StartPlanning(ctx, PlanStartInput{ProjectID: input.ProjectID, Concurrency: planningConcurrency})
+	recovery, workErr := db.RecoverLostWorkQueueLeases(ctx, input.ProjectID)
+	var planning PlanStartResult
+	if workErr == nil {
+		planning, workErr = db.StartPlanning(ctx, PlanStartInput{ProjectID: input.ProjectID, Concurrency: planningConcurrency})
+	}
 	var consolidation PlanConsolidateResult
 	if workErr == nil {
 		consolidation, workErr = db.ConsolidatePlanning(ctx, input.ProjectID)
@@ -98,7 +108,7 @@ func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartRes
 	if workErr != nil {
 		return WorkStartResult{}, workErr
 	}
-	return WorkStartResult{WorkerRun: finished, Planning: planning, Consolidation: consolidation, Execution: execution}, nil
+	return WorkStartResult{WorkerRun: finished, Recovery: recovery, Planning: planning, Consolidation: consolidation, Execution: execution}, nil
 }
 
 func (db *DB) GetWorkStatus(ctx context.Context, projectID string) (WorkStatus, error) {
@@ -218,6 +228,102 @@ func (db *DB) ProcessExecutionQueueFake(ctx context.Context, projectID string, l
 		})
 	}
 	return results, nil
+}
+
+func (db *DB) RecoverLostWorkQueueLeases(ctx context.Context, projectID string) (WorkQueueRecoveryResult, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, lane, item_type, item_id, status, priority, preferred_environment_id,
+       required_environment_id, run_profile_id, blocked_reason, run_after,
+       lease_owner, lease_expires_at, last_heartbeat_at, attempt_no, max_attempts,
+       idempotency_key, started_at, finished_at, created_at, updated_at
+FROM work_queue_items
+WHERE project_id = ?
+  AND status IN ('leased', 'running')
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at < ?
+ORDER BY lease_expires_at ASC`, projectID, now)
+	if err != nil {
+		return WorkQueueRecoveryResult{}, err
+	}
+	defer rows.Close()
+	var expired []WorkQueueItemRecord
+	for rows.Next() {
+		item, err := scanWorkQueueItem(rows)
+		if err != nil {
+			return WorkQueueRecoveryResult{}, err
+		}
+		expired = append(expired, item)
+	}
+	if err := rows.Err(); err != nil {
+		return WorkQueueRecoveryResult{}, err
+	}
+	result := WorkQueueRecoveryResult{}
+	for _, item := range expired {
+		recovered, failed, err := db.recoverWorkQueueItem(ctx, projectID, item, now)
+		if err != nil {
+			return WorkQueueRecoveryResult{}, err
+		}
+		if recovered.ID != "" {
+			result.Recovered = append(result.Recovered, recovered)
+		}
+		if failed.ID != "" {
+			result.Failed = append(result.Failed, failed)
+		}
+	}
+	return result, nil
+}
+
+func (db *DB) recoverWorkQueueItem(ctx context.Context, projectID string, item WorkQueueItemRecord, now string) (WorkQueueItemRecord, WorkQueueItemRecord, error) {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return WorkQueueItemRecord{}, WorkQueueItemRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	targetStatus := "queued"
+	errorJSON := sql.NullString{}
+	if item.AttemptNo >= item.MaxAttempts {
+		targetStatus = "failed"
+		errorJSON = sql.NullString{String: `{"message":"work queue lease expired after max attempts"}`, Valid: true}
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE work_queue_items
+SET status = ?,
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    error_json = ?,
+    updated_at = ?
+WHERE project_id = ? AND id = ? AND status IN ('leased', 'running')`,
+		targetStatus, errorJSON, now, projectID, item.ID,
+	); err != nil {
+		return WorkQueueItemRecord{}, WorkQueueItemRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "work_queue_lease_recovered", map[string]any{
+		"work_queue_item_id": item.ID,
+		"from_status":        item.Status,
+		"to_status":          targetStatus,
+		"attempt_no":         item.AttemptNo,
+		"max_attempts":       item.MaxAttempts,
+	}, now); err != nil {
+		return WorkQueueItemRecord{}, WorkQueueItemRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkQueueItemRecord{}, WorkQueueItemRecord{}, err
+	}
+	committed = true
+	updated, err := db.getWorkQueueItem(ctx, projectID, item.ID)
+	if err != nil {
+		return WorkQueueItemRecord{}, WorkQueueItemRecord{}, err
+	}
+	if targetStatus == "failed" {
+		return WorkQueueItemRecord{}, updated, nil
+	}
+	return updated, WorkQueueItemRecord{}, nil
 }
 
 func (db *DB) listExecutionQueueItems(ctx context.Context, projectID string, limit int) ([]WorkQueueItemRecord, error) {

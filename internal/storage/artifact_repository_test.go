@@ -116,6 +116,56 @@ func TestListArtifactsReturnsLatestAndApprovedVersions(t *testing.T) {
 	}
 }
 
+func TestApproveArtifactVersionSupersedesPreviousApprovedVersion(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	first, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactArchitecture,
+		Path:         ".devagent/architecture.md",
+		Content:      []byte("# Architecture v1"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", first.ArtifactID, first.Version, "approved", ""); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactArchitecture,
+		Path:         ".devagent/architecture.md",
+		Content:      []byte("# Architecture v2"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", second.ArtifactID, second.Version, "approved", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var firstStatus, approvedVersionID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM artifact_versions WHERE id = ?", first.VersionID).Scan(&firstStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT approved_version_id FROM artifacts WHERE id = ?", first.ArtifactID).Scan(&approvedVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if firstStatus != "superseded" || approvedVersionID != second.VersionID {
+		t.Fatalf("first status=%s approved=%s", firstStatus, approvedVersionID)
+	}
+	records, err := db.TrustedArtifactContext(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].VersionID != second.VersionID {
+		t.Fatalf("trusted context = %#v", records)
+	}
+}
+
 func TestApprovedWithNotesRequiresNotes(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

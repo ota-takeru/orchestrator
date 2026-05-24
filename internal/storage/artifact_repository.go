@@ -254,6 +254,10 @@ func (db *DB) ApproveArtifactVersion(ctx context.Context, projectID string, arti
 		return ArtifactVersionRecord{}, fmt.Errorf("artifact %s does not belong to project %s", artifactID, projectID)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	previousApprovedVersionID, err := approvedArtifactVersionID(ctx, tx, artifactID)
+	if err != nil {
+		return ArtifactVersionRecord{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE artifact_versions
 SET status = ?, reviewed_by = 'human', reviewed_at = ?, approval_notes = ?, rejected_reason = ?
@@ -265,6 +269,14 @@ WHERE id = ?`,
 	approvedVersionID := any(nil)
 	if status == "approved" || status == "approved_with_notes" {
 		approvedVersionID = record.VersionID
+		if previousApprovedVersionID != "" && previousApprovedVersionID != record.VersionID {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE artifact_versions
+SET status = 'superseded'
+WHERE id = ? AND status IN ('approved', 'approved_with_notes')`, previousApprovedVersionID); err != nil {
+				return ArtifactVersionRecord{}, err
+			}
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE artifacts
@@ -336,6 +348,20 @@ WHERE artifact_id = ? AND version = ?`, artifactID, version).Scan(&record.Artifa
 		return ArtifactVersionRecord{}, err
 	}
 	return record, nil
+}
+
+func approvedArtifactVersionID(ctx context.Context, tx *sql.Tx, artifactID string) (string, error) {
+	var versionID sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT approved_version_id FROM artifacts WHERE id = ?", artifactID).Scan(&versionID); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("artifact not found: %s", artifactID)
+		}
+		return "", err
+	}
+	if !versionID.Valid {
+		return "", nil
+	}
+	return versionID.String, nil
 }
 
 func (db *DB) TrustedArtifactContentBundle(ctx context.Context, projectID string) ([]TrustedArtifactContentRecord, error) {

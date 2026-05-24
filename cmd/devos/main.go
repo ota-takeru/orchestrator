@@ -16,6 +16,7 @@ import (
 	"github.com/ota-takeru/orchestrator/internal/api"
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/preflight"
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 	"github.com/ota-takeru/orchestrator/internal/storage"
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
@@ -2385,6 +2386,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		fs.SetOutput(io.Discard)
 		projectRoot := fs.String("project-root", "", "project root")
 		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		fromFile := fs.String("from-file", "", "import codex readiness JSON produced in another runtime")
 		save := fs.Bool("save", false, "save runtime issues to Human Inbox")
 		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -2395,9 +2397,20 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 			return writeError(stdout, *jsonOut, errCode, "codex_readiness_failed", err)
 		}
 		defer db.Close()
-		report, err := db.CodexRuntimeReadiness(ctx, projectID)
-		if err != nil {
-			return writeError(stdout, *jsonOut, exitStorage, "codex_readiness_failed", err)
+		var report storage.CodexRuntimeReadinessReport
+		if strings.TrimSpace(*fromFile) != "" {
+			report, err = readCodexReadinessReportFile(*fromFile)
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitValidation, "codex_readiness_import_failed", err)
+			}
+			if err := validateCodexReadinessEnvironments(ctx, db, projectID, report); err != nil {
+				return writeError(stdout, *jsonOut, exitValidation, "codex_readiness_import_failed", err)
+			}
+		} else {
+			report, err = db.CodexRuntimeReadiness(ctx, projectID)
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitStorage, "codex_readiness_failed", err)
+			}
 		}
 		if len(report.Items) == 0 {
 			return writeError(stdout, *jsonOut, exitValidation, "codex_readiness_failed", fmt.Errorf("no execution environments configured for project; run devos init --project-root %s first", root))
@@ -2640,6 +2653,41 @@ func saveCodexReadinessToolchainReports(ctx context.Context, db *storage.DB, pro
 	return saved, nil
 }
 
+func readCodexReadinessReportFile(path string) (storage.CodexRuntimeReadinessReport, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return storage.CodexRuntimeReadinessReport{}, err
+	}
+	var report storage.CodexRuntimeReadinessReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return storage.CodexRuntimeReadinessReport{}, err
+	}
+	if err := schemas.ValidateCodexRuntimeReadiness(string(raw)); err != nil {
+		return storage.CodexRuntimeReadinessReport{}, err
+	}
+	if strings.TrimSpace(report.HostGOOS) == "" {
+		return storage.CodexRuntimeReadinessReport{}, errors.New("codex readiness report requires host_goos")
+	}
+	return report, nil
+}
+
+func validateCodexReadinessEnvironments(ctx context.Context, db *storage.DB, projectID string, report storage.CodexRuntimeReadinessReport) error {
+	envs, err := db.ListExecutionEnvironments(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	envByID := map[string]struct{}{}
+	for _, env := range envs {
+		envByID[env.ID] = struct{}{}
+	}
+	for _, item := range report.Items {
+		if _, ok := envByID[item.EnvironmentID]; !ok {
+			return fmt.Errorf("codex readiness report references unknown environment: %s", item.EnvironmentID)
+		}
+	}
+	return nil
+}
+
 func runPlatformMap(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "missing platform map subcommand")
@@ -2831,7 +2879,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform detect [--project-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos platform profile set [--project-root PATH] [--data-root PATH] [--json] MODE")
 	fmt.Fprintln(w, "  devos platform profile list [--project-root PATH] [--data-root PATH] [--json]")
-	fmt.Fprintln(w, "  devos platform codex-readiness [--project-root PATH] [--data-root PATH] [--save] [--json]")
+	fmt.Fprintln(w, "  devos platform codex-readiness [--project-root PATH] [--data-root PATH] [--from-file PATH] [--save] [--json]")
 	fmt.Fprintln(w, "  devos platform map add [--project-root PATH] [--data-root PATH] --from-root PATH --to-root PATH --mode MODE [--write-owner ENV_ID] [--json] FROM_ENV TO_ENV")
 	fmt.Fprintln(w, "  devos platform setup instructions [--project-root PATH] [--data-root PATH] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform setup mark-installed [--project-root PATH] [--data-root PATH] [--include-codex] [--json] INBOX_ID")

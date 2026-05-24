@@ -643,6 +643,43 @@ func TestPlatformCodexReadinessCLI(t *testing.T) {
 	if len(saved.InboxItems) == 0 || saved.InboxItems[0].ItemType != "runner_capability_issue" {
 		t.Fatalf("saved readiness = %#v", saved)
 	}
+
+	reportPath := filepath.Join(projectRoot, "windows-codex-readiness.json")
+	imported := storage.CodexRuntimeReadinessReport{
+		HostGOOS: "windows",
+		Items: []storage.CodexRuntimeReadinessItem{
+			{
+				EnvironmentID:        "windows-main",
+				OSFamily:             "windows",
+				ProjectRoot:          `C:\dev\project`,
+				CodexAdapter:         "codex-windows",
+				SandboxProfile:       "windows-native",
+				ExpectedHostRuntime:  "windows",
+				CurrentRuntimeUsable: true,
+				Classification:       "ready",
+				Argv:                 []string{"exec", "--json"},
+			},
+		},
+	}
+	writeJSONFile(t, reportPath, imported)
+	importOut := runCLI(t, "platform", "codex-readiness", "--project-root", projectRoot, "--data-root", dataRoot, "--from-file", reportPath, "--save", "--json")
+	var importedSaved struct {
+		Report     storage.CodexRuntimeReadinessReport `json:"report"`
+		InboxItems []storage.InboxItem                 `json:"inbox_items"`
+	}
+	decodeJSON(t, importOut, &importedSaved)
+	if importedSaved.Report.HostGOOS != "windows" || len(importedSaved.InboxItems) != 0 {
+		t.Fatalf("imported readiness = %#v", importedSaved)
+	}
+	db := openCLIProjectDB(t, dataRoot, projectRoot)
+	defer db.Close()
+	var openRuntimeIssues int
+	if err := db.SQL().QueryRowContext(context.Background(), "SELECT COUNT(*) FROM inbox_items WHERE source_type = 'execution_environment' AND source_id = 'windows-main' AND status = 'open'").Scan(&openRuntimeIssues); err != nil {
+		t.Fatal(err)
+	}
+	if openRuntimeIssues != 0 {
+		t.Fatalf("open runtime issues = %d", openRuntimeIssues)
+	}
 }
 
 func TestPlatformCodexReadinessRequiresConfiguredEnvironment(t *testing.T) {
@@ -1149,6 +1186,28 @@ INSERT INTO inbox_items(
 		t.Fatal(err)
 	}
 	return inboxID
+}
+
+func writeJSONFile(t *testing.T, path string, value any) {
+	t.Helper()
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func openCLIProjectDB(t *testing.T, dataRoot string, projectRoot string) *storage.DB {
+	t.Helper()
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = storage.ProjectIDForRoot(projectRoot)
+	return db
 }
 
 func insertCLIWorkerRun(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) string {

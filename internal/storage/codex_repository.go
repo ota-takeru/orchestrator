@@ -369,7 +369,7 @@ ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
 	}
 	filtered := make([]InboxItem, 0, len(items))
 	for _, item := range items {
-		if item.SourceType == "execution_environment" {
+		if item.SourceType == "execution_environment" && strings.HasPrefix(item.Title, "Codex runtime not usable: ") {
 			filtered = append(filtered, item)
 		}
 	}

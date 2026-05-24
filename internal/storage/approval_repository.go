@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -229,6 +230,17 @@ WHERE project_id = ? AND id = ?`, projectID, approvalID).Scan(
 	if taskStatus != "ready_for_human_review" && taskStatus != "approved_for_merge" {
 		return ApprovalRecord{}, fmt.Errorf("task %s is not ready for approval: %s", taskID.String, taskStatus)
 	}
+	currentEvidence, err := collectApprovalEvidence(ctx, tx, projectID, taskID.String)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	currentEvidenceJSON, err := json.Marshal(currentEvidence)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	if !sameJSON(evidenceJSON, string(currentEvidenceJSON)) {
+		return ApprovalRecord{}, fmt.Errorf("human approval %s evidence is stale", approvalID)
+	}
 	if approvalType == string(ApprovalMerge) {
 		if ok, err := matchingApprovalExists(ctx, tx, projectID, taskID.String, ApprovalFinalReview, evidenceJSON); err != nil {
 			return ApprovalRecord{}, err
@@ -440,6 +452,18 @@ WHERE project_id = ? AND task_id = ? AND approval_type = ? AND status = 'approve
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func sameJSON(left string, right string) bool {
+	var compactLeft bytes.Buffer
+	var compactRight bytes.Buffer
+	if err := json.Compact(&compactLeft, []byte(left)); err != nil {
+		return strings.TrimSpace(left) == strings.TrimSpace(right)
+	}
+	if err := json.Compact(&compactRight, []byte(right)); err != nil {
+		return strings.TrimSpace(left) == strings.TrimSpace(right)
+	}
+	return compactLeft.String() == compactRight.String()
 }
 
 func bothApprovalsExist(ctx context.Context, tx *sql.Tx, projectID string, taskID string, evidenceJSON string) (bool, error) {

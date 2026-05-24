@@ -1027,11 +1027,12 @@ func insertCLIOpenHumanApproval(t *testing.T, ctx context.Context, dataRoot stri
 	defer db.Close()
 	projectID := storage.ProjectIDForRoot(projectRoot)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	evidenceJSON := cliApprovalEvidenceJSON(t, ctx, db, projectID, "TASK-001")
 	if _, err := db.SQL().ExecContext(ctx, `
 INSERT INTO human_approvals(
   id, project_id, task_id, approval_type, status, evidence_json, created_at, updated_at
-) VALUES ('APPROVAL-FINAL', ?, 'TASK-001', 'final_review', 'open', '{}', ?, ?)`,
-		projectID, now, now); err != nil {
+) VALUES ('APPROVAL-FINAL', ?, 'TASK-001', 'final_review', 'open', ?, ?, ?)`,
+		projectID, evidenceJSON, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.SQL().ExecContext(ctx, `
@@ -1042,6 +1043,65 @@ INSERT INTO inbox_items(
 		projectID, now, now); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func cliApprovalEvidenceJSON(t *testing.T, ctx context.Context, db *storage.DB, projectID string, taskID string) string {
+	t.Helper()
+	var evidence struct {
+		BaseCommit            string   `json:"base_commit"`
+		RunID                 string   `json:"run_id"`
+		HeadCommit            string   `json:"head_commit"`
+		DiffHash              string   `json:"diff_hash"`
+		VerificationResultIDs []string `json:"verification_result_ids"`
+		GateResultIDs         []string `json:"gate_result_ids"`
+	}
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT base_commit, head_commit, diff_hash
+FROM runs
+WHERE project_id = ? AND task_id = ? AND status = 'succeeded'
+  AND head_commit IS NOT NULL
+  AND diff_hash IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1`, projectID, taskID).Scan(&evidence.BaseCommit, &evidence.HeadCommit, &evidence.DiffHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT id
+FROM runs
+WHERE project_id = ? AND task_id = ? AND status = 'succeeded'
+  AND run_type IN ('verification', 'reverify', 'review')
+ORDER BY created_at DESC
+LIMIT 1`, projectID, taskID).Scan(&evidence.RunID); err != nil {
+		t.Fatal(err)
+	}
+	evidence.VerificationResultIDs = queryCLIIDs(t, ctx, db, "SELECT id FROM verification_results WHERE project_id = ? AND run_id = ? ORDER BY id", projectID, evidence.RunID)
+	evidence.GateResultIDs = queryCLIIDs(t, ctx, db, "SELECT id FROM gate_results WHERE project_id = ? AND run_id = ? ORDER BY id", projectID, evidence.RunID)
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func queryCLIIDs(t *testing.T, ctx context.Context, db *storage.DB, query string, args ...any) []string {
+	t.Helper()
+	rows, err := db.SQL().QueryContext(ctx, query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return ids
 }
 
 func insertCLIToolchainSetupForDetectedGit(t *testing.T, ctx context.Context, dataRoot string, projectRoot string) string {

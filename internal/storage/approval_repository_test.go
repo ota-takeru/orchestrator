@@ -176,6 +176,34 @@ func TestApproveHumanApprovalApprovesOpenSourceAndResolvesInbox(t *testing.T) {
 	}
 }
 
+func TestRunArtifactHashChangesInvalidateHumanApproval(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	evidenceJSON := approvalEvidenceJSON(t, db, ctx)
+	insertOpenHumanApprovalWithInbox(t, db, "PROJECT-001", "APPROVAL-FINAL", "TASK-001", ApprovalFinalReview, evidenceJSON)
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE runs
+SET diff_hash = 'DIFF-CHANGED'
+WHERE project_id = 'PROJECT-001' AND task_id = 'TASK-001' AND status = 'succeeded'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ApproveHumanApproval(ctx, "PROJECT-001", "APPROVAL-FINAL", "stale approval"); err == nil {
+		t.Fatal("expected stale human approval evidence to fail")
+	}
+	var approvalStatus, inboxStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM human_approvals WHERE id = 'APPROVAL-FINAL'").Scan(&approvalStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM inbox_items WHERE id = 'INBOX-APPROVAL-FINAL'").Scan(&inboxStatus); err != nil {
+		t.Fatal(err)
+	}
+	if approvalStatus != "open" || inboxStatus != "open" {
+		t.Fatalf("approval=%s inbox=%s", approvalStatus, inboxStatus)
+	}
+}
+
 func TestApproveHumanMergeApprovalMovesTaskWhenFinalReviewApproved(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

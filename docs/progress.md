@@ -19,6 +19,11 @@
 
 2026-05-24:
 
+- Multi-repo Windows UI + WSL Authority Bridgeの基盤として、Windows/global用の `internal/registry` を追加し、project-local DBとは別のregistry SQLiteへWindows/WSL project routing metadataを保存するようにしました。`devos project add/list/remove/refresh` を追加し、WSL project IDは `wsl_distro:wsl_project_root` 由来で安定化しています。
+- `internal/projecthub` にProjectAuthority interface、WindowsLocalAuthority、WSL command bridge authorityを追加しました。WSL authorityは `wsl.exe -d <distro> -- devos ... --project-root <wsl_project_root> --json` のみをinterface境界で組み立て、`\\wsl$` project rootを拒否し、timeoutとstructured errorを返します。
+- Windows-hosted APIへ `/api/projects` と `/api/projects/{project_id}/...` routeを追加し、global registryからproject authorityへdispatchするようにしました。既存の単一project APIは互換維持しています。
+- React UIにProjectSwitcher、ProjectListSidebar、SelectedProjectDashboardを追加し、登録済みproject一覧、authority badge、WSL distro、statusを表示し、選択projectのsnapshot/tasks/inboxをglobal APIから読み込むようにしました。
+- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`。
 - Windows native Codex CLI導入後の実機検証として、Windows filesystem上の一時cloneで `devos platform doctor --include-codex --include-ui --save`、`devos platform codex-readiness --save` がreadyになることを確認しました。
 - `codex-cli 0.133.0` では `--ask-for-approval` が廃止されているため、Real Codex adapterのargvを `-c 'approval_policy="never"'` に更新し、公式Configuration referenceとローカル `codex exec --help` に合わせてCodex参照ドキュメントも更新しました。
 - Codex Structured Outputs向けの最終応答schemaをstrict化し、`tests.items.required` がproperties全keyを含むように修正しました。

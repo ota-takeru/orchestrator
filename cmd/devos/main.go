@@ -16,6 +16,8 @@ import (
 	"github.com/ota-takeru/orchestrator/internal/api"
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/preflight"
+	"github.com/ota-takeru/orchestrator/internal/projecthub"
+	"github.com/ota-takeru/orchestrator/internal/registry"
 	"github.com/ota-takeru/orchestrator/internal/schemas"
 	"github.com/ota-takeru/orchestrator/internal/storage"
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
@@ -58,6 +60,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runRequest(ctx, args[1:], stdout)
 	case "requests":
 		return runRequests(ctx, args[1:], stdout)
+	case "project":
+		return runProject(ctx, args[1:], stdout)
 	case "queue":
 		return runQueue(ctx, args[1:], stdout)
 	case "work":
@@ -481,6 +485,160 @@ func runRequests(ctx context.Context, args []string, stdout io.Writer) int {
 	for _, request := range requests {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", request.ID, request.Status, request.Title)
 	}
+	return 0
+}
+
+func runProject(ctx context.Context, args []string, stdout io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stdout, false, exitValidation, "invalid_arguments", errors.New("project subcommand is required"))
+	}
+	switch args[0] {
+	case "add":
+		return runProjectAdd(ctx, args[1:], stdout)
+	case "list":
+		return runProjectList(ctx, args[1:], stdout)
+	case "remove":
+		return runProjectRemove(ctx, args[1:], stdout)
+	case "refresh":
+		return runProjectRefresh(ctx, args[1:], stdout)
+	default:
+		return writeError(stdout, false, exitValidation, "invalid_arguments", fmt.Errorf("unknown project subcommand: %s", args[0]))
+	}
+}
+
+func runProjectAdd(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("project add", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	registryPath := fs.String("registry", "", "global registry DB path")
+	name := fs.String("name", "", "project display name")
+	authority := fs.String("authority", "", "windows or wsl")
+	projectRoot := fs.String("project-root", "", "Windows project root")
+	dataRoot := fs.String("data-root", "", "project-local data root")
+	windowsDisplayRoot := fs.String("windows-display-root", "", "Windows display root")
+	wslDistro := fs.String("wsl-distro", "", "WSL distro")
+	wslRoot := fs.String("wsl-root", "", "WSL project root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	input := registry.AddProjectInput{
+		DisplayName:        *name,
+		AuthorityRuntime:   registry.AuthorityRuntime(strings.TrimSpace(*authority)),
+		ProjectRoot:        *projectRoot,
+		DataRoot:           *dataRoot,
+		WindowsDisplayRoot: *windowsDisplayRoot,
+		WSLDistro:          *wslDistro,
+		WSLProjectRoot:     *wslRoot,
+	}
+	if input.AuthorityRuntime == registry.AuthorityWindows {
+		root, err := filepath.Abs(strings.TrimSpace(input.ProjectRoot))
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "project_add_failed", err)
+		}
+		info, err := os.Stat(root)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "project_add_failed", err)
+		}
+		if !info.IsDir() {
+			return writeError(stdout, *jsonOut, exitValidation, "project_add_failed", fmt.Errorf("project root is not a directory: %s", root))
+		}
+		input.ProjectRoot = root
+	}
+	regDB, errCode, err := openRegistryDB(ctx, *registryPath)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "project_add_failed", err)
+	}
+	defer regDB.Close()
+	project, err := regDB.AddProject(ctx, input)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "project_add_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"project": project}, 0)
+	}
+	fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", project.ID, project.AuthorityRuntime, project.Status, project.DisplayName)
+	return 0
+}
+
+func runProjectList(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("project list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	registryPath := fs.String("registry", "", "global registry DB path")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	regDB, errCode, err := openRegistryDB(ctx, *registryPath)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "project_list_failed", err)
+	}
+	defer regDB.Close()
+	projects, err := regDB.ListProjects(ctx)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "project_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"projects": projects}, 0)
+	}
+	for _, project := range projects {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", project.ID, project.AuthorityRuntime, project.Status, project.DisplayName)
+	}
+	return 0
+}
+
+func runProjectRemove(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("project remove", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	registryPath := fs.String("registry", "", "global registry DB path")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("project remove requires PROJECT_ID"))
+	}
+	regDB, errCode, err := openRegistryDB(ctx, *registryPath)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "project_remove_failed", err)
+	}
+	defer regDB.Close()
+	if err := regDB.RemoveProject(ctx, fs.Arg(0)); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "project_remove_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"removed": fs.Arg(0)}, 0)
+	}
+	fmt.Fprintf(stdout, "Project removed: %s\n", fs.Arg(0))
+	return 0
+}
+
+func runProjectRefresh(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("project refresh", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	registryPath := fs.String("registry", "", "global registry DB path")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("project refresh requires PROJECT_ID"))
+	}
+	regDB, errCode, err := openRegistryDB(ctx, *registryPath)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "project_refresh_failed", err)
+	}
+	defer regDB.Close()
+	updated, snapshot, err := projecthub.NewDefaultHub(regDB).Refresh(ctx, fs.Arg(0))
+	if err != nil {
+		if *jsonOut {
+			return writeJSON(stdout, map[string]any{"project": updated, "error": err.Error()}, exitValidation)
+		}
+		return writeError(stdout, *jsonOut, exitValidation, "project_refresh_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"project": updated, "snapshot": snapshot}, 0)
+	}
+	fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", updated.ID, updated.AuthorityRuntime, updated.Status, updated.DisplayName)
 	return 0
 }
 
@@ -2240,6 +2398,7 @@ func runServe(ctx context.Context, args []string, stdout io.Writer) int {
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	registryPath := fs.String("registry", "", "global registry DB path")
 	addr := fs.String("addr", "127.0.0.1:8765", "listen address")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout before serving")
 	if err := fs.Parse(args); err != nil {
@@ -2250,9 +2409,14 @@ func runServe(ctx context.Context, args []string, stdout io.Writer) int {
 		return writeError(stdout, *jsonOut, errCode, "serve_failed", err)
 	}
 	defer db.Close()
+	regDB, errCode, err := openRegistryDB(ctx, *registryPath)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "serve_failed", err)
+	}
+	defer regDB.Close()
 	server := &http.Server{
 		Addr:    *addr,
-		Handler: api.NewServer(db, projectID).Handler(),
+		Handler: api.NewServerWithHub(db, projectID, projecthub.NewDefaultHub(regDB)).Handler(),
 	}
 	if *jsonOut {
 		_ = writeJSON(stdout, map[string]any{"addr": *addr, "project_id": projectID}, 0)
@@ -2978,6 +3142,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos request [--project-root PATH] [--data-root PATH] [--json] TEXT")
 	fmt.Fprintln(w, "  devos requests [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos project add --name NAME --authority windows --project-root PATH [--data-root PATH] [--registry PATH] [--json]")
+	fmt.Fprintln(w, "  devos project add --name NAME --authority wsl --wsl-distro DISTRO --wsl-root PATH [--windows-display-root PATH] [--data-root PATH] [--registry PATH] [--json]")
+	fmt.Fprintln(w, "  devos project list [--registry PATH] [--json]")
+	fmt.Fprintln(w, "  devos project remove [--registry PATH] [--json] PROJECT_ID")
+	fmt.Fprintln(w, "  devos project refresh [--registry PATH] [--json] PROJECT_ID")
 	fmt.Fprintln(w, "  devos queue [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos work start [--project-root PATH] [--data-root PATH] [--mode sequential] [--planning-concurrency N] [--implementation-concurrency 1] [--until inbox] [--budget DURATION] [--json]")
 	fmt.Fprintln(w, "  devos work status [--project-root PATH] [--data-root PATH] [--json]")
@@ -2997,7 +3166,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos dependency risk add [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT --risk medium [--lockfile-changed] [--lifecycle-scripts VALUE] [--approved-scope project] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk list [--project-root PATH] [--data-root PATH] [--manager npm] [--type production] [--risk medium] [--json]")
 	fmt.Fprintln(w, "  devos ui snapshot [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
-	fmt.Fprintln(w, "  devos serve [--project-root PATH] [--data-root PATH] [--addr 127.0.0.1:8765] [--json]")
+	fmt.Fprintln(w, "  devos serve [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765] [--json]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
 	fmt.Fprintln(w, "  devos review [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
@@ -3088,6 +3257,22 @@ func openMigratedProjectDBWithRoot(ctx context.Context, projectRoot string, data
 		return nil, "", "", exitStorage, err
 	}
 	return db, storage.ProjectIDForRoot(root), root, 0, nil
+}
+
+func openRegistryDB(ctx context.Context, path string) (*registry.DB, int, error) {
+	registryPath := strings.TrimSpace(path)
+	if registryPath == "" {
+		defaultPath, err := registry.DefaultPath()
+		if err != nil {
+			return nil, exitValidation, err
+		}
+		registryPath = defaultPath
+	}
+	regDB, err := registry.Open(ctx, registryPath)
+	if err != nil {
+		return nil, exitStorage, err
+	}
+	return regDB, 0, nil
 }
 
 func writeArtifactAndSave(ctx context.Context, db *storage.DB, projectID string, root string, relPath string, artifactType storage.ArtifactType, content []byte) (storage.ArtifactVersionRecord, error) {

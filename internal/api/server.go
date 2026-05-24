@@ -1,26 +1,37 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/ota-takeru/orchestrator/internal/projecthub"
+	"github.com/ota-takeru/orchestrator/internal/registry"
 	"github.com/ota-takeru/orchestrator/internal/storage"
 )
 
 type Server struct {
 	db        *storage.DB
 	projectID string
+	hub       *projecthub.Hub
 }
 
 func NewServer(db *storage.DB, projectID string) *Server {
 	return &Server{db: db, projectID: projectID}
 }
 
+func NewServerWithHub(db *storage.DB, projectID string, hub *projecthub.Hub) *Server {
+	return &Server{db: db, projectID: projectID, hub: hub}
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("/api/projects/", s.handleProjectRoute)
 	mux.HandleFunc("/api/ui/snapshot", s.handleUISnapshot)
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/", s.handleInboxItem)
@@ -53,6 +64,152 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/api/projects" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown projects route")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	if s.hub == nil || s.hub.Registry == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "project_registry_unavailable", "project registry is not configured")
+		return
+	}
+	projects, err := s.hub.Registry.ListProjects(r.Context())
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "projects_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
+func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 4 || parts[0] != "api" || parts[1] != "projects" || strings.TrimSpace(parts[2]) == "" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown project route")
+		return
+	}
+	projectID := parts[2]
+	action := parts[3]
+	project, authority, err := s.projectAuthority(r.Context(), projectID)
+	if err != nil {
+		writeProjectHubError(w, err)
+		return
+	}
+	switch {
+	case len(parts) == 4 && action == "snapshot":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		snapshot, err := authority.Snapshot(r.Context(), project)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, snapshot)
+	case len(parts) == 4 && action == "tasks":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.Tasks(r.Context(), project)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "inbox":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.Inbox(r.Context(), project, r.URL.Query().Get("status"))
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "requests":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		text, ok := decodeTextBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.CreateFeatureRequest(r.Context(), project, text)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "change-requests":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		text, ok := decodeTextBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.CreateChangeRequest(r.Context(), project, text)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "refresh":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		updated, snapshot, err := s.hub.Refresh(r.Context(), projectID)
+		if err != nil {
+			writeAPIJSON(w, http.StatusBadGateway, map[string]any{
+				"project": updated,
+				"error": map[string]string{
+					"code":    "project_refresh_failed",
+					"message": err.Error(),
+				},
+			})
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, map[string]any{"project": updated, "snapshot": snapshot})
+	case len(parts) == 6 && action == "inbox" && parts[5] == "approve":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		var input struct {
+			Option string `json:"option"`
+			Notes  string `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return
+		}
+		body, err := authority.ApproveInboxItem(r.Context(), project, parts[4], input.Option, input.Notes)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	default:
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown project route")
+	}
+}
+
+func (s *Server) projectAuthority(ctx context.Context, projectID string) (registry.RegisteredProject, projecthub.ProjectAuthority, error) {
+	if s.hub == nil || s.hub.Registry == nil {
+		return registry.RegisteredProject{}, nil, errors.New("project registry is not configured")
+	}
+	return s.hub.Project(ctx, projectID)
 }
 
 func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
@@ -377,6 +534,41 @@ func parseInboxActionPath(path string) (string, string, bool) {
 		return "", "", false
 	}
 	return parts[2], parts[3], true
+}
+
+func decodeTextBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var input struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return "", false
+	}
+	return input.Text, true
+}
+
+func writeProjectHubError(w http.ResponseWriter, err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, registry.ErrNotFound) {
+		writeAPIError(w, http.StatusNotFound, "project_not_found", err.Error())
+		return
+	}
+	var authorityErr *projecthub.AuthorityError
+	if errors.As(err, &authorityErr) {
+		status := http.StatusBadGateway
+		if authorityErr.Code == "wsl_project_invalid" {
+			status = http.StatusBadRequest
+		}
+		writeAPIJSON(w, status, map[string]any{"error": authorityErr})
+		return
+	}
+	if strings.Contains(err.Error(), "invalid authority_runtime") {
+		writeAPIError(w, http.StatusBadRequest, "invalid_authority_runtime", err.Error())
+		return
+	}
+	writeAPIError(w, http.StatusInternalServerError, "project_authority_failed", err.Error())
 }
 
 func writeAPIJSON(w http.ResponseWriter, status int, value any) {

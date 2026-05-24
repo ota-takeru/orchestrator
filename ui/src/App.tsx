@@ -1,8 +1,8 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, saveEnvBinding } from "./api";
-import type { DashboardData, Decision, InboxItem, MemoryRecord, SnapshotCounts, WorkQueueItem } from "./types";
+import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, saveEnvBinding } from "./api";
+import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -20,6 +20,8 @@ const countRows: Array<{
 ];
 
 function App() {
+  const [projects, setProjects] = useState<RegisteredProject[]>([]);
+  const [selectedProjectID, setSelectedProjectID] = useState("");
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -29,11 +31,13 @@ function App() {
   const [envKey, setEnvKey] = useState("");
   const [envValue, setEnvValue] = useState("");
 
-  const refresh = async () => {
+  const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
+
+  const loadSelectedDashboard = async (projectID: string) => {
     setLoading(true);
     setError("");
     try {
-      setData(await loadDashboardData());
+      setData(await loadDashboardData(projectID || undefined));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Dashboard load failed");
     } finally {
@@ -41,18 +45,46 @@ function App() {
     }
   };
 
+  const refresh = async () => {
+    await loadSelectedDashboard(selectedProjectID);
+  };
+
   useEffect(() => {
-    void refresh();
+    const loadInitial = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const registeredProjects = await loadProjects();
+        setProjects(registeredProjects);
+        const initialProjectID = registeredProjects[0]?.id ?? "";
+        setSelectedProjectID(initialProjectID);
+        setData(await loadDashboardData(initialProjectID || undefined));
+      } catch (err) {
+        try {
+          setData(await loadDashboardData());
+        } catch {
+          setError(err instanceof Error ? err.message : "Dashboard load failed");
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadInitial();
   }, []);
 
   const nextCommand = useMemo(() => data?.snapshot.recommended_next_commands?.[0] ?? "devos request --json <TEXT>", [data]);
+
+  const selectProject = (projectID: string) => {
+    setSelectedProjectID(projectID);
+    void loadSelectedDashboard(projectID);
+  };
 
   const approve = async (item: InboxItem) => {
     setApproving(item.id);
     setError("");
     try {
       const option = item.source_type === "decision" ? firstDecisionOption(data?.decisions ?? [], item.source_id) : undefined;
-      await approveInboxItem(item.id, "Approved from DevOS UI", option);
+      await approveInboxItem(item.id, "Approved from DevOS UI", option, selectedProjectID || undefined);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Approval failed");
@@ -65,7 +97,7 @@ function App() {
     if (!featureText.trim()) return;
     setError("");
     try {
-      await createFeatureRequest(featureText);
+      await createFeatureRequest(featureText, selectedProjectID || undefined);
       setFeatureText("");
       await refresh();
     } catch (err) {
@@ -77,7 +109,7 @@ function App() {
     if (!changeText.trim()) return;
     setError("");
     try {
-      await createChangeRequest(changeText);
+      await createChangeRequest(changeText, selectedProjectID || undefined);
       setChangeText("");
       await refresh();
     } catch (err) {
@@ -86,6 +118,7 @@ function App() {
   };
 
   const submitEnvBinding = async () => {
+    if (selectedProjectID) return;
     if (!envKey.trim() || !envValue) return;
     setError("");
     try {
@@ -112,23 +145,20 @@ function App() {
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-7xl gap-5 px-5 py-5 lg:grid-cols-[1fr_340px]">
+      <div className="mx-auto grid max-w-7xl gap-5 px-5 py-5 lg:grid-cols-[260px_1fr_340px]">
+        <ProjectListSidebar projects={projects} selectedProjectID={selectedProjectID} onSelect={selectProject} />
         <section className="space-y-5">
           {error ? <ErrorBanner message={error} /> : null}
           {data ? (
-            <>
-              <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
-              <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={approve} />
-              <RequestQueuePanel
-                requests={data.featureRequests}
-                queueItems={data.queueItems}
-                featureText={featureText}
-                setFeatureText={setFeatureText}
-                onSubmitFeature={submitFeatureRequest}
-              />
-              <WorkPlanningPanel data={data} />
-              <TaskPanel tasks={data.tasks} />
-            </>
+            <SelectedProjectDashboard
+              data={data}
+              selectedProject={selectedProject}
+              approving={approving}
+              featureText={featureText}
+              setFeatureText={setFeatureText}
+              onSubmitFeature={submitFeatureRequest}
+              onApprove={approve}
+            />
           ) : (
             <LoadingPanel />
           )}
@@ -136,7 +166,14 @@ function App() {
 
         <aside className="space-y-5">
           <CommandPanel command={nextCommand} />
-          <EnvironmentInputPanel envKey={envKey} envValue={envValue} setEnvKey={setEnvKey} setEnvValue={setEnvValue} onSubmit={submitEnvBinding} />
+          <EnvironmentInputPanel
+            envKey={envKey}
+            envValue={envValue}
+            setEnvKey={setEnvKey}
+            setEnvValue={setEnvValue}
+            onSubmit={submitEnvBinding}
+            disabled={Boolean(selectedProjectID)}
+          />
           <ChangeRequestPanel requests={data?.changeRequests ?? []} text={changeText} setText={setChangeText} onSubmit={submitChangeRequest} />
           <DependencyRiskPanel risks={data?.dependencyRisks ?? []} />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
@@ -149,6 +186,112 @@ function App() {
         </aside>
       </div>
     </main>
+  );
+}
+
+function ProjectListSidebar({
+  projects,
+  selectedProjectID,
+  onSelect
+}: {
+  projects: RegisteredProject[];
+  selectedProjectID: string;
+  onSelect: (projectID: string) => void;
+}) {
+  return (
+    <aside className="project-sidebar">
+      <div className="panel compact">
+        <div className="panel-heading">
+          <h2>Projects</h2>
+          <ServerCog size={18} className="text-zinc-500" />
+        </div>
+        <ProjectSwitcher projects={projects} selectedProjectID={selectedProjectID} onSelect={onSelect} />
+        <StackEmpty empty={projects.length === 0} label="No registered projects">
+          <div className="project-list">
+            {projects.map((project) => (
+              <button
+                className={`project-row ${project.id === selectedProjectID ? "selected" : ""}`}
+                key={project.id}
+                onClick={() => onSelect(project.id)}
+                type="button"
+              >
+                <span>{project.display_name}</span>
+                <small>
+                  {project.authority_runtime}
+                  {project.wsl_distro ? ` / ${project.wsl_distro}` : ""} / {project.status}
+                </small>
+              </button>
+            ))}
+          </div>
+        </StackEmpty>
+      </div>
+    </aside>
+  );
+}
+
+function ProjectSwitcher({
+  projects,
+  selectedProjectID,
+  onSelect
+}: {
+  projects: RegisteredProject[];
+  selectedProjectID: string;
+  onSelect: (projectID: string) => void;
+}) {
+  return (
+    <select className="project-switcher" value={selectedProjectID} onChange={(event) => onSelect(event.target.value)} disabled={projects.length === 0}>
+      {projects.length === 0 ? <option value="">Single project</option> : null}
+      {projects.map((project) => (
+        <option key={project.id} value={project.id}>
+          {project.display_name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function SelectedProjectDashboard({
+  data,
+  selectedProject,
+  approving,
+  featureText,
+  setFeatureText,
+  onSubmitFeature,
+  onApprove
+}: {
+  data: DashboardData;
+  selectedProject?: RegisteredProject;
+  approving: string;
+  featureText: string;
+  setFeatureText: (value: string) => void;
+  onSubmitFeature: () => void;
+  onApprove: (item: InboxItem) => void;
+}) {
+  return (
+    <>
+      {selectedProject ? <ProjectStatusPanel project={selectedProject} /> : null}
+      <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
+      <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
+      <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
+      <WorkPlanningPanel data={data} />
+      <TaskPanel tasks={data.tasks} />
+    </>
+  );
+}
+
+function ProjectStatusPanel({ project }: { project: RegisteredProject }) {
+  return (
+    <section className="project-status">
+      <div>
+        <h2>{project.display_name}</h2>
+        <p>{project.windows_display_root || project.project_root}</p>
+      </div>
+      <div className="badge-row">
+        <span className="runtime-badge">{project.authority_runtime}</span>
+        {project.wsl_distro ? <span className="runtime-badge muted">{project.wsl_distro}</span> : null}
+        <span className={`status-badge status-${project.status}`}>{project.status}</span>
+      </div>
+    </section>
   );
 }
 
@@ -270,13 +413,15 @@ function EnvironmentInputPanel({
   envValue,
   setEnvKey,
   setEnvValue,
-  onSubmit
+  onSubmit,
+  disabled = false
 }: {
   envKey: string;
   envValue: string;
   setEnvKey: (value: string) => void;
   setEnvValue: (value: string) => void;
   onSubmit: () => void;
+  disabled?: boolean;
 }) {
   return (
     <section className="panel compact">
@@ -285,9 +430,9 @@ function EnvironmentInputPanel({
         <ServerCog size={18} className="text-zinc-500" />
       </div>
       <div className="compact-form">
-        <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="KEY" />
-        <input value={envValue} onChange={(event) => setEnvValue(event.target.value)} placeholder="Value" type="password" />
-        <button onClick={onSubmit} disabled={!envKey.trim() || !envValue}>
+        <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="KEY" disabled={disabled} />
+        <input value={envValue} onChange={(event) => setEnvValue(event.target.value)} placeholder="Value" type="password" disabled={disabled} />
+        <button onClick={onSubmit} disabled={disabled || !envKey.trim() || !envValue}>
           Save
         </button>
       </div>

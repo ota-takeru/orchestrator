@@ -13,8 +13,48 @@ import (
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
 	"github.com/ota-takeru/orchestrator/internal/platform"
+	"github.com/ota-takeru/orchestrator/internal/registry"
 	"github.com/ota-takeru/orchestrator/internal/storage"
 )
+
+func TestProjectRegistryCLIAddListRemove(t *testing.T) {
+	registryPath := filepath.Join(t.TempDir(), "registry.sqlite")
+	windowsRoot := t.TempDir()
+
+	windowsOut := runCLI(t, "project", "add", "--registry", registryPath, "--name", "Windows App", "--authority", "windows", "--project-root", windowsRoot, "--json")
+	var windowsBody struct {
+		Project registry.RegisteredProject `json:"project"`
+	}
+	decodeJSON(t, windowsOut, &windowsBody)
+	if windowsBody.Project.AuthorityRuntime != registry.AuthorityWindows || windowsBody.Project.PrimaryEnvironment != "windows-main" {
+		t.Fatalf("windows project = %#v", windowsBody.Project)
+	}
+
+	wslOut := runCLI(t, "project", "add", "--registry", registryPath, "--name", "WSL App", "--authority", "wsl", "--wsl-distro", "Ubuntu", "--wsl-root", "/home/user/app", "--windows-display-root", `\\wsl$\Ubuntu\home\user\app`, "--json")
+	var wslBody struct {
+		Project registry.RegisteredProject `json:"project"`
+	}
+	decodeJSON(t, wslOut, &wslBody)
+	if wslBody.Project.AuthorityRuntime != registry.AuthorityWSL || wslBody.Project.WSLProjectRoot != "/home/user/app" {
+		t.Fatalf("wsl project = %#v", wslBody.Project)
+	}
+
+	listOut := runCLI(t, "project", "list", "--registry", registryPath, "--json")
+	var listBody struct {
+		Projects []registry.RegisteredProject `json:"projects"`
+	}
+	decodeJSON(t, listOut, &listBody)
+	if len(listBody.Projects) != 2 {
+		t.Fatalf("projects = %#v", listBody.Projects)
+	}
+
+	runCLI(t, "project", "remove", "--registry", registryPath, "--json", wslBody.Project.ID)
+	listOut = runCLI(t, "project", "list", "--registry", registryPath, "--json")
+	decodeJSON(t, listOut, &listBody)
+	if len(listBody.Projects) != 1 || listBody.Projects[0].ID != windowsBody.Project.ID {
+		t.Fatalf("projects after remove = %#v", listBody.Projects)
+	}
+}
 
 func TestPatchCLIWorkflow(t *testing.T) {
 	ctx := context.Background()

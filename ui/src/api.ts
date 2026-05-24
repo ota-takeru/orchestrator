@@ -10,6 +10,7 @@ import type {
   MergeGateStatus,
   PathMapping,
   PlanningStatus,
+  RegisteredProject,
   TaskRecord,
   ToolchainSetupCard,
   TrustedArtifact,
@@ -30,7 +31,15 @@ async function getJSON<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function loadDashboardData(): Promise<DashboardData> {
+export async function loadProjects(): Promise<RegisteredProject[]> {
+  const body = await getJSON<{ projects: RegisteredProject[] }>("/api/projects");
+  return body.projects;
+}
+
+export async function loadDashboardData(projectID?: string): Promise<DashboardData> {
+  if (projectID) {
+    return loadProjectDashboardData(projectID);
+  }
   const [
     snapshot,
     taskBody,
@@ -84,8 +93,35 @@ export async function loadDashboardData(): Promise<DashboardData> {
   };
 }
 
-export async function approveInboxItem(id: string, notes: string, option?: string): Promise<void> {
-  const response = await fetch(`/api/inbox/${encodeURIComponent(id)}/approve`, {
+async function loadProjectDashboardData(projectID: string): Promise<DashboardData> {
+  const base = `/api/projects/${encodeURIComponent(projectID)}`;
+  const [snapshot, taskBody, inboxBody] = await Promise.all([
+    getJSON<HumanInboxSnapshot>(`${base}/snapshot`),
+    getJSON<{ tasks: TaskRecord[] }>(`${base}/tasks`),
+    getJSON<{ items: HumanInboxSnapshot["open_inbox_items"] }>(`${base}/inbox?status=open`)
+  ]);
+  return {
+    snapshot: { ...snapshot, open_inbox_items: snapshot.open_inbox_items ?? inboxBody.items },
+    tasks: taskBody.tasks,
+    featureRequests: [],
+    queueItems: [],
+    workStatus: emptyWorkStatus(),
+    planningStatus: { runs: [], artifacts: [], queue: [] },
+    changeRequests: [],
+    dependencyRisks: [],
+    decisions: [],
+    baselineIssues: [],
+    trustedArtifacts: [],
+    pathMappings: [],
+    toolchainSetupCards: [],
+    mergeStatus: { queue: [], ready: true },
+    projectViolations: []
+  };
+}
+
+export async function approveInboxItem(id: string, notes: string, option?: string, projectID?: string): Promise<void> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/inbox/${encodeURIComponent(id)}/approve` : `/api/inbox/${encodeURIComponent(id)}/approve`;
+  const response = await fetch(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -99,12 +135,14 @@ export async function approveInboxItem(id: string, notes: string, option?: strin
   }
 }
 
-export async function createFeatureRequest(text: string): Promise<void> {
-  await postJSON("/api/requests", { text });
+export async function createFeatureRequest(text: string, projectID?: string): Promise<void> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/requests` : "/api/requests";
+  await postJSON(path, { text });
 }
 
-export async function createChangeRequest(text: string): Promise<void> {
-  await postJSON("/api/change-requests", { text });
+export async function createChangeRequest(text: string, projectID?: string): Promise<void> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/change-requests` : "/api/change-requests";
+  await postJSON(path, { text });
 }
 
 export async function saveEnvBinding(key: string, value: string, scope = "project", environmentID = ""): Promise<void> {
@@ -124,4 +162,15 @@ async function postJSON(path: string, body: unknown): Promise<void> {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
+}
+
+function emptyWorkStatus(): WorkStatus {
+  return {
+    worker_runs: [],
+    planning: {
+      runs: [],
+      artifacts: [],
+      queue: []
+    }
+  };
 }

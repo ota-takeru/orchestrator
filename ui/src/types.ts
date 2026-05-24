@@ -230,3 +230,19 @@ export type DashboardData = {
   mergeStatus: MergeGateStatus;
   projectViolations: InvariantViolation[];
 };
+
+export type RegisteredProject = {
+  id: string;
+  display_name: string;
+  authority_runtime: "windows" | "wsl";
+  primary_environment_id: string;
+  project_root: string;
+  data_root?: string;
+  windows_display_root?: string;
+  wsl_distro?: string;
+  wsl_project_root?: string;
+  status: "active" | "missing" | "invalid" | "disabled";
+  last_seen_at?: string;
+  created_at: string;
+  updated_at: string;
+};

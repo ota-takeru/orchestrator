@@ -14,6 +14,7 @@ import (
 type PlanningRunRecord struct {
 	ID                   string  `json:"id"`
 	FeatureRequestID     *string `json:"feature_request_id,omitempty"`
+	ChangeRequestID      *string `json:"change_request_id,omitempty"`
 	RunType              string  `json:"run_type"`
 	Status               string  `json:"status"`
 	ArtifactSnapshotJSON string  `json:"artifact_snapshot_json"`
@@ -29,6 +30,7 @@ type PlanningArtifactRecord struct {
 	ID                   string  `json:"id"`
 	PlanningRunID        string  `json:"planning_run_id"`
 	FeatureRequestID     *string `json:"feature_request_id,omitempty"`
+	ChangeRequestID      *string `json:"change_request_id,omitempty"`
 	ArtifactType         string  `json:"artifact_type"`
 	Status               string  `json:"status"`
 	Path                 string  `json:"path"`
@@ -155,7 +157,8 @@ func (db *DB) ConsolidatePlanning(ctx context.Context, projectID string) (PlanCo
 func (db *DB) ListPlanningRuns(ctx context.Context, projectID string) ([]PlanningRunRecord, error) {
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT id, feature_request_id, run_type, status, artifact_snapshot_json,
-       input_hash, output_summary, started_at, finished_at, created_at, updated_at
+       input_hash, output_summary, started_at, finished_at, created_at, updated_at,
+       change_request_id
 FROM planning_runs
 WHERE project_id = ?
 ORDER BY created_at ASC`, projectID)
@@ -177,7 +180,8 @@ ORDER BY created_at ASC`, projectID)
 func (db *DB) ListPlanningArtifacts(ctx context.Context, projectID string) ([]PlanningArtifactRecord, error) {
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT id, planning_run_id, feature_request_id, artifact_type, status,
-       path, content_hash, artifact_snapshot_json, created_at, updated_at
+       path, content_hash, artifact_snapshot_json, created_at, updated_at,
+       change_request_id
 FROM planning_artifacts
 WHERE project_id = ?
 ORDER BY created_at ASC`, projectID)
@@ -593,7 +597,7 @@ func scanPlanningRun(scanner interface {
 	Scan(dest ...any) error
 }) (PlanningRunRecord, error) {
 	var record PlanningRunRecord
-	var featureRequestID, outputSummary, startedAt, finishedAt sql.NullString
+	var featureRequestID, outputSummary, startedAt, finishedAt, changeRequestID sql.NullString
 	if err := scanner.Scan(
 		&record.ID,
 		&featureRequestID,
@@ -606,11 +610,15 @@ func scanPlanningRun(scanner interface {
 		&finishedAt,
 		&record.CreatedAt,
 		&record.UpdatedAt,
+		&changeRequestID,
 	); err != nil {
 		return PlanningRunRecord{}, err
 	}
 	if featureRequestID.Valid {
 		record.FeatureRequestID = &featureRequestID.String
+	}
+	if changeRequestID.Valid {
+		record.ChangeRequestID = &changeRequestID.String
 	}
 	if outputSummary.Valid {
 		record.OutputSummary = outputSummary.String
@@ -628,7 +636,7 @@ func scanPlanningArtifact(scanner interface {
 	Scan(dest ...any) error
 }) (PlanningArtifactRecord, error) {
 	var record PlanningArtifactRecord
-	var featureRequestID sql.NullString
+	var featureRequestID, changeRequestID sql.NullString
 	if err := scanner.Scan(
 		&record.ID,
 		&record.PlanningRunID,
@@ -640,11 +648,15 @@ func scanPlanningArtifact(scanner interface {
 		&record.ArtifactSnapshotJSON,
 		&record.CreatedAt,
 		&record.UpdatedAt,
+		&changeRequestID,
 	); err != nil {
 		return PlanningArtifactRecord{}, err
 	}
 	if featureRequestID.Valid {
 		record.FeatureRequestID = &featureRequestID.String
+	}
+	if changeRequestID.Valid {
+		record.ChangeRequestID = &changeRequestID.String
 	}
 	return record, nil
 }

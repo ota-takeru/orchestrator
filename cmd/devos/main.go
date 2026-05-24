@@ -637,6 +637,8 @@ func runChange(ctx context.Context, args []string, stdout io.Writer) int {
 	switch args[0] {
 	case "request":
 		return runChangeRequest(ctx, args[1:], stdout)
+	case "analyze":
+		return runChangeAnalyze(ctx, args[1:], stdout)
 	default:
 		return writeError(stdout, false, exitValidation, "invalid_arguments", fmt.Errorf("unknown change subcommand: %s", args[0]))
 	}
@@ -669,6 +671,35 @@ func runChangeRequest(ctx context.Context, args []string, stdout io.Writer) int 
 	}
 	fmt.Fprintf(stdout, "Change request proposed: %s\n", result.ChangeRequest.ID)
 	fmt.Fprintf(stdout, "Work queue item: %s %s\n", result.QueueItem.ID, result.QueueItem.Lane)
+	return 0
+}
+
+func runChangeAnalyze(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("change analyze", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("change request id is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "change_analyze_failed", err)
+	}
+	defer db.Close()
+	result, err := db.AnalyzeChangeRequest(ctx, projectID, fs.Arg(0))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "change_analyze_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Change request analyzed: %s\n", result.ChangeRequest.ID)
+	fmt.Fprintf(stdout, "Planning run: %s %s\n", result.Run.ID, result.Run.Status)
 	return 0
 }
 
@@ -2259,6 +2290,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos work pause [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")
 	fmt.Fprintln(w, "  devos work resume [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")
 	fmt.Fprintln(w, "  devos change request [--project-root PATH] [--data-root PATH] [--json] TEXT")
+	fmt.Fprintln(w, "  devos change analyze [--project-root PATH] [--data-root PATH] [--json] CR_ID")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--verify] [--verify-adapter local|fake] [--verify-env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos verify [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")

@@ -14,8 +14,8 @@ func TestMigrateAppliesRegisteredMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applied) != 9 {
-		t.Fatalf("applied migrations = %d, want 9", len(applied))
+	if len(applied) != 10 {
+		t.Fatalf("applied migrations = %d, want 10", len(applied))
 	}
 }
 

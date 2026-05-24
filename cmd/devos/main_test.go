@@ -136,6 +136,13 @@ func TestChangeRequestCLIWorkflow(t *testing.T) {
 	if created.ChangeRequest.Status != "proposed" || created.QueueItem.ItemType != "change_request_analysis" {
 		t.Fatalf("change request = %#v", created)
 	}
+
+	analyzeOut := runCLI(t, "change", "analyze", "--project-root", projectRoot, "--data-root", dataRoot, "--json", created.ChangeRequest.ID)
+	var analyzed storage.ChangeAnalyzeResult
+	decodeJSON(t, analyzeOut, &analyzed)
+	if analyzed.ChangeRequest.Status != "impact_analyzed" || analyzed.Artifact.ArtifactType != "impact_analysis_report" {
+		t.Fatalf("analyzed = %#v", analyzed)
+	}
 }
 
 func TestPlanStartCLIWorkflow(t *testing.T) {

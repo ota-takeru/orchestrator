@@ -73,6 +73,30 @@ func TestCreateChangeRequestCreatesAnalysisQueueItem(t *testing.T) {
 	}
 }
 
+func TestAnalyzeChangeRequestCreatesImpactArtifact(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	created, err := db.CreateChangeRequest(ctx, "PROJECT-001", "タスク画面を今日中心に変える")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.AnalyzeChangeRequest(ctx, "PROJECT-001", created.ChangeRequest.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChangeRequest.Status != "impact_analyzed" {
+		t.Fatalf("change request = %#v", result.ChangeRequest)
+	}
+	if result.Run.ChangeRequestID == nil || *result.Run.ChangeRequestID != created.ChangeRequest.ID {
+		t.Fatalf("run = %#v", result.Run)
+	}
+	if result.Artifact.ArtifactType != "impact_analysis_report" || result.QueueItem == nil || result.QueueItem.Status != "completed" {
+		t.Fatalf("analysis result = %#v", result)
+	}
+}
+
 func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

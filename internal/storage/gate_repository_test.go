@@ -94,6 +94,37 @@ func TestSaveGateResultsProjectsHumanDecisionInbox(t *testing.T) {
 	}
 }
 
+func TestSaveGateResultsRecordsBaselineIssueMemory(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready_for_human_review")
+	insertRunForGate(t, db, "PROJECT-001", "RUN-BASELINE")
+
+	results := []decisions.GateResult{
+		{
+			Status:   decisions.GateReportOnly,
+			Severity: decisions.SeverityMedium,
+			Detector: "verification_failed_existing_baseline",
+			Evidence: map[string]any{"command_id": "go-test"},
+		},
+	}
+	if err := db.SaveGateResults(ctx, "PROJECT-001", ptr("TASK-001"), "RUN-BASELINE", results); err != nil {
+		t.Fatal(err)
+	}
+	var memoryType, sourceType, sourceID string
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT memory_type, source_type, source_id
+FROM memories
+WHERE project_id = 'PROJECT-001' AND memory_type = 'baseline_issue'`).Scan(&memoryType, &sourceType, &sourceID); err != nil {
+		t.Fatal(err)
+	}
+	if memoryType != "baseline_issue" || sourceType != "system" || sourceID == "" {
+		t.Fatalf("memory_type=%s source_type=%s source_id=%s", memoryType, sourceType, sourceID)
+	}
+}
+
 func insertRunForGate(t *testing.T, db *DB, projectID string, runID string) {
 	t.Helper()
 	_, err := db.SQL().ExecContext(context.Background(), `

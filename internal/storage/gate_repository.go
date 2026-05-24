@@ -39,6 +39,11 @@ func (db *DB) SaveGateResults(ctx context.Context, projectID string, taskID *str
 				return err
 			}
 		}
+		if result.Detector == "verification_failed_existing_baseline" {
+			if err := upsertBaselineIssueMemory(ctx, tx, projectID, taskID, runID, gateID, result, now); err != nil {
+				return err
+			}
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -67,6 +72,42 @@ INSERT INTO gate_results(
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		gateID, projectID, taskValue, runID, result.Status, result.Severity,
 		result.Detector, actionType, string(evidence), now,
+	)
+	return err
+}
+
+func upsertBaselineIssueMemory(ctx context.Context, tx *sql.Tx, projectID string, taskID *string, runID string, gateID string, result decisions.GateResult, now string) error {
+	var taskIDValue string
+	if taskID != nil {
+		taskIDValue = *taskID
+	}
+	value, err := json.Marshal(map[string]any{
+		"run_id":      runID,
+		"gate_id":     gateID,
+		"task_id":     taskIDValue,
+		"detector":    result.Detector,
+		"severity":    result.Severity,
+		"evidence":    result.Evidence,
+		"recorded_at": now,
+	})
+	if err != nil {
+		return err
+	}
+	key := "baseline_issue." + gateID
+	memoryID := "MEM-" + stableShortHash(projectID+"|baseline_issue|"+key)
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO memories(
+  id, project_id, memory_type, key, value, scope, scope_id,
+  source_type, source_id, created_at, updated_at
+) VALUES (?, ?, 'baseline_issue', ?, ?, 'project', '', 'system', ?, ?, ?)
+ON CONFLICT(project_id, memory_type, key, scope, scope_id) DO UPDATE SET
+  value = excluded.value,
+  source_type = excluded.source_type,
+  source_id = excluded.source_id,
+  invalidated_at = NULL,
+  invalidated_by_change_request_id = NULL,
+  updated_at = excluded.updated_at`,
+		memoryID, projectID, key, string(value), gateID, now, now,
 	)
 	return err
 }

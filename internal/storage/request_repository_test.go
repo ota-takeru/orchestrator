@@ -120,3 +120,35 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 		t.Fatalf("second consolidation should be empty: %#v", second)
 	}
 }
+
+func TestStartWorkProcessesPlanningAndConsolidation(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	if _, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.StartWork(ctx, WorkStartInput{
+		ProjectID:                 "PROJECT-001",
+		Mode:                      "sequential",
+		PlanningConcurrency:       2,
+		ImplementationConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.WorkerRun.Status != "stopped" {
+		t.Fatalf("worker run = %#v", result.WorkerRun)
+	}
+	if len(result.Planning.StartedRuns) != 1 || len(result.Consolidation.TaskGroups) != 1 {
+		t.Fatalf("work result = %#v", result)
+	}
+	status, err := db.GetWorkStatus(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.WorkerRuns) != 1 {
+		t.Fatalf("work status = %#v", status)
+	}
+}

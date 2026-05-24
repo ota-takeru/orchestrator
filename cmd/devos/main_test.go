@@ -153,6 +153,28 @@ func TestPlanStartCLIWorkflow(t *testing.T) {
 	}
 }
 
+func TestWorkStartCLIWorkflow(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Work start workflow")
+	runCLI(t, "request", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Today Viewを追加して")
+	out := runCLI(t, "work", "start", "--project-root", projectRoot, "--data-root", dataRoot, "--mode", "sequential", "--planning-concurrency", "2", "--implementation-concurrency", "1", "--json")
+	var started storage.WorkStartResult
+	decodeJSON(t, out, &started)
+	if started.WorkerRun.Status != "stopped" || len(started.Consolidation.TaskGroups) != 1 {
+		t.Fatalf("work start = %#v", started)
+	}
+
+	statusOut := runCLI(t, "work", "status", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var status storage.WorkStatus
+	decodeJSON(t, statusOut, &status)
+	if len(status.WorkerRuns) != 1 {
+		t.Fatalf("work status = %#v", status)
+	}
+}
+
 func TestReviewRejectCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

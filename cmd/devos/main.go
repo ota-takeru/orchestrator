@@ -57,6 +57,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runRequests(ctx, args[1:], stdout)
 	case "queue":
 		return runQueue(ctx, args[1:], stdout)
+	case "work":
+		return runWork(ctx, args[1:], stdout)
 	case "run":
 		return runTaskCommand(ctx, args[1:], stdout)
 	case "verify":
@@ -481,6 +483,88 @@ func runQueue(ctx context.Context, args []string, stdout io.Writer) int {
 	for _, item := range items {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.Status, item.Lane, item.ItemType, item.ItemID)
 	}
+	return 0
+}
+
+func runWork(ctx context.Context, args []string, stdout io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stdout, false, exitValidation, "invalid_arguments", errors.New("work subcommand is required"))
+	}
+	switch args[0] {
+	case "start":
+		return runWorkStart(ctx, args[1:], stdout)
+	case "status":
+		return runWorkStatus(ctx, args[1:], stdout)
+	default:
+		return writeError(stdout, false, exitValidation, "invalid_arguments", fmt.Errorf("unknown work subcommand: %s", args[0]))
+	}
+}
+
+func runWorkStart(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("work start", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	mode := fs.String("mode", "sequential", "worker mode")
+	planningConcurrency := fs.Int("planning-concurrency", 3, "planning concurrency")
+	implementationConcurrency := fs.Int("implementation-concurrency", 1, "implementation concurrency")
+	until := fs.String("until", "", "stop condition")
+	budget := fs.String("budget", "", "budget duration")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if strings.TrimSpace(*budget) != "" {
+		if _, err := time.ParseDuration(*budget); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_budget", err)
+		}
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "work_start_failed", err)
+	}
+	defer db.Close()
+	result, err := db.StartWork(ctx, storage.WorkStartInput{
+		ProjectID:                 projectID,
+		Mode:                      *mode,
+		PlanningConcurrency:       *planningConcurrency,
+		ImplementationConcurrency: *implementationConcurrency,
+		Until:                     *until,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "work_start_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Worker run: %s %s\n", result.WorkerRun.ID, result.WorkerRun.Status)
+	fmt.Fprintf(stdout, "Planning runs: %d\n", len(result.Planning.StartedRuns))
+	fmt.Fprintf(stdout, "Task groups: %d\n", len(result.Consolidation.TaskGroups))
+	return 0
+}
+
+func runWorkStatus(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("work status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "work_status_failed", err)
+	}
+	defer db.Close()
+	status, err := db.GetWorkStatus(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "work_status_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, status, 0)
+	}
+	fmt.Fprintf(stdout, "Worker runs: %d\n", len(status.WorkerRuns))
 	return 0
 }
 
@@ -2066,6 +2150,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos request [--project-root PATH] [--data-root PATH] [--json] TEXT")
 	fmt.Fprintln(w, "  devos requests [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos queue [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos work start [--project-root PATH] [--data-root PATH] [--mode sequential] [--planning-concurrency N] [--implementation-concurrency 1] [--until inbox] [--budget DURATION] [--json]")
+	fmt.Fprintln(w, "  devos work status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--verify] [--verify-adapter local|fake] [--verify-env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos verify [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")

@@ -22,6 +22,7 @@ func RegisteredMigrations() ([]Migration, error) {
 		{6, "request_queue", "migrations/006_request_queue.sql"},
 		{7, "planning_runs", "migrations/007_planning_runs.sql"},
 		{8, "planning_consolidation", "migrations/008_planning_consolidation.sql"},
+		{9, "worker_runs", "migrations/009_worker_runs.sql"},
 	}
 	migrations := make([]Migration, 0, len(definitions))
 	for _, definition := range definitions {

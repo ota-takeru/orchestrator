@@ -158,7 +158,7 @@ Auto-reviewは権限境界を広げる仕組みではありません。filesyste
 
 ## Real Codex Adapter Policy
 
-`devos run --real-codex` はprimary environmentの `os_family`、`codex_adapter`、`shell`、`project_root`、DevOS process runtimeを照合してからCodex processを起動します。これはCodex側のapproval promptへ制御を渡さず、DevOS側が実行可否を先に決めるためです。
+`devos run --real-codex` はactive RunProfileの `implementation_environment_id` を解決し、そのenvironmentの `os_family`、`codex_adapter`、`shell`、`project_root`、DevOS process runtimeを照合してからCodex processを起動します。active RunProfileがない場合だけprimary environmentへfallbackします。これはCodex側のapproval promptへ制御を渡さず、DevOS側が実行可否を先に決めるためです。
 
 対応policy:
 

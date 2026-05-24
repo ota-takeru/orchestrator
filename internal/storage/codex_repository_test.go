@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
+	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
 
 type fakeCodexExecutor struct {
@@ -31,6 +32,7 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()
 	t.Setenv("CODEX_HOME", "/tmp/devos-codex-home")
+	setRealCodexDoctorDetectedForTest(t)
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
@@ -90,6 +92,7 @@ func TestRunRealCodexTaskThenVerificationReachesReview(t *testing.T) {
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
 
 	runResult, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
 		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
@@ -116,6 +119,7 @@ func TestRunRealCodexTaskFailureOpensDecision(t *testing.T) {
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
 		result: CodexExecResult{Stderr: "network access is required", ExitCode: 1},
@@ -155,6 +159,7 @@ func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 		Status:         "configured",
 	})
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
 	restore := setRealCodexRuntimeGOOSForTest("linux")
 	defer restore()
 
@@ -195,6 +200,7 @@ func TestRunRealCodexTaskUsesRunProfileImplementationEnvironment(t *testing.T) {
 	})
 	insertActiveRunProfile(t, db, "PROJECT-001", "linux-main", "wsl-sidecar")
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
 	restore := setRealCodexRuntimeGOOSForTest("linux")
 	defer restore()
 
@@ -229,6 +235,7 @@ func TestRunRealCodexTaskSupportsWindowsWhenRuntimeIsWindows(t *testing.T) {
 		Status:         "configured",
 	})
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
 	restore := setRealCodexRuntimeGOOSForTest("windows")
 	defer restore()
 
@@ -297,11 +304,87 @@ func TestRunRealCodexTaskBlocksWindowsWhenRuntimeIsNotWindows(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskBlocksMissingRequiredToolchain(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	restoreRuntime := setRealCodexRuntimeGOOSForTest("linux")
+	defer restoreRuntime()
+	restoreDoctor := setRealCodexDoctorForTest(func(ctx context.Context, env platform.ExecutionEnvironment, opts toolchains.Options) toolchains.Report {
+		_ = ctx
+		_ = env
+		_ = opts
+		return toolchains.Report{
+			EnvironmentID: "linux-main",
+			Requirements: []toolchains.Requirement{
+				{
+					ToolchainKey:     "codex-auth",
+					RequiredFor:      toolchains.RequiredForImplementation,
+					RequiredForMerge: true,
+					Status:           toolchains.StatusSetupRequired,
+					Message:          "Codex auth is not detected",
+				},
+			},
+		}
+	})
+	defer restoreDoctor()
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"should-not-run\"}\n", FinalMessage: "should not run", ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "needs_decision" || result.Classification != "toolchain_required" {
+		t.Fatalf("result = %#v", result)
+	}
+	var setupCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE item_type = 'toolchain_setup' AND status = 'open'").Scan(&setupCount); err != nil {
+		t.Fatal(err)
+	}
+	if setupCount != 1 {
+		t.Fatalf("setup inbox count = %d", setupCount)
+	}
+}
+
 func setRealCodexRuntimeGOOSForTest(goos string) func() {
 	original := realCodexRuntimeGOOS
 	realCodexRuntimeGOOS = goos
 	return func() {
 		realCodexRuntimeGOOS = original
+	}
+}
+
+func setRealCodexDoctorDetectedForTest(t *testing.T) {
+	t.Helper()
+	restore := setRealCodexDoctorForTest(func(ctx context.Context, env platform.ExecutionEnvironment, opts toolchains.Options) toolchains.Report {
+		_ = ctx
+		_ = opts
+		shellKey := string(env.Shell)
+		if shellKey == "" {
+			shellKey = "bash"
+		}
+		return toolchains.Report{
+			EnvironmentID: env.ID,
+			Requirements: []toolchains.Requirement{
+				{ToolchainKey: "git", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected},
+				{ToolchainKey: shellKey, RequiredFor: toolchains.RequiredForVerification, RequiredForMerge: true, Status: toolchains.StatusDetected},
+				{ToolchainKey: "codex", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected},
+				{ToolchainKey: "codex-auth", RequiredFor: toolchains.RequiredForImplementation, RequiredForMerge: true, Status: toolchains.StatusDetected},
+			},
+		}
+	})
+	t.Cleanup(restore)
+}
+
+func setRealCodexDoctorForTest(fn func(context.Context, platform.ExecutionEnvironment, toolchains.Options) toolchains.Report) func() {
+	original := runRealCodexDoctor
+	runRealCodexDoctor = fn
+	return func() {
+		runRealCodexDoctor = original
 	}
 }
 

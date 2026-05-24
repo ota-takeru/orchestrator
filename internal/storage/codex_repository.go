@@ -13,6 +13,7 @@ import (
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/runners"
+	"github.com/ota-takeru/orchestrator/internal/toolchains"
 	"github.com/ota-takeru/orchestrator/internal/verifier"
 )
 
@@ -46,6 +47,8 @@ type RealCodexRunResult struct {
 }
 
 var realCodexRuntimeGOOS = runtime.GOOS
+
+var runRealCodexDoctor = toolchains.RunDoctor
 
 func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecRequest) (CodexExecResult, error) {
 	finalFile, err := os.CreateTemp("", "devos-codex-final-*.txt")
@@ -122,6 +125,13 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
 	if len(blockers) > 0 {
 		return db.recordRealCodexAdapterBlocked(ctx, projectID, taskID, env, classification, blockers)
+	}
+	doctorReport := runRealCodexDoctor(ctx, env, toolchains.Options{IncludeCodex: true})
+	if err := db.SaveToolchainReport(ctx, projectID, doctorReport); err != nil {
+		return RealCodexRunResult{}, err
+	}
+	if blockers := realCodexToolchainBlockers(doctorReport); len(blockers) > 0 {
+		return db.recordRealCodexAdapterBlocked(ctx, projectID, taskID, env, "toolchain_required", blockers)
 	}
 	if err := db.transitionTask(ctx, projectID, taskID, "ready", "implementing", "real_codex_implementation_started", map[string]any{"task_id": taskID, "environment_id": env.ID}); err != nil {
 		return RealCodexRunResult{}, err
@@ -219,6 +229,20 @@ func evaluateRealCodexEnvironment(env platform.ExecutionEnvironment, hostGOOS st
 	default:
 		return "unsupported_os_family", []string{"real_codex_adapter_unsupported_os_family"}
 	}
+}
+
+func realCodexToolchainBlockers(report toolchains.Report) []string {
+	var blockers []string
+	for _, req := range report.Requirements {
+		if !req.RequiredForMerge {
+			continue
+		}
+		switch req.Status {
+		case toolchains.StatusMissing, toolchains.StatusInvalid, toolchains.StatusSetupRequired, toolchains.StatusUnsupported:
+			blockers = append(blockers, string(req.ToolchainKey)+":"+string(req.Status))
+		}
+	}
+	return blockers
 }
 
 func isPOSIXShell(shell platform.Shell) bool {

@@ -153,6 +153,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos cleanup --quarantine --execute` | `--merged`, `--applied`, `--older-than`, `--quarantine-root` | cleanup quarantine evidence、worktree safety evidence、eligible worktreeの隔離移動 | `git worktree move` でDevOS管理下のquarantineへ移し、恒久削除はしない |
 | `devos cleanup quarantine list` | `--json` | なし | `cleanup-quarantine-summary.json` evidenceから隔離済みworktreeを一覧表示する |
 | `devos cleanup quarantine restore` | `TASK_ID`, `--run RUN_ID`, `--json` | cleanup restore evidence、quarantine worktreeの復元移動 | `git worktree move` で元pathへ戻す。復元先が存在する場合はblocked |
+| `devos publish` | `--remote origin`, `--branch main`, `--dry-run`, `--json` | publish readiness run、summary artifact、workflow_events | v1はpushしない。remote URL、local/remote OID、fast-forward関係、blockerだけを証跡化する |
 | `devos platform detect` | `--apply`, `--json` | Windows / WSL / Linux local environment候補 | `--apply`なしではDB更新しない |
 | `devos platform add` | `ENV_ID`, `--os`, `--project-root`, `--shell` | execution_environment作成または更新 | 同じENV_IDはupdate |
 | `devos platform set-primary` | `ENV_ID` | projectのprimary_environment変更 | 未解決runやopen worktreeがある場合は拒否 |

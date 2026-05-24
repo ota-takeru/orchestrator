@@ -97,6 +97,29 @@ func TestAnalyzeChangeRequestCreatesImpactArtifact(t *testing.T) {
 	}
 }
 
+func TestApproveChangeRequestRequiresImpactAnalysis(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	created, err := db.CreateChangeRequest(ctx, "PROJECT-001", "タスク画面を今日中心に変える")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveChangeRequest(ctx, ChangeApproveInput{ProjectID: "PROJECT-001", ChangeRequestID: created.ChangeRequest.ID, Option: "A"}); err == nil {
+		t.Fatal("expected approval before analysis to fail")
+	}
+	if _, err := db.AnalyzeChangeRequest(ctx, "PROJECT-001", created.ChangeRequest.ID); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := db.ApproveChangeRequest(ctx, ChangeApproveInput{ProjectID: "PROJECT-001", ChangeRequestID: created.ChangeRequest.ID, Option: "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.Status != "approved" {
+		t.Fatalf("approved = %#v", approved)
+	}
+}
+
 func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

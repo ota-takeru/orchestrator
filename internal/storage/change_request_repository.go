@@ -30,6 +30,12 @@ type ChangeAnalyzeResult struct {
 	QueueItem     *WorkQueueItemRecord   `json:"queue_item,omitempty"`
 }
 
+type ChangeApproveInput struct {
+	ProjectID       string
+	ChangeRequestID string
+	Option          string
+}
+
 func (db *DB) CreateChangeRequest(ctx context.Context, projectID string, text string) (ChangeRequestCreateResult, error) {
 	body := strings.TrimSpace(text)
 	if strings.TrimSpace(projectID) == "" {
@@ -234,6 +240,61 @@ WHERE project_id = ? AND id = ?`,
 		},
 		QueueItem: queueItem,
 	}, nil
+}
+
+func (db *DB) ApproveChangeRequest(ctx context.Context, input ChangeApproveInput) (ChangeRequestRecord, error) {
+	if strings.TrimSpace(input.ProjectID) == "" {
+		return ChangeRequestRecord{}, fmt.Errorf("project id is required")
+	}
+	if strings.TrimSpace(input.ChangeRequestID) == "" {
+		return ChangeRequestRecord{}, fmt.Errorf("change request id is required")
+	}
+	option := strings.TrimSpace(input.Option)
+	if option == "" {
+		return ChangeRequestRecord{}, fmt.Errorf("change approval option is required")
+	}
+	record, err := db.getChangeRequest(ctx, input.ProjectID, input.ChangeRequestID)
+	if err != nil {
+		return ChangeRequestRecord{}, err
+	}
+	if record.Status == "approved" {
+		return ChangeRequestRecord{}, fmt.Errorf("change request is already approved: %s", record.ID)
+	}
+	if record.Status != "impact_analyzed" {
+		return ChangeRequestRecord{}, fmt.Errorf("change request must be impact_analyzed before approval: %s", record.Status)
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return ChangeRequestRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+UPDATE change_requests
+SET status = 'approved', updated_at = ?
+WHERE project_id = ? AND id = ? AND status = 'impact_analyzed'`,
+		now, input.ProjectID, record.ID,
+	); err != nil {
+		return ChangeRequestRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, input.ProjectID, "change_request_approved", map[string]any{
+		"change_request_id": record.ID,
+		"option":            option,
+	}, now); err != nil {
+		return ChangeRequestRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ChangeRequestRecord{}, err
+	}
+	committed = true
+	record.Status = "approved"
+	record.UpdatedAt = now
+	return record, nil
 }
 
 func (db *DB) getChangeRequest(ctx context.Context, projectID string, changeRequestID string) (ChangeRequestRecord, error) {

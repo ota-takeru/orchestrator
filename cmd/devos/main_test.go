@@ -143,6 +143,13 @@ func TestChangeRequestCLIWorkflow(t *testing.T) {
 	if analyzed.ChangeRequest.Status != "impact_analyzed" || analyzed.Artifact.ArtifactType != "impact_analysis_report" {
 		t.Fatalf("analyzed = %#v", analyzed)
 	}
+
+	approveOut := runCLI(t, "change", "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--option", "A", "--json", created.ChangeRequest.ID)
+	var approved storage.ChangeRequestRecord
+	decodeJSON(t, approveOut, &approved)
+	if approved.Status != "approved" {
+		t.Fatalf("approved = %#v", approved)
+	}
 }
 
 func TestPlanStartCLIWorkflow(t *testing.T) {

@@ -56,7 +56,7 @@ Canonical table set:
 
 この一覧はcanonical table setです。実際のmigration作成順は [storage-schema.md](storage-schema.md) を正とし、Migration 001では `change_requests`、`feature_requests`、`task_groups` を `tasks` より前に作成します。
 
-JSON文字列で保存する列は、Go側で構造体へdecodeして検証します。Codexの構造化出力にはJSON Schemaを使います。
+JSON文字列で保存する列は、Go側で構造体へdecodeして検証します。Codexの構造化出力にはJSON Schemaを使います。Orchestrator-owned schemaは `.devagent/schemas/` にhash付きmanifestとともにコピーし、checksum mismatchをpreflightでblockします。
 
 この文書は概念モデルと代表schemaを説明します。正規enumの優先ソースは、状態遷移が [state-machine.md](state-machine.md)、DDL / CHECK / FK / UNIQUE / indexが [storage-schema.md](storage-schema.md) です。この文書内のstatus/typeコメントは説明用であり、実装時はstate-machineとstorage-schemaを優先します。
 

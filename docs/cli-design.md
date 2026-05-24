@@ -197,7 +197,7 @@ PRD、Architecture、Roadmap、Task YAMLは `devos spec` / `devos plan` / artifa
 
 責務分担:
 
-- `devos init "concept"` はproject record、`.devagent/concept.md`、policy skeleton、schema registry copy、preflight reportだけを作る。
+- `devos init "concept"` はproject record、`.devagent/concept.md`、policy skeleton、`.devagent/schemas/` schema registry copy、preflight reportだけを作る。
 - `devos init` はproject rootからhost environmentを検出し、execution_environment候補を作る。
 - `devos init` はprimary_environmentを確定できない場合、Human InboxまたはCLI promptで選択させる。
 - `devos init` は `--profile windows-primary|wsl-primary|hybrid` を受け付ける。

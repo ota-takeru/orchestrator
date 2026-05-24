@@ -114,9 +114,10 @@ func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecReques
 		schemaPath = request.OutputSchemaPath
 	}
 
-	args := codexExecArgv(request.ProjectRoot, request.Prompt, finalPath, schemaPath)
+	args := codexExecArgv(request.ProjectRoot, finalPath, schemaPath)
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Dir = request.ProjectRoot
+	cmd.Stdin = strings.NewReader(request.Prompt)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -143,7 +144,7 @@ func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecReques
 	}, nil
 }
 
-func codexExecArgv(projectRoot string, prompt string, finalPath string, schemaPath string) []string {
+func codexExecArgv(projectRoot string, finalPath string, schemaPath string) []string {
 	return []string{
 		"exec",
 		"--json",
@@ -156,7 +157,7 @@ func codexExecArgv(projectRoot string, prompt string, finalPath string, schemaPa
 		"--cd", projectRoot,
 		"-o", finalPath,
 		"--output-schema", schemaPath,
-		prompt,
+		"-",
 	}
 }
 
@@ -277,7 +278,7 @@ func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID
 		ApprovalPolicy: "never",
 		Classification: classification,
 		Blockers:       blockers,
-		Argv:           codexExecArgv(env.ProjectRoot, "<prompt>", "<final-message-path>", "<output-schema-path>"),
+		Argv:           codexExecArgv(env.ProjectRoot, "<final-message-path>", "<output-schema-path>"),
 	}, nil
 }
 
@@ -308,7 +309,7 @@ func (db *DB) CodexRuntimeReadiness(ctx context.Context, projectID string) (Code
 			Blockers:             blockers,
 		}
 		if item.CurrentRuntimeUsable {
-			item.Argv = codexExecArgv(env.ProjectRoot, "<prompt>", "<final-message-path>", "<output-schema-path>")
+			item.Argv = codexExecArgv(env.ProjectRoot, "<final-message-path>", "<output-schema-path>")
 		}
 		report.Items = append(report.Items, item)
 	}
@@ -625,7 +626,7 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 		EnvironmentID: env.ID,
 		Runner:        "direct",
 		WorkingDir:    workspaceRoot,
-		Argv:          codexExecArgv(workspaceRoot, "<prompt>", "<final-message-path>", "<output-schema-path>"),
+		Argv:          codexExecArgv(workspaceRoot, "<final-message-path>", "<output-schema-path>"),
 		NetworkPolicy: runners.NetworkOff,
 	}
 	commandStatus := runners.CommandSucceeded

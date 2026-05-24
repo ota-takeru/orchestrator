@@ -2,7 +2,10 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -55,7 +58,14 @@ func (db *DB) SaveEnvBinding(ctx context.Context, input EnvBindingInput) (EnvBin
 	scopeID := strings.TrimSpace(input.ScopeID)
 	bindingID := "ENV-BIND-" + stableShortHash(input.ProjectID+"|"+environmentID+"|"+key+"|"+scope+"|"+scopeID)
 	fingerprint := sha256Hex([]byte(input.Value))
-	storageRef := "redacted://" + bindingID
+	root, err := db.projectRootForEnvBinding(ctx, input.ProjectID)
+	if err != nil {
+		return EnvBindingRecord{}, err
+	}
+	if err := appendEnvLocalBinding(root, key, input.Value); err != nil {
+		return EnvBindingRecord{}, err
+	}
+	storageRef := "env_file:.env.local#" + key
 	redactedPreview := "configured"
 
 	tx, err := db.sql.BeginTx(ctx, nil)
@@ -72,7 +82,7 @@ func (db *DB) SaveEnvBinding(ctx context.Context, input EnvBindingInput) (EnvBin
 INSERT INTO environment_bindings(
   id, project_id, environment_id, key, scope, scope_id, storage, storage_ref,
   status, redacted_preview, value_fingerprint, created_by, created_at, updated_at
-) VALUES (?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), 'external_secret', ?, 'configured', ?, ?, 'human', ?, ?)
+) VALUES (?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), 'env_file', ?, 'configured', ?, ?, 'human', ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   environment_id = excluded.environment_id,
   storage_ref = excluded.storage_ref,
@@ -104,7 +114,7 @@ INSERT INTO environment_audit_events(
 		Key:              key,
 		Scope:            scope,
 		ScopeID:          scopeID,
-		Storage:          "external_secret",
+		Storage:          "env_file",
 		StorageRef:       storageRef,
 		Status:           "configured",
 		RedactedPreview:  redactedPreview,
@@ -113,4 +123,45 @@ INSERT INTO environment_audit_events(
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}, nil
+}
+
+func (db *DB) projectRootForEnvBinding(ctx context.Context, projectID string) (string, error) {
+	var root sql.NullString
+	if err := db.sql.QueryRowContext(ctx, "SELECT root_path FROM projects WHERE id = ?", projectID).Scan(&root); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("project not found: %s", projectID)
+		}
+		return "", err
+	}
+	if !root.Valid || strings.TrimSpace(root.String) == "" {
+		return "", fmt.Errorf("project root is required for env file binding")
+	}
+	return root.String, nil
+}
+
+func appendEnvLocalBinding(projectRoot string, key string, value string) error {
+	path := filepath.Join(projectRoot, ".env.local")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := fmt.Fprintf(file, "%s=%s\n", key, quoteEnvValue(value)); err != nil {
+		return err
+	}
+	return file.Chmod(0o600)
+}
+
+func quoteEnvValue(value string) string {
+	if value == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(value, " \t\r\n\"'\\#$") {
+		return value
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`).Replace(value)
+	return `"` + escaped + `"`
 }

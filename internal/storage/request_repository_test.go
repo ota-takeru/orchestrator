@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +100,44 @@ func TestAnalyzeChangeRequestCreatesImpactArtifact(t *testing.T) {
 	}
 }
 
+func TestChangeRequestUsesTraceLinks(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	created, err := db.CreateChangeRequest(ctx, "PROJECT-001", "タスク画面を今日中心に変える")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.AnalyzeChangeRequest(ctx, "PROJECT-001", created.ChangeRequest.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runLinks, artifactLinks int
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT COUNT(*) FROM trace_links
+WHERE project_id = 'PROJECT-001'
+  AND from_type = 'change_request'
+  AND from_id = ?
+  AND to_type = 'planning_run'
+  AND to_id = ?
+  AND relation = 'analyzed_by'`, created.ChangeRequest.ID, result.Run.ID).Scan(&runLinks); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT COUNT(*) FROM trace_links
+WHERE project_id = 'PROJECT-001'
+  AND from_type = 'change_request'
+  AND from_id = ?
+  AND to_type = 'planning_artifact'
+  AND to_id = ?
+  AND relation = 'produced'`, created.ChangeRequest.ID, result.Artifact.ID).Scan(&artifactLinks); err != nil {
+		t.Fatal(err)
+	}
+	if runLinks != 1 || artifactLinks != 1 {
+		t.Fatalf("trace links run=%d artifact=%d", runLinks, artifactLinks)
+	}
+}
+
 func TestApproveChangeRequestRequiresImpactAnalysis(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)
@@ -134,11 +174,14 @@ func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.StartedRuns) != 1 || result.StartedRuns[0].Status != "succeeded" {
+	if len(result.StartedRuns) != 5 || result.StartedRuns[0].Status != "succeeded" {
 		t.Fatalf("planning runs = %#v", result.StartedRuns)
 	}
-	if len(result.Artifacts) != 1 || result.Artifacts[0].FeatureRequestID == nil || *result.Artifacts[0].FeatureRequestID != created.FeatureRequest.ID {
+	if len(result.Artifacts) != 4 || result.Artifacts[0].FeatureRequestID == nil || *result.Artifacts[0].FeatureRequestID != created.FeatureRequest.ID {
 		t.Fatalf("planning artifacts = %#v", result.Artifacts)
+	}
+	if len(result.DecisionDrafts) != 1 || result.DecisionDrafts[0].Status != "draft" {
+		t.Fatalf("decision drafts = %#v", result.DecisionDrafts)
 	}
 	if len(result.QueueItems) != 1 || result.QueueItems[0].Status != "completed" {
 		t.Fatalf("queue items = %#v", result.QueueItems)
@@ -147,8 +190,34 @@ func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Runs) != 1 || len(status.Artifacts) != 1 {
+	if len(status.Runs) != 5 || len(status.Artifacts) != 4 {
 		t.Fatalf("planning status = %#v", status)
+	}
+}
+
+func TestPlanningWorkerCannotWriteCanonicalArtifacts(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	if _, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.StartPlanning(ctx, PlanStartInput{ProjectID: "PROJECT-001", Concurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var taskCount, taskGroupCount, artifactVersionCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks WHERE project_id = 'PROJECT-001'").Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM task_groups WHERE project_id = 'PROJECT-001'").Scan(&taskGroupCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM artifact_versions av JOIN artifacts a ON a.id = av.artifact_id WHERE a.project_id = 'PROJECT-001'").Scan(&artifactVersionCount); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 0 || taskGroupCount != 0 || artifactVersionCount != 0 {
+		t.Fatalf("planning worker wrote canonical state: tasks=%d groups=%d versions=%d", taskCount, taskGroupCount, artifactVersionCount)
 	}
 }
 
@@ -173,6 +242,13 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 	}
 	if len(result.ProposedTasks) != 1 || result.ProposedTasks[0].Status != "proposed" {
 		t.Fatalf("proposed tasks = %#v", result.ProposedTasks)
+	}
+	var batchedDrafts int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM decision_report_drafts WHERE project_id = 'PROJECT-001' AND status = 'batched'").Scan(&batchedDrafts); err != nil {
+		t.Fatal(err)
+	}
+	if batchedDrafts != 1 {
+		t.Fatalf("batched drafts = %d", batchedDrafts)
 	}
 	checkpoint, err := db.CreateRollingCheckpoint(ctx, RollingCheckpointInput{
 		ProjectID: "PROJECT-001",
@@ -216,6 +292,40 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 	}
 }
 
+func TestStalePlanningSnapshotCannotCommit(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	created, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.StartPlanning(ctx, PlanStartInput{ProjectID: "PROJECT-001", Concurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, "UPDATE feature_requests SET description = 'updated request', updated_at = ? WHERE id = ?", now(), created.FeatureRequest.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.ConsolidatePlanning(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.TaskGroups) != 0 || len(result.ProposedTasks) != 0 || len(result.AcceptedArtifacts) != 1 || result.AcceptedArtifacts[0].Status != "stale" {
+		t.Fatalf("consolidation should reject stale snapshot: %#v", result)
+	}
+	var staleArtifacts, taskCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM planning_artifacts WHERE project_id = 'PROJECT-001' AND status = 'stale'").Scan(&staleArtifacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks WHERE project_id = 'PROJECT-001'").Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if staleArtifacts != 1 || taskCount != 0 {
+		t.Fatalf("stale artifacts=%d task count=%d", staleArtifacts, taskCount)
+	}
+}
+
 func TestStartWorkProcessesPlanningAndConsolidation(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)
@@ -236,7 +346,7 @@ func TestStartWorkProcessesPlanningAndConsolidation(t *testing.T) {
 	if result.WorkerRun.Status != "stopped" {
 		t.Fatalf("worker run = %#v", result.WorkerRun)
 	}
-	if len(result.Planning.StartedRuns) != 1 || len(result.Consolidation.TaskGroups) != 1 {
+	if len(result.Planning.StartedRuns) != 5 || len(result.Consolidation.TaskGroups) != 1 {
 		t.Fatalf("work result = %#v", result)
 	}
 	status, err := db.GetWorkStatus(ctx, "PROJECT-001")
@@ -380,7 +490,8 @@ WHERE id = ?`, expired, second.QueueItem.ID); err != nil {
 func TestSaveEnvBindingStoresOnlyRedactedMetadata(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)
-	insertProject(t, db.SQL(), "PROJECT-001")
+	root := t.TempDir()
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
 
 	record, err := db.SaveEnvBinding(ctx, EnvBindingInput{
 		ProjectID: "PROJECT-001",
@@ -391,8 +502,15 @@ func TestSaveEnvBindingStoresOnlyRedactedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Status != "configured" || record.ValueFingerprint == "" || strings.Contains(record.StorageRef, "secret-value") {
+	if record.Status != "configured" || record.ValueFingerprint == "" || record.Storage != "env_file" || strings.Contains(record.StorageRef, "secret-value") {
 		t.Fatalf("binding = %#v", record)
+	}
+	envLocal, err := os.ReadFile(filepath.Join(root, ".env.local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(envLocal), "OPENAI_API_KEY=secret-value\n") {
+		t.Fatalf(".env.local = %q", string(envLocal))
 	}
 	var count int
 	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM environment_audit_events WHERE binding_id = ?", record.ID).Scan(&count); err != nil {

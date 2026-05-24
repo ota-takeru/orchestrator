@@ -200,6 +200,43 @@ func TestRunRealCodexTaskIncludesTrustedArtifactContext(t *testing.T) {
 	}
 }
 
+func TestCodexPromptStdinUsesPromptContentNotPath(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	setRealCodexDoctorDetectedForTest(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	executor := &captureCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+	}
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(executor.request.Prompt, "Task ID: TASK-001") {
+		t.Fatalf("executor did not receive prompt content: %q", executor.request.Prompt)
+	}
+	argv := codexExecArgv(projectRoot, "<final-message-path>", "<output-schema-path>")
+	if len(argv) == 0 || argv[len(argv)-1] != "-" {
+		t.Fatalf("codex argv should read prompt from stdin: %#v", argv)
+	}
+	for _, arg := range argv {
+		if strings.Contains(arg, "Task ID: TASK-001") || strings.HasSuffix(arg, "prompt.md") {
+			t.Fatalf("codex argv leaked prompt content or path: %#v", argv)
+		}
+	}
+	var argvJSON string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT argv_json FROM command_events WHERE run_id = ? AND command_kind = 'codex'", result.ImplementationRun).Scan(&argvJSON); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(argvJSON, "Task ID: TASK-001") || strings.Contains(argvJSON, "prompt.md") || !strings.Contains(argvJSON, `"-"`) {
+		t.Fatalf("command event argv_json = %s", argvJSON)
+	}
+}
+
 func TestPreviewRealCodexTaskDoesNotMutateTask(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

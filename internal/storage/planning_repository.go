@@ -40,15 +40,33 @@ type PlanningArtifactRecord struct {
 	UpdatedAt            string  `json:"updated_at"`
 }
 
+type DecisionDraftRecord struct {
+	ID                   string  `json:"id"`
+	PlanningRunID        string  `json:"planning_run_id,omitempty"`
+	FeatureRequestID     *string `json:"feature_request_id,omitempty"`
+	ChangeRequestID      *string `json:"change_request_id,omitempty"`
+	DecisionType         string  `json:"decision_type"`
+	Status               string  `json:"status"`
+	Title                string  `json:"title"`
+	BatchKey             string  `json:"batch_key,omitempty"`
+	RecommendedOption    string  `json:"recommended_option,omitempty"`
+	ContentJSON          string  `json:"content_json"`
+	ArtifactSnapshotJSON string  `json:"artifact_snapshot_json"`
+	PromotedDecisionID   string  `json:"promoted_decision_id,omitempty"`
+	CreatedAt            string  `json:"created_at"`
+	UpdatedAt            string  `json:"updated_at"`
+}
+
 type PlanStartInput struct {
 	ProjectID   string
 	Concurrency int
 }
 
 type PlanStartResult struct {
-	StartedRuns []PlanningRunRecord      `json:"started_runs"`
-	Artifacts   []PlanningArtifactRecord `json:"artifacts"`
-	QueueItems  []WorkQueueItemRecord    `json:"queue_items"`
+	StartedRuns    []PlanningRunRecord      `json:"started_runs"`
+	Artifacts      []PlanningArtifactRecord `json:"artifacts"`
+	DecisionDrafts []DecisionDraftRecord    `json:"decision_drafts,omitempty"`
+	QueueItems     []WorkQueueItemRecord    `json:"queue_items"`
 }
 
 type PlanningStatus struct {
@@ -154,17 +172,19 @@ func (db *DB) StartPlanning(ctx context.Context, input PlanStartInput) (PlanStar
 		return PlanStartResult{}, err
 	}
 	result := PlanStartResult{
-		StartedRuns: make([]PlanningRunRecord, 0, len(candidates)),
-		Artifacts:   make([]PlanningArtifactRecord, 0, len(candidates)),
-		QueueItems:  make([]WorkQueueItemRecord, 0, len(candidates)),
+		StartedRuns:    make([]PlanningRunRecord, 0, len(candidates)*5),
+		Artifacts:      make([]PlanningArtifactRecord, 0, len(candidates)*4),
+		DecisionDrafts: make([]DecisionDraftRecord, 0, len(candidates)),
+		QueueItems:     make([]WorkQueueItemRecord, 0, len(candidates)),
 	}
 	for _, candidate := range candidates {
-		run, artifact, queueItem, err := db.completeFeatureDetailPlanning(ctx, input.ProjectID, candidate)
+		runs, artifacts, drafts, queueItem, err := db.completeFeaturePlanning(ctx, input.ProjectID, candidate)
 		if err != nil {
 			return PlanStartResult{}, err
 		}
-		result.StartedRuns = append(result.StartedRuns, run)
-		result.Artifacts = append(result.Artifacts, artifact)
+		result.StartedRuns = append(result.StartedRuns, runs...)
+		result.Artifacts = append(result.Artifacts, artifacts...)
+		result.DecisionDrafts = append(result.DecisionDrafts, drafts...)
 		result.QueueItems = append(result.QueueItems, queueItem)
 	}
 	return result, nil
@@ -204,8 +224,12 @@ func (db *DB) ConsolidatePlanning(ctx context.Context, projectID string) (PlanCo
 		if err != nil {
 			return PlanConsolidateResult{}, err
 		}
-		result.TaskGroups = append(result.TaskGroups, group)
-		result.ProposedTasks = append(result.ProposedTasks, task)
+		if group.ID != "" {
+			result.TaskGroups = append(result.TaskGroups, group)
+		}
+		if task.ID != "" {
+			result.ProposedTasks = append(result.ProposedTasks, task)
+		}
 		result.AcceptedArtifacts = append(result.AcceptedArtifacts, artifact)
 	}
 	return result, nil
@@ -411,7 +435,7 @@ SELECT pa.id, pa.planning_run_id, pa.feature_request_id, pa.artifact_type, pa.st
 FROM planning_artifacts pa
 JOIN feature_requests fr ON fr.project_id = pa.project_id AND fr.id = pa.feature_request_id
 WHERE pa.project_id = ?
-  AND pa.artifact_type = 'feature_detail_report'
+  AND pa.artifact_type = 'task_group_proposal'
   AND pa.status = 'proposed'
   AND fr.task_group_id IS NULL
 ORDER BY pa.created_at ASC`, projectID)
@@ -430,38 +454,133 @@ ORDER BY pa.created_at ASC`, projectID)
 	return candidates, rows.Err()
 }
 
-func (db *DB) completeFeatureDetailPlanning(ctx context.Context, projectID string, candidate planningQueueCandidate) (PlanningRunRecord, PlanningArtifactRecord, WorkQueueItemRecord, error) {
+func (db *DB) completeFeaturePlanning(ctx context.Context, projectID string, candidate planningQueueCandidate) ([]PlanningRunRecord, []PlanningArtifactRecord, []DecisionDraftRecord, WorkQueueItemRecord, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	leaseOwner := "devos-plan-start"
 	leaseExpiresAt := time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339Nano)
 	inputHash := planningInputHash(candidate.FeatureRequest)
-	runID := "PLANRUN-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|feature_detail|"+inputHash)
-	artifactID := "PLANART-" + stableShortHash(runID+"|feature_detail_report")
 	snapshotJSON, err := planningSnapshotJSON(candidate.FeatureRequest)
 	if err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
-	artifactContent, err := json.MarshalIndent(map[string]any{
-		"feature_request_id": candidate.FeatureRequest.ID,
-		"title":              candidate.FeatureRequest.Title,
-		"description":        candidate.FeatureRequest.Description,
-		"source":             candidate.FeatureRequest.Source,
-		"priority":           candidate.FeatureRequest.Priority,
-		"summary":            "Feature request captured for consolidation.",
-		"next_step":          "plan_consolidate",
-	}, "", "  ")
+	type plannedArtifact struct {
+		runType      string
+		artifactType string
+		summary      string
+		content      map[string]any
+	}
+	planned := []plannedArtifact{
+		{runType: "feature_detail", artifactType: "feature_detail_report", summary: "Feature request detail captured.", content: map[string]any{
+			"feature_request_id": candidate.FeatureRequest.ID,
+			"title":              candidate.FeatureRequest.Title,
+			"description":        candidate.FeatureRequest.Description,
+			"source":             candidate.FeatureRequest.Source,
+			"priority":           candidate.FeatureRequest.Priority,
+			"summary":            "Feature request captured for consolidation.",
+			"next_step":          "impact_analysis",
+		}},
+		{runType: "impact_analysis", artifactType: "impact_analysis_report", summary: "Impact analysis captured.", content: map[string]any{
+			"feature_request_id": candidate.FeatureRequest.ID,
+			"affected_artifacts": []string{"prd", "architecture", "roadmap", "task_breakdown"},
+			"summary":            "Planning worker did not modify canonical artifacts.",
+			"next_step":          "task_group_proposal",
+		}},
+		{runType: "task_group_proposal", artifactType: "task_group_proposal", summary: "Task group proposal captured.", content: map[string]any{
+			"feature_request_id": candidate.FeatureRequest.ID,
+			"planning_unit":      "feature_chunk",
+			"task_title":         "Implement " + candidate.FeatureRequest.Title,
+			"next_step":          "plan_consolidate",
+		}},
+		{runType: "risk_report", artifactType: "risk_report", summary: "Risk report captured.", content: map[string]any{
+			"feature_request_id": candidate.FeatureRequest.ID,
+			"dependency_risk":    "unknown",
+			"db_schema_risk":     "unknown",
+			"auth_risk":          "unknown",
+			"privacy_risk":       "unknown",
+			"next_step":          "decision_batching",
+		}},
+	}
+	featureRequestID := candidate.FeatureRequest.ID
+	runs := make([]PlanningRunRecord, 0, len(planned)+1)
+	artifacts := make([]PlanningArtifactRecord, 0, len(planned))
+	for _, item := range planned {
+		runID := "PLANRUN-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|"+item.runType+"|"+inputHash)
+		artifactID := "PLANART-" + stableShortHash(runID+"|"+item.artifactType)
+		content, err := json.MarshalIndent(item.content, "", "  ")
+		if err != nil {
+			return nil, nil, nil, WorkQueueItemRecord{}, err
+		}
+		artifactPath := filepath.ToSlash(filepath.Join("planning_artifacts", artifactID+".json"))
+		if err := db.writePlanningArtifactFile(artifactPath, content); err != nil {
+			return nil, nil, nil, WorkQueueItemRecord{}, err
+		}
+		runs = append(runs, PlanningRunRecord{
+			ID:                   runID,
+			FeatureRequestID:     &featureRequestID,
+			RunType:              item.runType,
+			Status:               "succeeded",
+			ArtifactSnapshotJSON: snapshotJSON,
+			InputHash:            inputHash,
+			OutputSummary:        item.summary,
+			StartedAt:            now,
+			FinishedAt:           now,
+			CreatedAt:            now,
+			UpdatedAt:            now,
+		})
+		artifacts = append(artifacts, PlanningArtifactRecord{
+			ID:                   artifactID,
+			PlanningRunID:        runID,
+			FeatureRequestID:     &featureRequestID,
+			ArtifactType:         item.artifactType,
+			Status:               "proposed",
+			Path:                 artifactPath,
+			ContentHash:          sha256Hex(content),
+			ArtifactSnapshotJSON: snapshotJSON,
+			CreatedAt:            now,
+			UpdatedAt:            now,
+		})
+	}
+	decisionRunID := "PLANRUN-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|decision_draft|"+inputHash)
+	decisionContent, err := json.Marshal(map[string]any{
+		"why_human_required":     "Confirm scope before promoting proposed task group into canonical work.",
+		"impact":                 "Planning output may update PRD, roadmap, and task breakdown after approval.",
+		"evidence":               []string{"feature_detail_report", "impact_analysis_report", "risk_report"},
+		"after_approval_actions": []string{"batch_with_related_decisions", "promote_task_group_proposal"},
+	})
 	if err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
-	contentHash := sha256Hex(artifactContent)
-	artifactPath := filepath.ToSlash(filepath.Join("planning_artifacts", artifactID+".json"))
-	if err := db.writePlanningArtifactFile(artifactPath, artifactContent); err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
-	}
+	runs = append(runs, PlanningRunRecord{
+		ID:                   decisionRunID,
+		FeatureRequestID:     &featureRequestID,
+		RunType:              "decision_draft",
+		Status:               "succeeded",
+		ArtifactSnapshotJSON: snapshotJSON,
+		InputHash:            inputHash,
+		OutputSummary:        "Decision report draft captured.",
+		StartedAt:            now,
+		FinishedAt:           now,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	})
+	drafts := []DecisionDraftRecord{{
+		ID:                   "DECDRAFT-" + stableShortHash(decisionRunID+"|scope"),
+		PlanningRunID:        decisionRunID,
+		FeatureRequestID:     &featureRequestID,
+		DecisionType:         "scope",
+		Status:               "draft",
+		Title:                "Confirm scope for " + candidate.FeatureRequest.Title,
+		BatchKey:             projectID + ":scope",
+		RecommendedOption:    "promote_task_group_proposal",
+		ContentJSON:          string(decisionContent),
+		ArtifactSnapshotJSON: snapshotJSON,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}}
 
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
 	committed := false
 	defer func() {
@@ -482,33 +601,52 @@ WHERE project_id = ? AND id = ? AND status = 'queued'`,
 		leaseOwner, leaseExpiresAt, now, now, now, projectID, candidate.QueueItem.ID,
 	)
 	if err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
 	if affected != 1 {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, fmt.Errorf("planning queue item is no longer queued: %s", candidate.QueueItem.ID)
+		return nil, nil, nil, WorkQueueItemRecord{}, fmt.Errorf("planning queue item is no longer queued: %s", candidate.QueueItem.ID)
 	}
-	if _, err := tx.ExecContext(ctx, `
+	for _, run := range runs {
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO planning_runs(
   id, project_id, feature_request_id, run_type, status, artifact_snapshot_json,
   input_hash, output_summary, started_at, finished_at, created_at, updated_at
-) VALUES (?, ?, ?, 'feature_detail', 'succeeded', ?, ?, ?, ?, ?, ?, ?)`,
-		runID, projectID, candidate.FeatureRequest.ID, snapshotJSON, inputHash,
-		"Feature request captured for consolidation.", now, now, now, now,
-	); err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+) VALUES (?, ?, ?, ?, 'succeeded', ?, ?, ?, ?, ?, ?, ?)`,
+			run.ID, projectID, candidate.FeatureRequest.ID, run.RunType, snapshotJSON, inputHash,
+			run.OutputSummary, now, now, now, now,
+		); err != nil {
+			return nil, nil, nil, WorkQueueItemRecord{}, err
+		}
 	}
-	if _, err := tx.ExecContext(ctx, `
+	for _, artifact := range artifacts {
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO planning_artifacts(
   id, project_id, planning_run_id, feature_request_id, artifact_type, status,
   path, content_hash, artifact_snapshot_json, created_at, updated_at
-) VALUES (?, ?, ?, ?, 'feature_detail_report', 'proposed', ?, ?, ?, ?, ?)`,
-		artifactID, projectID, runID, candidate.FeatureRequest.ID, artifactPath, contentHash, snapshotJSON, now, now,
-	); err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+) VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?)`,
+			artifact.ID, projectID, artifact.PlanningRunID, candidate.FeatureRequest.ID,
+			artifact.ArtifactType, artifact.Path, artifact.ContentHash, snapshotJSON, now, now,
+		); err != nil {
+			return nil, nil, nil, WorkQueueItemRecord{}, err
+		}
+	}
+	for _, draft := range drafts {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO decision_report_drafts(
+  id, project_id, planning_run_id, feature_request_id, decision_type, status,
+  title, batch_key, recommended_option, content_json, artifact_snapshot_json,
+  created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+			draft.ID, projectID, draft.PlanningRunID, candidate.FeatureRequest.ID,
+			draft.DecisionType, draft.Title, draft.BatchKey, draft.RecommendedOption,
+			draft.ContentJSON, snapshotJSON, now, now,
+		); err != nil {
+			return nil, nil, nil, WorkQueueItemRecord{}, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE feature_requests
@@ -516,7 +654,7 @@ SET status = 'planned', updated_at = ?
 WHERE project_id = ? AND id = ?`,
 		now, projectID, candidate.FeatureRequest.ID,
 	); err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE work_queue_items
@@ -528,65 +666,129 @@ SET status = 'completed',
 WHERE project_id = ? AND id = ?`,
 		now, now, now, projectID, candidate.QueueItem.ID,
 	); err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "planning_run_succeeded", map[string]any{
-		"planning_run_id":    runID,
-		"planning_artifact":  artifactID,
+		"planning_run_ids":   planningRunIDs(runs),
+		"planning_artifacts": planningArtifactIDs(artifacts),
+		"decision_drafts":    decisionDraftIDs(drafts),
 		"feature_request_id": candidate.FeatureRequest.ID,
 	}, now); err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return PlanningRunRecord{}, PlanningArtifactRecord{}, WorkQueueItemRecord{}, err
+		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
 	committed = true
 
-	featureRequestID := candidate.FeatureRequest.ID
-	return PlanningRunRecord{
-			ID:                   runID,
-			FeatureRequestID:     &featureRequestID,
-			RunType:              "feature_detail",
-			Status:               "succeeded",
-			ArtifactSnapshotJSON: snapshotJSON,
-			InputHash:            inputHash,
-			OutputSummary:        "Feature request captured for consolidation.",
-			StartedAt:            now,
-			FinishedAt:           now,
-			CreatedAt:            now,
-			UpdatedAt:            now,
-		}, PlanningArtifactRecord{
-			ID:                   artifactID,
-			PlanningRunID:        runID,
-			FeatureRequestID:     &featureRequestID,
-			ArtifactType:         "feature_detail_report",
-			Status:               "proposed",
-			Path:                 artifactPath,
-			ContentHash:          contentHash,
-			ArtifactSnapshotJSON: snapshotJSON,
-			CreatedAt:            now,
-			UpdatedAt:            now,
-		}, WorkQueueItemRecord{
-			ID:              candidate.QueueItem.ID,
-			Lane:            candidate.QueueItem.Lane,
-			ItemType:        candidate.QueueItem.ItemType,
-			ItemID:          candidate.QueueItem.ItemID,
-			Status:          "completed",
-			Priority:        candidate.QueueItem.Priority,
-			LeaseOwner:      leaseOwner,
-			LastHeartbeatAt: now,
-			AttemptNo:       candidate.QueueItem.AttemptNo + 1,
-			MaxAttempts:     candidate.QueueItem.MaxAttempts,
-			IdempotencyKey:  candidate.QueueItem.IdempotencyKey,
-			StartedAt:       now,
-			FinishedAt:      now,
-			CreatedAt:       candidate.QueueItem.CreatedAt,
-			UpdatedAt:       now,
-		}, nil
+	return runs, artifacts, drafts, WorkQueueItemRecord{
+		ID:              candidate.QueueItem.ID,
+		Lane:            candidate.QueueItem.Lane,
+		ItemType:        candidate.QueueItem.ItemType,
+		ItemID:          candidate.QueueItem.ItemID,
+		Status:          "completed",
+		Priority:        candidate.QueueItem.Priority,
+		LeaseOwner:      leaseOwner,
+		LastHeartbeatAt: now,
+		AttemptNo:       candidate.QueueItem.AttemptNo + 1,
+		MaxAttempts:     candidate.QueueItem.MaxAttempts,
+		IdempotencyKey:  candidate.QueueItem.IdempotencyKey,
+		StartedAt:       now,
+		FinishedAt:      now,
+		CreatedAt:       candidate.QueueItem.CreatedAt,
+		UpdatedAt:       now,
+	}, nil
+}
+
+func planningRunIDs(runs []PlanningRunRecord) []string {
+	ids := make([]string, 0, len(runs))
+	for _, run := range runs {
+		ids = append(ids, run.ID)
+	}
+	return ids
+}
+
+func planningArtifactIDs(artifacts []PlanningArtifactRecord) []string {
+	ids := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		ids = append(ids, artifact.ID)
+	}
+	return ids
+}
+
+func decisionDraftIDs(drafts []DecisionDraftRecord) []string {
+	ids := make([]string, 0, len(drafts))
+	for _, draft := range drafts {
+		ids = append(ids, draft.ID)
+	}
+	return ids
+}
+
+func (db *DB) markPlanningArtifactStale(ctx context.Context, projectID string, artifactID string, runID string, featureRequestID string, now string) error {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE planning_artifacts
+SET status = 'stale', updated_at = ?
+WHERE project_id = ? AND id = ? AND status = 'proposed'`,
+		now, projectID, artifactID,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE planning_runs
+SET status = 'stale', updated_at = ?
+WHERE project_id = ? AND id = ? AND status = 'succeeded'`,
+		now, projectID, runID,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE decision_report_drafts
+SET status = 'stale', updated_at = ?
+WHERE project_id = ? AND feature_request_id = ?
+  AND status IN ('draft', 'batched')`,
+		now, projectID, featureRequestID,
+	); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "planning_artifact_stale", map[string]any{
+		"planning_run_id":      runID,
+		"planning_artifact_id": artifactID,
+		"feature_request_id":   featureRequestID,
+	}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (db *DB) consolidatePlanningArtifact(ctx context.Context, projectID string, candidate planningConsolidationCandidate) (TaskGroupRecord, TaskRecord, PlanningArtifactRecord, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	currentSnapshot, err := planningSnapshotJSON(candidate.FeatureRequest)
+	if err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	if candidate.Artifact.ArtifactSnapshotJSON != currentSnapshot {
+		if err := db.markPlanningArtifactStale(ctx, projectID, candidate.Artifact.ID, candidate.Artifact.PlanningRunID, candidate.FeatureRequest.ID, now); err != nil {
+			return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+		}
+		stale := candidate.Artifact
+		stale.Status = "stale"
+		stale.UpdatedAt = now
+		return TaskGroupRecord{}, TaskRecord{}, stale, nil
+	}
 	groupID := "TG-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|feature_chunk")
 	taskID := "TASK-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|implementation")
 	taskTitle := "Implement " + candidate.FeatureRequest.Title
@@ -629,16 +831,36 @@ WHERE project_id = ? AND id = ? AND task_group_id IS NULL`,
 	if _, err := tx.ExecContext(ctx, `
 UPDATE planning_artifacts
 SET status = 'accepted', updated_at = ?
-WHERE project_id = ? AND id = ? AND status = 'proposed'`,
-		now, projectID, candidate.Artifact.ID,
+WHERE project_id = ? AND feature_request_id = ? AND status = 'proposed'
+  AND artifact_type IN ('feature_detail_report', 'impact_analysis_report', 'task_group_proposal', 'risk_report')`,
+		now, projectID, candidate.FeatureRequest.ID,
+	); err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE decision_report_drafts
+SET status = 'batched', updated_at = ?
+WHERE project_id = ? AND feature_request_id = ? AND status = 'draft'`,
+		now, projectID, candidate.FeatureRequest.ID,
+	); err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	canonicalCommitQueueID := "WQ-" + stableShortHash(projectID+"|canonical_commit|"+candidate.FeatureRequest.ID+"|"+groupID)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO work_queue_items(
+  id, project_id, lane, item_type, item_id, status, priority,
+  attempt_no, max_attempts, idempotency_key, started_at, finished_at, created_at, updated_at
+) VALUES (?, ?, 'consolidation', 'canonical_commit', ?, 'completed', 'medium', 1, 1, ?, ?, ?, ?, ?)`,
+		canonicalCommitQueueID, projectID, groupID, "canonical_commit:"+groupID, now, now, now, now,
 	); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "planning_consolidated", map[string]any{
-		"task_group_id":        groupID,
-		"task_id":              taskID,
-		"planning_artifact_id": candidate.Artifact.ID,
-		"feature_request_id":   candidate.FeatureRequest.ID,
+		"task_group_id":             groupID,
+		"task_id":                   taskID,
+		"planning_artifact_id":      candidate.Artifact.ID,
+		"feature_request_id":        candidate.FeatureRequest.ID,
+		"canonical_commit_queue_id": canonicalCommitQueueID,
 	}, now); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
@@ -1054,8 +1276,10 @@ func applyNullableWorkQueueFields(record *WorkQueueItemRecord, preferredEnvironm
 func planningSnapshotJSON(request FeatureRequestRecord) (string, error) {
 	payload := map[string]any{
 		"feature_request_id": request.ID,
-		"feature_status":     request.Status,
-		"feature_updated_at": request.UpdatedAt,
+		"title":              request.Title,
+		"description":        request.Description,
+		"priority":           request.Priority,
+		"source":             request.Source,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -1069,6 +1293,7 @@ func planningInputHash(request FeatureRequestRecord) string {
 		request.ID,
 		request.Title,
 		request.Description,
-		request.UpdatedAt,
+		request.Priority,
+		request.Source,
 	}, "|")))
 }

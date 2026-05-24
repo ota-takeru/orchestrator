@@ -183,6 +183,12 @@ WHERE project_id = ? AND id = ?`,
 	); err != nil {
 		return ChangeAnalyzeResult{}, err
 	}
+	if err := insertTraceLink(ctx, tx, projectID, "change_request", changeRequest.ID, "planning_run", runID, "analyzed_by", map[string]any{"run_type": "impact_analysis"}, now); err != nil {
+		return ChangeAnalyzeResult{}, err
+	}
+	if err := insertTraceLink(ctx, tx, projectID, "change_request", changeRequest.ID, "planning_artifact", artifactID, "produced", map[string]any{"artifact_type": "impact_analysis_report"}, now); err != nil {
+		return ChangeAnalyzeResult{}, err
+	}
 	queueID, err := completeChangeAnalysisQueueItem(ctx, tx, projectID, changeRequest.ID, now)
 	if err != nil {
 		return ChangeAnalyzeResult{}, err
@@ -343,6 +349,21 @@ WHERE project_id = ? AND id = ?`,
 		now, now, now, projectID, queueID,
 	)
 	return queueID, err
+}
+
+func insertTraceLink(ctx context.Context, tx *sql.Tx, projectID string, fromType string, fromID string, toType string, toID string, relation string, evidence map[string]any, now string) error {
+	evidenceJSON, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	id := "TRACE-" + stableShortHash(projectID+"|"+fromType+"|"+fromID+"|"+toType+"|"+toID+"|"+relation)
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO trace_links(
+  id, project_id, from_type, from_id, to_type, to_id, relation, evidence_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, projectID, fromType, fromID, toType, toID, relation, string(evidenceJSON), now,
+	)
+	return err
 }
 
 func changeRequestSnapshotJSON(request ChangeRequestRecord) (string, error) {

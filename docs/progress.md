@@ -15,6 +15,18 @@
 | Product implementation code | 99% | 着手 |
 | Initial Complete Scope end-to-end workflow | 99% | 進行中 |
 
+## Latest Implementation Update
+
+2026-05-24:
+
+- Slice 7 の残差分として、Real Codex promptをargvではなくstdin入力へ変更し、command evidenceには `codex exec -` のargvだけを保存するようにしました。
+- Slice 8+ のplanning laneを補完し、Feature RequestからFeature Detail Report、Impact Analysis Report、Decision Report Draft、Task Group Proposal、Risk Reportを生成するようにしました。Consolidatorはstale snapshotをcanonical commitへ進めず、Decision Draftをbatch化してからTask Group / proposed taskを作成します。
+- Change Requestのimpact analysisで `trace_links` を保存し、Change Requestからplanning run / planning artifactへの証跡を追えるようにしました。
+- `devos env set --value-stdin` の保存先を `.env.local` へ反映し、SQLiteにはsecret値を保存せずredacted metadataとfingerprintだけを保存するようにしました。
+- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui build`。
+
+残る完了判定は、Windows実機でのreadiness report生成・import・Windows native Codex/runtime境界の運用検証です。
+
 ## Slice Progress
 
 | Slice | Scope | Progress | Status | Evidence | Next |

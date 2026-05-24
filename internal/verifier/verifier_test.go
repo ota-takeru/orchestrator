@@ -114,3 +114,22 @@ func TestMissingRunnerIsEnvironmentFailure(t *testing.T) {
 		t.Fatalf("failure class = %#v", report.Results[0].FailureClass)
 	}
 }
+
+func TestBaselineFailureDoesNotCountAsBlockingRequiredFailure(t *testing.T) {
+	failure := FailureBaseline
+	report := Report{RunID: "RUN-001", Results: []Result{
+		{
+			CommandID:        "go-test",
+			EnvironmentID:    "linux-main",
+			RequiredForMerge: true,
+			Status:           ResultFailed,
+			FailureClass:     &failure,
+		},
+	}}
+	if report.RequiredFailureCount() != 1 {
+		t.Fatalf("required failure count = %d", report.RequiredFailureCount())
+	}
+	if report.BlockingRequiredFailureCount() != 0 {
+		t.Fatalf("blocking required failure count = %d", report.BlockingRequiredFailureCount())
+	}
+}

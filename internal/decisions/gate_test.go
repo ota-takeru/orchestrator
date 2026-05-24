@@ -43,3 +43,13 @@ func TestEvaluateVerificationRequiredUnknownFailureNeedsDecision(t *testing.T) {
 		t.Fatalf("unexpected gate results: %#v", results)
 	}
 }
+
+func TestEvaluateVerificationRequiredBaselineFailureIsReportOnly(t *testing.T) {
+	failure := verifier.FailureBaseline
+	results := EvaluateVerification(verifier.Report{RunID: "RUN-001", Results: []verifier.Result{
+		{CommandID: "go-test", RequiredForMerge: true, Status: verifier.ResultFailed, FailureClass: &failure},
+	}})
+	if len(results) != 1 || results[0].Status != GateReportOnly || results[0].Detector != "verification_failed_existing_baseline" {
+		t.Fatalf("unexpected gate results: %#v", results)
+	}
+}

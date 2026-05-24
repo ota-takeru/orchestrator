@@ -60,6 +60,15 @@ func EvaluateVerification(report verifier.Report) []GateResult {
 			})
 			continue
 		}
+		if result.FailureClass != nil && *result.FailureClass == verifier.FailureBaseline {
+			results = append(results, GateResult{
+				Status:   GateReportOnly,
+				Severity: SeverityMedium,
+				Detector: "verification_failed_existing_baseline",
+				Evidence: result,
+			})
+			continue
+		}
 		requiredFailure = true
 		if result.FailureClass != nil && *result.FailureClass == verifier.FailureCurrentDiff {
 			results = append(results, GateResult{

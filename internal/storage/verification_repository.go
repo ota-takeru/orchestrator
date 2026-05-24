@@ -55,7 +55,7 @@ func (db *DB) SaveVerificationReport(ctx context.Context, input SaveVerification
 	}()
 
 	runStatus := "succeeded"
-	if input.Report.RequiredFailureCount() > 0 {
+	if input.Report.BlockingRequiredFailureCount() > 0 {
 		runStatus = "failed"
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)

@@ -63,6 +63,20 @@ func (r Report) RequiredFailureCount() int {
 	return count
 }
 
+func (r Report) BlockingRequiredFailureCount() int {
+	count := 0
+	for _, result := range r.Results {
+		if !result.RequiredForMerge || (result.Status != ResultFailed && result.Status != ResultError) {
+			continue
+		}
+		if result.FailureClass != nil && *result.FailureClass == FailureBaseline {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 func (r Report) OptionalFailureCount() int {
 	count := 0
 	for _, result := range r.Results {

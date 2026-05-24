@@ -112,6 +112,59 @@ func TestSaveVerificationReportMarksRequiredFailureRunFailed(t *testing.T) {
 	}
 }
 
+func TestSaveVerificationReportMarksBaselineFailureRunSucceeded(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+
+	failure := verifier.FailureBaseline
+	commands := []verifier.Command{
+		{
+			ID:               "go-test",
+			EnvironmentID:    "linux-main",
+			Runner:           "fake",
+			WorkingDir:       "/repo",
+			Argv:             []string{"fail"},
+			NetworkPolicy:    runners.NetworkOff,
+			RequiredForMerge: true,
+		},
+	}
+	report := verifier.Report{RunID: "RUN-BASELINE", Results: []verifier.Result{
+		{
+			CommandID:        "go-test",
+			EnvironmentID:    "linux-main",
+			RequiredForMerge: true,
+			Status:           verifier.ResultFailed,
+			FailureClass:     &failure,
+			Message:          "same failure on base commit",
+			CommandResult: runners.RunCommandResult{
+				EnvironmentID: "linux-main",
+				ExitCode:      1,
+				Status:        runners.CommandFailed,
+				Stderr:        "same failure on base commit",
+			},
+		},
+	}}
+	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
+		ProjectID:  "PROJECT-001",
+		RunID:      "RUN-BASELINE",
+		AttemptNo:  1,
+		BaseCommit: "BASE",
+		Commands:   commands,
+		Report:     report,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM runs WHERE id = 'RUN-BASELINE'").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "succeeded" {
+		t.Fatalf("run status = %s, want succeeded", status)
+	}
+}
+
 func TestSaveVerificationReportRequiresReverifyContext(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

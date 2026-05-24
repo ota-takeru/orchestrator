@@ -147,11 +147,13 @@ func TestRunRealCodexTaskIncludesTrustedArtifactContext(t *testing.T) {
 		!strings.Contains(executor.request.Prompt, "version=1") ||
 		!strings.Contains(executor.request.Prompt, "status=approved_with_notes") ||
 		!strings.Contains(executor.request.Prompt, approved.Hash) ||
-		!strings.Contains(executor.request.Prompt, "approval_notes: "+notes) {
+		!strings.Contains(executor.request.Prompt, "approval_notes: "+notes) ||
+		!strings.Contains(executor.request.Prompt, "    # PRD") ||
+		!strings.Contains(executor.request.Prompt, "    approved") {
 		t.Fatalf("prompt did not include trusted artifact context:\n%s", executor.request.Prompt)
 	}
-	if strings.Contains(executor.request.Prompt, proposed.Hash) {
-		t.Fatalf("prompt included unapproved artifact hash: %s", executor.request.Prompt)
+	if strings.Contains(executor.request.Prompt, proposed.Hash) || strings.Contains(executor.request.Prompt, "unapproved proposal") {
+		t.Fatalf("prompt included unapproved artifact content: %s", executor.request.Prompt)
 	}
 	var promptPath string
 	if err := db.SQL().QueryRowContext(ctx, "SELECT path FROM run_artifacts WHERE run_id = ? AND artifact_key = 'prompt.md'", result.ImplementationRun).Scan(&promptPath); err != nil {

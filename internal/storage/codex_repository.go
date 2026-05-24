@@ -519,14 +519,14 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 }
 
 func (db *DB) realCodexPrompt(ctx context.Context, projectID string, taskID string) (string, error) {
-	trustedArtifacts, err := db.TrustedArtifactContext(ctx, projectID)
+	trustedArtifacts, err := db.TrustedArtifactContentBundle(ctx, projectID)
 	if err != nil {
 		return "", err
 	}
 	return buildRealCodexPrompt(taskID, trustedArtifacts), nil
 }
 
-func buildRealCodexPrompt(taskID string, trustedArtifacts []TrustedArtifactContextRecord) string {
+func buildRealCodexPrompt(taskID string, trustedArtifacts []TrustedArtifactContentRecord) string {
 	lines := []string{
 		"Implement the assigned DevOS task in this repository.",
 		"Task ID: " + taskID,
@@ -549,6 +549,10 @@ func buildRealCodexPrompt(taskID string, trustedArtifacts []TrustedArtifactConte
 		))
 		if strings.TrimSpace(artifact.ApprovalNotes) != "" {
 			lines = append(lines, "  approval_notes: "+artifact.ApprovalNotes)
+		}
+		lines = append(lines, "  content:")
+		for _, line := range strings.Split(artifact.Content, "\n") {
+			lines = append(lines, "    "+line)
 		}
 	}
 	lines = append(lines,

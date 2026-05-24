@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -181,6 +183,13 @@ func TestTrustedArtifactContextUsesApprovedVersionsAndNotes(t *testing.T) {
 	if record.ReviewedAt == "" {
 		t.Fatal("reviewed_at was not included")
 	}
+	bundle, err := db.TrustedArtifactContentBundle(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle) != 1 || bundle[0].Content != "# PRD\n\napproved" {
+		t.Fatalf("trusted artifact content bundle = %#v", bundle)
+	}
 }
 
 func TestTrustedArtifactContextExcludesUnapprovedArtifacts(t *testing.T) {
@@ -203,5 +212,32 @@ func TestTrustedArtifactContextExcludesUnapprovedArtifacts(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Fatalf("trusted artifact count = %d, want 0", len(records))
+	}
+}
+
+func TestTrustedArtifactContentBundleRejectsSnapshotHashMismatch(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	record, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactArchitecture,
+		Path:         ".devagent/architecture.md",
+		Content:      []byte("# Architecture"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", record.ArtifactID, 1, "approved", ""); err != nil {
+		t.Fatal(err)
+	}
+	snapshotPath := filepath.Join(db.dataRoot, artifactVersionSnapshotPath("PROJECT-001", record.ArtifactID, record.VersionID, record.Path))
+	if err := os.WriteFile(snapshotPath, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.TrustedArtifactContentBundle(ctx, "PROJECT-001"); err == nil {
+		t.Fatal("expected snapshot hash mismatch to fail")
 	}
 }

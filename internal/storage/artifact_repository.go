@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -55,6 +57,11 @@ type TrustedArtifactContextRecord struct {
 	ContentHash   string       `json:"content_hash"`
 	ApprovalNotes string       `json:"approval_notes,omitempty"`
 	ReviewedAt    string       `json:"reviewed_at,omitempty"`
+}
+
+type TrustedArtifactContentRecord struct {
+	TrustedArtifactContextRecord
+	Content string `json:"content"`
 }
 
 func (db *DB) ListArtifacts(ctx context.Context, projectID string, artifactType string) ([]ArtifactRecord, error) {
@@ -168,6 +175,9 @@ func (db *DB) SaveArtifactVersion(ctx context.Context, input ArtifactVersionInpu
 	if existing, ok, err := latestArtifactVersionByHash(ctx, tx, artifactID, contentHash); err != nil {
 		return ArtifactVersionRecord{}, err
 	} else if ok {
+		if err := db.writeArtifactVersionSnapshot(input.ProjectID, existing.ArtifactID, existing.VersionID, existing.Path, input.Content); err != nil {
+			return ArtifactVersionRecord{}, err
+		}
 		committed = true
 		if err := tx.Commit(); err != nil {
 			return ArtifactVersionRecord{}, err
@@ -180,6 +190,9 @@ func (db *DB) SaveArtifactVersion(ctx context.Context, input ArtifactVersionInpu
 		return ArtifactVersionRecord{}, err
 	}
 	versionID := artifactVersionID(artifactID, version)
+	if err := db.writeArtifactVersionSnapshot(input.ProjectID, artifactID, versionID, input.Path, input.Content); err != nil {
+		return ArtifactVersionRecord{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO artifact_versions(
   id, artifact_id, version, status, path, content_hash, created_at
@@ -323,6 +336,58 @@ WHERE artifact_id = ? AND version = ?`, artifactID, version).Scan(&record.Artifa
 		return ArtifactVersionRecord{}, err
 	}
 	return record, nil
+}
+
+func (db *DB) TrustedArtifactContentBundle(ctx context.Context, projectID string) ([]TrustedArtifactContentRecord, error) {
+	records, err := db.TrustedArtifactContext(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	bundle := make([]TrustedArtifactContentRecord, 0, len(records))
+	for _, record := range records {
+		content, err := db.readArtifactVersionSnapshot(projectID, record)
+		if err != nil {
+			return nil, err
+		}
+		bundle = append(bundle, TrustedArtifactContentRecord{
+			TrustedArtifactContextRecord: record,
+			Content:                      string(content),
+		})
+	}
+	return bundle, nil
+}
+
+func (db *DB) writeArtifactVersionSnapshot(projectID string, artifactID string, versionID string, artifactPath string, content []byte) error {
+	relPath := artifactVersionSnapshotPath(projectID, artifactID, versionID, artifactPath)
+	absPath := filepath.Join(db.dataRoot, relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := absPath + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, absPath)
+}
+
+func (db *DB) readArtifactVersionSnapshot(projectID string, record TrustedArtifactContextRecord) ([]byte, error) {
+	relPath := artifactVersionSnapshotPath(projectID, record.ArtifactID, record.VersionID, record.Path)
+	content, err := os.ReadFile(filepath.Join(db.dataRoot, relPath))
+	if err != nil {
+		return nil, fmt.Errorf("read artifact version snapshot %s: %w", record.VersionID, err)
+	}
+	if hash := sha256Hex(content); hash != record.ContentHash {
+		return nil, fmt.Errorf("artifact version snapshot hash mismatch: %s", record.VersionID)
+	}
+	return content, nil
+}
+
+func artifactVersionSnapshotPath(projectID string, artifactID string, versionID string, artifactPath string) string {
+	name := filepath.Base(filepath.Clean(artifactPath))
+	if name == "." || name == string(filepath.Separator) || strings.TrimSpace(name) == "" {
+		name = "artifact"
+	}
+	return filepath.Join("projects", projectID, "artifacts", artifactID, versionID, name)
 }
 
 func artifactBelongsToProject(ctx context.Context, tx *sql.Tx, projectID string, artifactID string) bool {

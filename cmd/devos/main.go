@@ -77,6 +77,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runApproveDecision(ctx, args[1:], stdout)
 	case "memory":
 		return runMemory(ctx, args[1:], stdout)
+	case "dependency":
+		return runDependency(ctx, args[1:], stdout, stderr)
 	case "env":
 		return runEnv(ctx, args[1:], stdout, stderr)
 	case "review":
@@ -1954,6 +1956,130 @@ func runMemory(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runDependency(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing dependency subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "risk":
+		return runDependencyRisk(ctx, args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown dependency subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runDependencyRisk(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing dependency risk subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "add":
+		return runDependencyRiskAdd(ctx, args[1:], stdout)
+	case "list":
+		return runDependencyRiskList(ctx, args[1:], stdout)
+	default:
+		fmt.Fprintf(stderr, "unknown dependency risk subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runDependencyRiskAdd(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("dependency risk add", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	name := fs.String("name", "", "dependency package name")
+	manager := fs.String("manager", "", "package manager")
+	dependencyType := fs.String("type", "", "production, development, or tool")
+	taskID := fs.String("task", "", "introducing task id")
+	runID := fs.String("run", "", "introducing run id")
+	decisionID := fs.String("decision", "", "decision id")
+	reason := fs.String("reason", "", "reason for adding dependency")
+	approvedBy := fs.String("approved-by", "", "approver")
+	risk := fs.String("risk", "", "low, medium, high, or critical")
+	lockfileChanged := fs.Bool("lockfile-changed", false, "whether lockfile changed")
+	lifecycleScripts := fs.String("lifecycle-scripts", "unknown", "none_detected, detected, or unknown")
+	currentVersion := fs.String("current-version", "", "current/resolved version")
+	approvedScope := fs.String("approved-scope", "project", "project, task, one_time, or dependency_family")
+	expiresAt := fs.String("expires-at", "", "RFC3339 expiry")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "dependency_risk_add_failed", err)
+	}
+	defer db.Close()
+	record, err := db.RecordDependencyRisk(ctx, storage.DependencyRiskInput{
+		ProjectID:          projectID,
+		Name:               *name,
+		PackageManager:     *manager,
+		DependencyType:     *dependencyType,
+		IntroducedByTaskID: *taskID,
+		IntroducedByRunID:  *runID,
+		DecisionID:         *decisionID,
+		Reason:             *reason,
+		ApprovedBy:         *approvedBy,
+		Risk:               *risk,
+		LockfileChanged:    *lockfileChanged,
+		LifecycleScripts:   *lifecycleScripts,
+		CurrentVersion:     *currentVersion,
+		ApprovedScope:      *approvedScope,
+		ExpiresAt:          *expiresAt,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "dependency_risk_add_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, record, 0)
+	}
+	fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", record.ID, record.PackageManager, record.Name, record.Risk)
+	return 0
+}
+
+func runDependencyRiskList(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("dependency risk list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	manager := fs.String("manager", "", "package manager")
+	dependencyType := fs.String("type", "", "production, development, or tool")
+	risk := fs.String("risk", "", "low, medium, high, or critical")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "dependency_risk_list_failed", err)
+	}
+	defer db.Close()
+	records, err := db.ListDependencyRisks(ctx, storage.DependencyRiskListFilter{
+		ProjectID:      projectID,
+		PackageManager: *manager,
+		DependencyType: *dependencyType,
+		Risk:           *risk,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "dependency_risk_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"dependencies": records}, 0)
+	}
+	if len(records) == 0 {
+		fmt.Fprintln(stdout, "No dependency risks.")
+		return 0
+	}
+	for _, record := range records {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", record.ID, record.PackageManager, record.Name, record.Risk)
+	}
+	return 0
+}
+
 func runEnv(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "missing env subcommand")
@@ -2527,6 +2653,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--remember --memory-key KEY] [--json] DECISION_ID")
 	fmt.Fprintln(w, "  devos memory [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
+	fmt.Fprintln(w, "  devos dependency risk add [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT --risk medium [--lockfile-changed] [--lifecycle-scripts VALUE] [--approved-scope project] [--json]")
+	fmt.Fprintln(w, "  devos dependency risk list [--project-root PATH] [--data-root PATH] [--manager npm] [--type production] [--risk medium] [--json]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
 	fmt.Fprintln(w, "  devos review [--project-root PATH] [--data-root PATH] [--json] TASK_ID")

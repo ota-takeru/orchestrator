@@ -12,10 +12,10 @@ func TestRegisteredMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 13 {
-		t.Fatalf("migration count = %d, want 13", len(migrations))
+	if len(migrations) != 14 {
+		t.Fatalf("migration count = %d, want 14", len(migrations))
 	}
-	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 || migrations[7].Version != 8 || migrations[8].Version != 9 || migrations[9].Version != 10 || migrations[10].Version != 11 || migrations[11].Version != 12 || migrations[12].Version != 13 {
+	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 || migrations[7].Version != 8 || migrations[8].Version != 9 || migrations[9].Version != 10 || migrations[10].Version != 11 || migrations[11].Version != 12 || migrations[12].Version != 13 || migrations[13].Version != 14 {
 		t.Fatalf("unexpected migration versions: %#v", migrations)
 	}
 }
@@ -90,6 +90,19 @@ func TestMigration013AddsMemories(t *testing.T) {
 	for _, token := range []string{"CREATE TABLE memories", "memory_type", "source_type", "idx_memories_project_scope"} {
 		if !strings.Contains(sql, token) {
 			t.Fatalf("migration 013 missing %q", token)
+		}
+	}
+}
+
+func TestMigration014AddsDependencyRiskLedger(t *testing.T) {
+	migrations, err := RegisteredMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := migrations[13].SQL
+	for _, token := range []string{"CREATE TABLE dependency_risk_ledger", "package_manager", "approved_scope", "idx_dependency_risk_ledger_project"} {
+		if !strings.Contains(sql, token) {
+			t.Fatalf("migration 014 missing %q", token)
 		}
 	}
 }
@@ -216,7 +229,7 @@ func TestStorageCheckValuesCoverAllStateMachines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allSQL := migrations[0].SQL + "\n" + migrations[1].SQL + "\n" + migrations[2].SQL + "\n" + migrations[3].SQL + "\n" + migrations[4].SQL + "\n" + migrations[5].SQL + "\n" + migrations[6].SQL + "\n" + migrations[7].SQL + "\n" + migrations[8].SQL + "\n" + migrations[9].SQL + "\n" + migrations[10].SQL
+	allSQL := migrations[0].SQL + "\n" + migrations[1].SQL + "\n" + migrations[2].SQL + "\n" + migrations[3].SQL + "\n" + migrations[4].SQL + "\n" + migrations[5].SQL + "\n" + migrations[6].SQL + "\n" + migrations[7].SQL + "\n" + migrations[8].SQL + "\n" + migrations[9].SQL + "\n" + migrations[10].SQL + "\n" + migrations[11].SQL + "\n" + migrations[12].SQL + "\n" + migrations[13].SQL
 	machines := []statemachine.Machine{
 		statemachine.Task,
 		statemachine.Run,

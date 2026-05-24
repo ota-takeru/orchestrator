@@ -303,6 +303,43 @@ func TestApproveDecisionCLI(t *testing.T) {
 	}
 }
 
+func TestDependencyRiskCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Dependency ledger workflow")
+	out := runCLI(t, "dependency", "risk", "add",
+		"--project-root", projectRoot,
+		"--data-root", dataRoot,
+		"--name", "zod",
+		"--manager", "npm",
+		"--type", "production",
+		"--reason", "Runtime schema validation",
+		"--approved-by", "human",
+		"--risk", "medium",
+		"--lockfile-changed",
+		"--lifecycle-scripts", "unknown",
+		"--approved-scope", "project",
+		"--current-version", "3.25.0",
+		"--json",
+	)
+	var record storage.DependencyRiskRecord
+	decodeJSON(t, out, &record)
+	if record.Name != "zod" || record.PackageManager != "npm" || record.DependencyType != "production" || !record.LockfileChanged {
+		t.Fatalf("dependency risk record = %#v", record)
+	}
+
+	listOut := runCLI(t, "dependency", "risk", "list", "--project-root", projectRoot, "--data-root", dataRoot, "--manager", "npm", "--json")
+	var list struct {
+		Dependencies []storage.DependencyRiskRecord `json:"dependencies"`
+	}
+	decodeJSON(t, listOut, &list)
+	if len(list.Dependencies) != 1 || list.Dependencies[0].Name != "zod" {
+		t.Fatalf("dependencies = %#v", list.Dependencies)
+	}
+}
+
 func TestInboxApproveDecisionCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

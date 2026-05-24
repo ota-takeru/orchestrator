@@ -12,7 +12,7 @@ func TestInstallAndValidateSchemaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.CreatedPaths) != 5 {
+	if len(result.CreatedPaths) != 6 {
 		t.Fatalf("created paths = %#v", result.CreatedPaths)
 	}
 	validation := ValidateInstalled(root)
@@ -83,5 +83,36 @@ func TestValidateDependencyRiskLedgerEntry(t *testing.T) {
 	}
 	if err := ValidateDependencyRiskLedgerEntry(`not json`); err == nil {
 		t.Fatal("expected non-json ledger entry to fail")
+	}
+}
+
+func TestValidateHumanInboxSnapshot(t *testing.T) {
+	valid := `{
+	  "project_id":"PROJECT-001",
+	  "generated_at":"2026-05-24T00:00:00Z",
+	  "counts":{
+	    "open_inbox_items":1,
+	    "running_tasks":0,
+	    "waiting_for_human_tasks":1,
+	    "blocked_tasks":0,
+	    "queued_requests":0,
+	    "open_decisions":1,
+	    "running_workers":0,
+	    "open_merge_queue":0
+	  },
+	  "open_inbox_items":[{"id":"INBOX-001"}],
+	  "recommended_next_commands":["devos inbox --status open --json"]
+	}`
+	if err := ValidateHumanInboxSnapshot(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateHumanInboxSnapshot(`{"project_id":"","generated_at":"2026-05-24T00:00:00Z","counts":{"open_inbox_items":0,"running_tasks":0,"waiting_for_human_tasks":0,"blocked_tasks":0,"queued_requests":0,"open_decisions":0,"running_workers":0,"open_merge_queue":0},"open_inbox_items":[]}`); err == nil {
+		t.Fatal("expected empty project id to fail")
+	}
+	if err := ValidateHumanInboxSnapshot(`{"project_id":"PROJECT-001","generated_at":"bad","counts":{"open_inbox_items":0,"running_tasks":0,"waiting_for_human_tasks":0,"blocked_tasks":0,"queued_requests":0,"open_decisions":0,"running_workers":0,"open_merge_queue":0},"open_inbox_items":[]}`); err == nil {
+		t.Fatal("expected invalid generated_at to fail")
+	}
+	if err := ValidateHumanInboxSnapshot(`{"project_id":"PROJECT-001","generated_at":"2026-05-24T00:00:00Z","counts":{"open_inbox_items":0,"running_tasks":0,"waiting_for_human_tasks":0,"blocked_tasks":0,"queued_requests":0,"open_decisions":0,"running_workers":0,"open_merge_queue":0},"open_inbox_items":[{"id":"INBOX-001"}]}`); err == nil {
+		t.Fatal("expected item/count mismatch to fail")
 	}
 }

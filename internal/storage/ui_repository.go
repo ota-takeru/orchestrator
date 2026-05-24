@@ -3,8 +3,11 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 )
 
 type HumanInboxSnapshot struct {
@@ -83,6 +86,13 @@ func (db *DB) LoadHumanInboxSnapshot(ctx context.Context, projectID string, limi
 		return HumanInboxSnapshot{}, err
 	}
 	snapshot.RecommendedNextCommands = recommendedUICommands(snapshot)
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return HumanInboxSnapshot{}, err
+	}
+	if err := schemas.ValidateHumanInboxSnapshot(string(payload)); err != nil {
+		return HumanInboxSnapshot{}, err
+	}
 	return snapshot, nil
 }
 

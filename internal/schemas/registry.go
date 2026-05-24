@@ -15,10 +15,11 @@ import (
 type SchemaKind string
 
 const (
-	SchemaKindTaskYAML          SchemaKind = "task_yaml"
-	SchemaKindCodexFinalMessage SchemaKind = "codex_final_message"
-	SchemaKindSemanticDiff      SchemaKind = "semantic_behavior_diff"
-	SchemaKindDependencyRisk    SchemaKind = "dependency_risk_ledger"
+	SchemaKindTaskYAML           SchemaKind = "task_yaml"
+	SchemaKindCodexFinalMessage  SchemaKind = "codex_final_message"
+	SchemaKindSemanticDiff       SchemaKind = "semantic_behavior_diff"
+	SchemaKindDependencyRisk     SchemaKind = "dependency_risk_ledger"
+	SchemaKindHumanInboxSnapshot SchemaKind = "human_inbox_snapshot"
 )
 
 type Definition struct {
@@ -87,6 +88,13 @@ func Definitions() []Definition {
 			Version: "1",
 			File:    "dependency-risk-ledger.v1.schema.json",
 			Content: []byte(dependencyRiskLedgerSchema),
+		},
+		{
+			ID:      "devos.human-inbox-snapshot",
+			Kind:    SchemaKindHumanInboxSnapshot,
+			Version: "1",
+			File:    "human-inbox-snapshot.v1.schema.json",
+			Content: []byte(humanInboxSnapshotSchema),
 		},
 	}
 }
@@ -265,6 +273,70 @@ func ValidateDependencyRiskLedgerEntry(raw string) error {
 	case "project", "task", "one_time", "dependency_family":
 	default:
 		return fmt.Errorf("dependency risk ledger entry has invalid approved scope: %s", entry.ApprovedScope)
+	}
+	return nil
+}
+
+type HumanInboxSnapshot struct {
+	ProjectID               string            `json:"project_id"`
+	GeneratedAt             string            `json:"generated_at"`
+	Counts                  HumanInboxCounts  `json:"counts"`
+	LastSuccessfulMergeAt   string            `json:"last_successful_merge_at,omitempty"`
+	OpenInboxItems          []json.RawMessage `json:"open_inbox_items"`
+	RecommendedNextCommands []string          `json:"recommended_next_commands,omitempty"`
+}
+
+type HumanInboxCounts struct {
+	OpenInboxItems       int `json:"open_inbox_items"`
+	RunningTasks         int `json:"running_tasks"`
+	WaitingForHumanTasks int `json:"waiting_for_human_tasks"`
+	BlockedTasks         int `json:"blocked_tasks"`
+	QueuedRequests       int `json:"queued_requests"`
+	OpenDecisions        int `json:"open_decisions"`
+	RunningWorkers       int `json:"running_workers"`
+	OpenMergeQueue       int `json:"open_merge_queue"`
+}
+
+func HumanInboxSnapshotSchema() []byte {
+	return []byte(humanInboxSnapshotSchema)
+}
+
+func ValidateHumanInboxSnapshot(raw string) error {
+	var snapshot HumanInboxSnapshot
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+		return fmt.Errorf("human inbox snapshot must be JSON: %w", err)
+	}
+	if strings.TrimSpace(snapshot.ProjectID) == "" {
+		return fmt.Errorf("human inbox snapshot requires project_id")
+	}
+	if strings.TrimSpace(snapshot.GeneratedAt) == "" {
+		return fmt.Errorf("human inbox snapshot requires generated_at")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, snapshot.GeneratedAt); err != nil {
+		return fmt.Errorf("human inbox snapshot generated_at must be RFC3339Nano: %w", err)
+	}
+	if snapshot.Counts.OpenInboxItems < 0 ||
+		snapshot.Counts.RunningTasks < 0 ||
+		snapshot.Counts.WaitingForHumanTasks < 0 ||
+		snapshot.Counts.BlockedTasks < 0 ||
+		snapshot.Counts.QueuedRequests < 0 ||
+		snapshot.Counts.OpenDecisions < 0 ||
+		snapshot.Counts.RunningWorkers < 0 ||
+		snapshot.Counts.OpenMergeQueue < 0 {
+		return fmt.Errorf("human inbox snapshot counts cannot be negative")
+	}
+	if len(snapshot.OpenInboxItems) > snapshot.Counts.OpenInboxItems {
+		return fmt.Errorf("human inbox snapshot includes more open inbox items than counted")
+	}
+	for i, item := range snapshot.OpenInboxItems {
+		if len(item) == 0 || string(item) == "null" {
+			return fmt.Errorf("human inbox snapshot open inbox item %d is empty", i)
+		}
+	}
+	for i, command := range snapshot.RecommendedNextCommands {
+		if strings.TrimSpace(command) == "" {
+			return fmt.Errorf("human inbox snapshot recommended command %d is empty", i)
+		}
 	}
 	return nil
 }
@@ -543,5 +615,51 @@ const dependencyRiskLedgerSchema = `{
     "expires_at": { "type": "string" },
     "created_at": { "type": "string", "minLength": 1 },
     "updated_at": { "type": "string", "minLength": 1 }
+  }
+}`
+
+const humanInboxSnapshotSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.human-inbox-snapshot.v1",
+  "title": "DevOS Human Inbox Snapshot",
+  "type": "object",
+  "required": ["project_id", "generated_at", "counts", "open_inbox_items"],
+  "additionalProperties": false,
+  "properties": {
+    "project_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "minLength": 1 },
+    "counts": {
+      "type": "object",
+      "required": [
+        "open_inbox_items",
+        "running_tasks",
+        "waiting_for_human_tasks",
+        "blocked_tasks",
+        "queued_requests",
+        "open_decisions",
+        "running_workers",
+        "open_merge_queue"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "open_inbox_items": { "type": "integer", "minimum": 0 },
+        "running_tasks": { "type": "integer", "minimum": 0 },
+        "waiting_for_human_tasks": { "type": "integer", "minimum": 0 },
+        "blocked_tasks": { "type": "integer", "minimum": 0 },
+        "queued_requests": { "type": "integer", "minimum": 0 },
+        "open_decisions": { "type": "integer", "minimum": 0 },
+        "running_workers": { "type": "integer", "minimum": 0 },
+        "open_merge_queue": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "last_successful_merge_at": { "type": "string" },
+    "open_inbox_items": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "recommended_next_commands": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
   }
 }`

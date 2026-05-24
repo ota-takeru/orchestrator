@@ -1066,6 +1066,12 @@ SQLiteにはJSONをTEXTで保存します。保存前にGo structへdecodeし、
 
 空オブジェクトや空配列を許すかはschemaごとに明示します。GateResult evidenceは空配列不可です。
 
+DB列以外のOrchestrator-owned API/CLI outputも、UIが直接依存するものはschema registryで検証します。
+
+| Output | Validation Target |
+| --- | --- |
+| `devos ui snapshot` / `GET /api/ui/snapshot` | `devos.human-inbox-snapshot.v1` |
+
 ## Path Columns
 
 path列は保存前に正規化します。

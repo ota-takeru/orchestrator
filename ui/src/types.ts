@@ -122,8 +122,106 @@ export type InvariantViolation = {
   message: string;
 };
 
+export type TaskRecord = {
+  id: string;
+  status: string;
+  title: string;
+};
+
+export type FeatureRequest = {
+  id: string;
+  status: string;
+  title: string;
+  description: string;
+  source: string;
+  priority: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkQueueItem = {
+  id: string;
+  lane: string;
+  item_type: string;
+  item_id: string;
+  status: string;
+  priority: string;
+  attempt_no: number;
+  max_attempts: number;
+  blocked_reason?: string;
+  updated_at: string;
+};
+
+export type PlanningRun = {
+  id: string;
+  run_type: string;
+  status: string;
+  output_summary?: string;
+  updated_at: string;
+};
+
+export type PlanningArtifact = {
+  id: string;
+  artifact_type: string;
+  status: string;
+  path: string;
+  updated_at: string;
+};
+
+export type WorkerRun = {
+  id: string;
+  lane: string;
+  mode: string;
+  status: string;
+  stop_reason?: string;
+  started_at: string;
+  finished_at?: string;
+};
+
+export type WorkStatus = {
+  worker_runs: WorkerRun[];
+  planning: {
+    runs: PlanningRun[];
+    artifacts: PlanningArtifact[];
+    queue: WorkQueueItem[];
+  };
+};
+
+export type PlanningStatus = {
+  runs: PlanningRun[];
+  artifacts: PlanningArtifact[];
+  queue: WorkQueueItem[];
+};
+
+export type ChangeRequest = {
+  id: string;
+  status: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DependencyRisk = {
+  id: string;
+  name: string;
+  package_manager: string;
+  dependency_type: string;
+  reason: string;
+  risk: string;
+  approved_scope: string;
+  lockfile_changed: boolean;
+  created_at: string;
+};
+
 export type DashboardData = {
   snapshot: HumanInboxSnapshot;
+  tasks: TaskRecord[];
+  featureRequests: FeatureRequest[];
+  queueItems: WorkQueueItem[];
+  workStatus: WorkStatus;
+  planningStatus: PlanningStatus;
+  changeRequests: ChangeRequest[];
+  dependencyRisks: DependencyRisk[];
   decisions: Decision[];
   baselineIssues: MemoryRecord[];
   trustedArtifacts: TrustedArtifact[];

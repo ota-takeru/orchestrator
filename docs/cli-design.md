@@ -42,7 +42,13 @@ devos work resume
 devos change request "タスク画面を今日の実行リスト中心に変える"
 devos change analyze CR-001
 devos change approve CR-001 --option A
-devos policy show
+devos memory --type policy
+devos dependency risk add --name zod --manager npm --type production --reason "フォーム検証" --risk medium
+devos dependency risk list
+devos ui snapshot
+devos serve
+devos env status
+devos env set OPENAI_API_KEY --scope project --value-stdin
 devos merge approve TASK-001
 devos merge TASK-001
 devos merge queue
@@ -59,21 +65,20 @@ devos cleanup --applied
 devos cleanup --older-than 14d
 devos publish --dry-run
 devos publish --execute --remote origin --branch main
-devos platform list
 devos platform detect
-devos platform add windows-main --os windows --project-root C:\dev\app --shell powershell
-devos platform add wsl-main --os wsl --project-root /home/user/app --shell bash
-devos platform set-primary windows-main
 devos platform profile list
 devos platform profile set windows-primary
 devos platform doctor
-devos platform doctor --env windows-main
-devos platform map add windows-main wsl-sidecar --from-root C:\dev\app --to-root /mnt/c/dev/app --mode same_filesystem
+devos platform doctor --env windows-main --include-codex --include-ui --save
+devos platform codex-readiness --save
+devos platform codex-readiness --from-file windows-readiness.json --save
+devos platform setup instructions INBOX-001
+devos platform setup mark-installed INBOX-001
+devos platform setup waive INBOX-001 --reason "sidecar only" --scope task --expiry 2026-06-30T00:00:00Z --allowed-effect report_only
+devos platform map add windows-main wsl-sidecar --from-root C:\dev\app --to-root /mnt/c/dev/app --mode same_filesystem --write-owner windows-main
 devos platform map list
-devos run TASK-001 --profile windows-primary
-devos run TASK-001 --implementation-env windows-main --verify-env windows-main --verify-env wsl-sidecar
 devos verify TASK-001 --env windows-main
-devos verify TASK-001 --env wsl-sidecar --optional
+devos run TASK-001 --real-codex --verify --verify-env windows-main
 ```
 
 ## CLI Contract
@@ -133,7 +138,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos artifacts approve` | `ARTIFACT_ID`, `--version`, `--status`, `--notes` | artifact status、artifact version approval、workflow_events | 同じ承認内容はno-op |
 | `devos check` | `--json` | なし | artifact / task / run / verification / run artifact fileのproject invariantを横断検査し、違反を返す |
 | `devos env status` | `--json` | なし | read-only |
-| `devos env set` | `KEY`, `--scope`, `--scope-id`, `--value-stdin` | secret store or `.env.local`、redacted binding、audit event | 同じfingerprintならno-op |
+| `devos env set` | `KEY`, `--scope`, `--scope-id`, `--env`, `--value-stdin` | secret store or `.env.local`、redacted binding、audit event | 同じfingerprintならno-op |
 | `devos request` | `TEXT`, `--json` | feature_request、work_queue_item | 同一本文でも新requestを作る |
 | `devos requests` | `--status`, `--json` | なし | read-only |
 | `devos queue` | `--status`, `--json` | なし | read-only |
@@ -148,6 +153,8 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos change request` | `TEXT`, `--json` | change_request proposed | 同一本文でも新requestを作る |
 | `devos change analyze` | `CR_ID`, `--json` | impact report、trace links | 同じartifact versionsなら再利用可 |
 | `devos change approve` | `CR_ID`, `--option` | artifact update proposal、tasks再分類 | resolved requestへの再approveはvalidation error |
+| `devos ui snapshot` | `--limit`, `--json` | なし | Human Inbox UIのdashboard snapshotをread-onlyで返す |
+| `devos serve` | `--addr`, `--json` | なし | 同じDBをHTTP APIから公開する。UI/APIはsource of truthを直接編集せず正規repository APIへ委譲する |
 | `devos merge approve` | `TASK_ID`, `--json` | `human_approvals(merge)`、`approved_for_merge` | final review approvalとevidence一致が必須 |
 | `devos merge` | `TASK_ID`, `--dry-run`, `--json` | merge queue entry、workflow_events | open queue entryがあれば重複投入しない |
 | `devos merge queue` | `--json` | なし | read-only |
@@ -165,8 +172,6 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos cleanup quarantine restore` | `TASK_ID`, `--run RUN_ID`, `--json` | cleanup restore evidence、quarantine worktreeの復元移動 | `git worktree move` で元pathへ戻す。復元先が存在する場合はblocked |
 | `devos publish` | `--remote origin`, `--branch main`, `--dry-run`, `--execute`, `--json` | publish readiness / execute run、summary artifact、workflow_events | defaultはreadiness証跡だけ。`--execute` はremoteがlocal behindでないことを確認し、`local_ahead` のときだけ明示refspecでpushする。`up_to_date` はno-op |
 | `devos platform detect` | `--apply`, `--json` | Windows / WSL / Linux local environment候補 | `--apply`なしではDB更新しない |
-| `devos platform add` | `ENV_ID`, `--os`, `--project-root`, `--shell` | execution_environment作成または更新 | 同じENV_IDはupdate |
-| `devos platform set-primary` | `ENV_ID` | projectのprimary_environment変更 | 未解決runやopen worktreeがある場合は拒否 |
 | `devos platform profile list` | `--json` | なし | read-only |
 | `devos platform profile set` | `windows-primary|wsl-primary|hybrid` | canonical_operationsを含むproject_run_profileをactive/default化 | profile snapshotが同じならno-op |
 | `devos platform doctor` | `--env ENV_ID`, `--include-codex`, `--include-ui`, `--save`, `--json` | toolchain_requirements検査、setup card projection | 同じ検査結果ならno-op |
@@ -182,8 +187,6 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 platform command details:
 
 - `devos platform detect` はWindows / WSL / Linux local environmentを検出し、execution_environments候補を作る。DB更新は `--apply` なしではしない。
-- `devos platform add` はexecution_environmentを作成または更新する。
-- `devos platform set-primary` はprojectのprimary_environmentを変更する。未解決runやopen worktreeがある場合は拒否する。
 - `devos platform profile set` はcanonical_operationsを含むproject_run_profileをactive/defaultにする。
 - `devos platform doctor` はtoolchain_requirementsを検査し、missing/setup_requiredをHuman Inboxへ投影する。
 - `devos platform doctor --include-ui` はUI検証用のNode.js / Corepackを検査する。pnpmは `ui/package.json` の `packageManager` をCorepack経由で実行するため、正規検証コマンドは `corepack pnpm --dir ui test` / `lint` / `build` とする。

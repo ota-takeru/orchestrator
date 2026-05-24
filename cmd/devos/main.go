@@ -3023,7 +3023,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform setup instructions [--project-root PATH] [--data-root PATH] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform setup mark-installed [--project-root PATH] [--data-root PATH] [--include-codex] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform setup waive [--project-root PATH] [--data-root PATH] --reason TEXT --scope SCOPE --expiry RFC3339 --allowed-effect EFFECT [--json] INBOX_ID")
-	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--data-root PATH] [--env ENV_ID] [--include-codex] [--save] [--json]")
+	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--data-root PATH] [--env ENV_ID] [--include-codex] [--include-ui] [--save] [--json]")
 }
 
 func printFindings(w io.Writer, report preflight.Report) {

@@ -23,6 +23,8 @@
 - Slice 8+ のplanning laneを補完し、Feature RequestからFeature Detail Report、Impact Analysis Report、Decision Report Draft、Task Group Proposal、Risk Reportを生成するようにしました。Consolidatorはstale snapshotをcanonical commitへ進めず、Decision Draftをbatch化してからTask Group / proposed taskを作成します。
 - Change Requestのimpact analysisで `trace_links` を保存し、Change Requestからplanning run / planning artifactへの証跡を追えるようにしました。
 - `devos env set --value-stdin` の保存先を `.env.local` へ反映し、SQLiteにはsecret値を保存せずredacted metadataとfingerprintだけを保存するようにしました。
+- Human Inbox UIを再確認し、未接続だったRequest Queue、Work / Planning status、Task一覧、Change Request、Dependency Risk、Environment Inputをdashboardへ追加しました。対応するHTTP APIとして `/api/tasks`、`/api/requests`、`/api/queue`、`/api/work/status`、`/api/planning/status`、`/api/change-requests`、`/api/dependency-risks`、`/api/env/bindings` を追加しました。
+- `docs/ui-human-inbox.md` に実装済みdashboard panelとAPI surfaceを追記し、`docs/cli-design.md` のコマンド例を現在の `devos` usageに合わせて更新しました。
 - 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui build`。
 
 残る完了判定は、Windows実機でのreadiness report生成・import・Windows native Codex/runtime境界の運用検証です。
@@ -44,7 +46,7 @@
 | 5 | Human Inbox + Approval Sources + Toolchain Setup | 99% | 進行中 | `dfe3fdf`, `a98622b`, `ab22a6f`, `5d52d90`, `02be517`, `6d02ed6`, `46ea815`, `f1a3a0f`, `7c82bb3`, `bf80a4e`, `9840a43`, `6a87f34`, `47aace5`, `7a0ab49`, `df52592`, `6fb1fd7`, `0851cf1`, `82ffff3`, `5d8ca13`, `e0e8a38`, `03e31ca`, `853446f`, `82431c8`, `99859d2`, `2418ea0`, `4d63a15`, `06c105f`, `37ba640`, `77f64ef`, `065a1af`, `dda2f96`, `55af214`, `756bb0e` | setup card / merge gateの実運用検証へ進む |
 | 6 | Merge Queue + Reverify | 100% | 完了 | `63132bf`, `acd52bc`, `1fd2c5e`, `0bbd6e9`, `c79bd76`, `d77433c`, `989becc`, `31c099a`, `dd44f1b`, `117b6cc`, `1bf94f1`, `642dbc0`, `27cac3e`, `37c10c2`, `82b63f1`, `862ffe5`, `e2fd3c4`, `ac3521c`, `cf17193`, `6823d44`, `18e3bd0` | publish前確認はhigher workflowで運用する |
 | 7 | Real Codex Windows / WSL Execution | 82% | 進行中 | `d4e790a`, `862ffe5`, `750c16a`, `580bf87`, `0851cf1`, `220a406`, `82ffff3`, `5d8ca13`, `ad0a1bc`, `faf0c7c`, `085da18`, `1c523a8`, `dca6533`, `82431c8`, `e7ad761`, `cb1caaa`, `dda2f96`, `e3ba9e1`, `182ce10` | Windows実機でのreadiness report生成とimport運用検証へ進む |
-| 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 97% | 着手 | `dd44f1b`, `1a5af75`, `f983158`, `08b5a03`, `423e7dc`, `50221e6`, `d0841e5`, `623ad4e`, `2e99d79`, `817daec`, `a451d3f`, `dd2820a`, `c4e464b`, `40c4e60`, `22a46b9`, `adfe423`, `853446f`, `425e4cd`, `935d658`, `20520f7`, `414e79d`, `34b42b5`, `c9e8f76`, `1c523a8`, `44d00a0`, `d5e2a80`, `402d04a`, `dca6533`, `832ef45`, `4ee303f`, `99859d2`, `dfccfff`, `2418ea0`, `d0ed17c`, `451ec70`, `77f64ef`, `18e3bd0` | Windows実機でのreadiness report生成とimport運用検証へ進む |
+| 8+ | Auto Repair, Semantic Diff, Change Request, Planning Queue, UI | 99% | 進行中 | `dd44f1b`, `1a5af75`, `f983158`, `08b5a03`, `423e7dc`, `50221e6`, `d0841e5`, `623ad4e`, `2e99d79`, `817daec`, `a451d3f`, `dd2820a`, `c4e464b`, `40c4e60`, `22a46b9`, `adfe423`, `853446f`, `425e4cd`, `935d658`, `20520f7`, `414e79d`, `34b42b5`, `c9e8f76`, `1c523a8`, `44d00a0`, `d5e2a80`, `402d04a`, `dca6533`, `832ef45`, `4ee303f`, `99859d2`, `dfccfff`, `2418ea0`, `d0ed17c`, `451ec70`, `77f64ef`, `18e3bd0` | Windows実機でのreadiness report生成とimport運用検証へ進む |
 
 ## Current Focus
 

@@ -269,6 +269,81 @@ func TestServerExposesProjectCheck(t *testing.T) {
 	}
 }
 
+func TestServerExposesDashboardWorkflowResources(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	ctx := context.Background()
+	if _, err := db.CreateFeatureRequest(ctx, projectID, "Today Viewを追加して"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateChangeRequest(ctx, projectID, "タスク画面を今日中心に変える"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordDependencyRisk(ctx, storage.DependencyRiskInput{
+		ProjectID:        projectID,
+		Name:             "zod",
+		PackageManager:   "npm",
+		DependencyType:   "production",
+		Reason:           "UI validation",
+		Risk:             "medium",
+		LifecycleScripts: "unknown",
+		ApprovedScope:    "project",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		path string
+		key  string
+	}{
+		{"/api/requests", "requests"},
+		{"/api/queue", "items"},
+		{"/api/work/status", "worker_runs"},
+		{"/api/planning/status", "runs"},
+		{"/api/change-requests", "change_requests"},
+		{"/api/dependency-risks", "risks"},
+		{"/api/tasks", "tasks"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rec := httptest.NewRecorder()
+		NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body = %s", tc.path, rec.Code, rec.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := body[tc.key]; !ok {
+			t.Fatalf("%s missing key %s: %#v", tc.path, tc.key, body)
+		}
+	}
+}
+
+func TestServerCreatesEnvBindingWithoutReturningSecret(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	if _, err := db.SQL().ExecContext(context.Background(), "UPDATE projects SET root_path = ? WHERE id = ?", t.TempDir(), projectID); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"key":"OPENAI_API_KEY","scope":"project","value":"secret-value"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/env/bindings", body)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("secret-value")) {
+		t.Fatalf("response leaked secret: %s", rec.Body.String())
+	}
+	var record storage.EnvBindingRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Storage != "env_file" || record.Key != "OPENAI_API_KEY" {
+		t.Fatalf("binding = %#v", record)
+	}
+}
+
 func hasAPIViolation(violations []storage.InvariantViolation, code string) bool {
 	for _, violation := range violations {
 		if violation.Code == code {

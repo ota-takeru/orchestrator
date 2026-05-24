@@ -26,12 +26,177 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/inbox/", s.handleInboxItem)
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	mux.HandleFunc("/api/memory", s.handleMemory)
+	mux.HandleFunc("/api/tasks", s.handleTasks)
+	mux.HandleFunc("/api/requests", s.handleRequests)
+	mux.HandleFunc("/api/queue", s.handleQueue)
+	mux.HandleFunc("/api/work/status", s.handleWorkStatus)
+	mux.HandleFunc("/api/planning/status", s.handlePlanningStatus)
+	mux.HandleFunc("/api/change-requests", s.handleChangeRequests)
+	mux.HandleFunc("/api/dependency-risks", s.handleDependencyRisks)
+	mux.HandleFunc("/api/env/bindings", s.handleEnvBindings)
 	mux.HandleFunc("/api/artifacts/trusted", s.handleTrustedArtifacts)
 	mux.HandleFunc("/api/platform/path-mappings", s.handlePathMappings)
 	mux.HandleFunc("/api/platform/toolchain-setup", s.handleToolchainSetup)
 	mux.HandleFunc("/api/merge/status", s.handleMergeStatus)
 	mux.HandleFunc("/api/check", s.handleProjectCheck)
 	return mux
+}
+
+func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	tasks, err := s.db.ListTasks(r.Context(), s.projectID, r.URL.Query().Get("status"))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "tasks_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		requests, err := s.db.ListFeatureRequests(r.Context(), s.projectID, r.URL.Query().Get("status"))
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "requests_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, map[string]any{"requests": requests})
+	case http.MethodPost:
+		var input struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return
+		}
+		result, err := s.db.CreateFeatureRequest(r.Context(), s.projectID, input.Text)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "request_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, result)
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST is required")
+	}
+}
+
+func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	items, err := s.db.ListWorkQueueItems(r.Context(), s.projectID, r.URL.Query().Get("status"))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "queue_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleWorkStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	status, err := s.db.GetWorkStatus(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "work_status_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handlePlanningStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	status, err := s.db.GetPlanningStatus(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "planning_status_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleChangeRequests(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		requests, err := s.db.ListChangeRequests(r.Context(), s.projectID, r.URL.Query().Get("status"))
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "change_requests_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, map[string]any{"change_requests": requests})
+	case http.MethodPost:
+		var input struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return
+		}
+		result, err := s.db.CreateChangeRequest(r.Context(), s.projectID, input.Text)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "change_request_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, result)
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST is required")
+	}
+}
+
+func (s *Server) handleDependencyRisks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	records, err := s.db.ListDependencyRisks(r.Context(), storage.DependencyRiskListFilter{
+		ProjectID:      s.projectID,
+		PackageManager: r.URL.Query().Get("manager"),
+		DependencyType: r.URL.Query().Get("type"),
+		Risk:           r.URL.Query().Get("risk"),
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "dependency_risks_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"risks": records})
+}
+
+func (s *Server) handleEnvBindings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	var input struct {
+		EnvironmentID string `json:"environment_id"`
+		Key           string `json:"key"`
+		Scope         string `json:"scope"`
+		ScopeID       string `json:"scope_id"`
+		Value         string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	record, err := s.db.SaveEnvBinding(r.Context(), storage.EnvBindingInput{
+		ProjectID:     s.projectID,
+		EnvironmentID: input.EnvironmentID,
+		Key:           input.Key,
+		Scope:         input.Scope,
+		ScopeID:       input.ScopeID,
+		Value:         input.Value,
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "env_binding_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, record)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

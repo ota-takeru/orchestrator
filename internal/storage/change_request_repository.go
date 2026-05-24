@@ -110,6 +110,33 @@ INSERT INTO work_queue_items(
 	}, nil
 }
 
+func (db *DB) ListChangeRequests(ctx context.Context, projectID string, status string) ([]ChangeRequestRecord, error) {
+	query := `
+SELECT id, status, body, created_at, updated_at
+FROM change_requests
+WHERE project_id = ?`
+	args := []any{projectID}
+	if strings.TrimSpace(status) != "" {
+		query += " AND status = ?"
+		args = append(args, status)
+	}
+	query += " ORDER BY created_at ASC"
+	rows, err := db.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []ChangeRequestRecord
+	for rows.Next() {
+		var record ChangeRequestRecord
+		if err := rows.Scan(&record.ID, &record.Status, &record.Body, &record.CreatedAt, &record.UpdatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
 func (db *DB) AnalyzeChangeRequest(ctx context.Context, projectID string, changeRequestID string) (ChangeAnalyzeResult, error) {
 	if strings.TrimSpace(projectID) == "" {
 		return ChangeAnalyzeResult{}, fmt.Errorf("project id is required")

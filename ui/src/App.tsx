@@ -1,8 +1,8 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveInboxItem, loadDashboardData } from "./api";
-import type { DashboardData, Decision, InboxItem, MemoryRecord, SnapshotCounts } from "./types";
+import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, saveEnvBinding } from "./api";
+import type { DashboardData, Decision, InboxItem, MemoryRecord, SnapshotCounts, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -24,6 +24,10 @@ function App() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState<string>("");
+  const [featureText, setFeatureText] = useState("");
+  const [changeText, setChangeText] = useState("");
+  const [envKey, setEnvKey] = useState("");
+  const [envValue, setEnvValue] = useState("");
 
   const refresh = async () => {
     setLoading(true);
@@ -57,6 +61,43 @@ function App() {
     }
   };
 
+  const submitFeatureRequest = async () => {
+    if (!featureText.trim()) return;
+    setError("");
+    try {
+      await createFeatureRequest(featureText);
+      setFeatureText("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Feature request failed");
+    }
+  };
+
+  const submitChangeRequest = async () => {
+    if (!changeText.trim()) return;
+    setError("");
+    try {
+      await createChangeRequest(changeText);
+      setChangeText("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Change request failed");
+    }
+  };
+
+  const submitEnvBinding = async () => {
+    if (!envKey.trim() || !envValue) return;
+    setError("");
+    try {
+      await saveEnvBinding(envKey, envValue);
+      setEnvKey("");
+      setEnvValue("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Environment input failed");
+    }
+  };
+
   return (
     <main className="min-h-screen bg-zinc-50 text-zinc-950">
       <header className="border-b border-zinc-200 bg-white">
@@ -78,6 +119,15 @@ function App() {
             <>
               <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
               <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={approve} />
+              <RequestQueuePanel
+                requests={data.featureRequests}
+                queueItems={data.queueItems}
+                featureText={featureText}
+                setFeatureText={setFeatureText}
+                onSubmitFeature={submitFeatureRequest}
+              />
+              <WorkPlanningPanel data={data} />
+              <TaskPanel tasks={data.tasks} />
             </>
           ) : (
             <LoadingPanel />
@@ -86,6 +136,9 @@ function App() {
 
         <aside className="space-y-5">
           <CommandPanel command={nextCommand} />
+          <EnvironmentInputPanel envKey={envKey} envValue={envValue} setEnvKey={setEnvKey} setEnvValue={setEnvValue} onSubmit={submitEnvBinding} />
+          <ChangeRequestPanel requests={data?.changeRequests ?? []} text={changeText} setText={setChangeText} onSubmit={submitChangeRequest} />
+          <DependencyRiskPanel risks={data?.dependencyRisks ?? []} />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
           <MergeGatePanel status={data?.mergeStatus} />
           <ProjectCheckPanel violations={data?.projectViolations ?? []} />
@@ -96,6 +149,205 @@ function App() {
         </aside>
       </div>
     </main>
+  );
+}
+
+function RequestQueuePanel({
+  requests,
+  queueItems,
+  featureText,
+  setFeatureText,
+  onSubmitFeature
+}: {
+  requests: DashboardData["featureRequests"];
+  queueItems: WorkQueueItem[];
+  featureText: string;
+  setFeatureText: (value: string) => void;
+  onSubmitFeature: () => void;
+}) {
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Request Queue</h2>
+          <p>{requests.length} feature requests</p>
+        </div>
+        <ListChecks size={20} className="text-zinc-500" />
+      </div>
+      <div className="form-row">
+        <input value={featureText} onChange={(event) => setFeatureText(event.target.value)} placeholder="Feature request" />
+        <button onClick={onSubmitFeature} disabled={!featureText.trim()}>
+          Add
+        </button>
+      </div>
+      <div className="split-grid">
+        <StackEmpty empty={requests.length === 0} label="No feature requests">
+          {requests.slice(0, 6).map((request) => (
+            <div className="stack-row" key={request.id}>
+              <span>{request.title}</span>
+              <small>
+                {request.status} / {request.priority}
+              </small>
+            </div>
+          ))}
+        </StackEmpty>
+        <StackEmpty empty={queueItems.length === 0} label="No queued work">
+          {queueItems.slice(0, 6).map((item) => (
+            <div className="stack-row" key={item.id}>
+              <span>{item.item_type}</span>
+              <small>
+                {item.lane} / {item.status} / attempt {item.attempt_no}
+              </small>
+            </div>
+          ))}
+        </StackEmpty>
+      </div>
+    </section>
+  );
+}
+
+function WorkPlanningPanel({ data }: { data: DashboardData }) {
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Work And Planning</h2>
+          <p>{data.workStatus.worker_runs.length} worker runs</p>
+        </div>
+        <Wrench size={20} className="text-zinc-500" />
+      </div>
+      <div className="split-grid">
+        <StackEmpty empty={data.workStatus.worker_runs.length === 0} label="No worker runs">
+          {data.workStatus.worker_runs.slice(0, 5).map((run) => (
+            <div className="stack-row" key={run.id}>
+              <span>{run.lane}</span>
+              <small>
+                {run.mode} / {run.status}
+              </small>
+            </div>
+          ))}
+        </StackEmpty>
+        <StackEmpty empty={data.planningStatus.artifacts.length === 0} label="No planning artifacts">
+          {data.planningStatus.artifacts.slice(0, 5).map((artifact) => (
+            <div className="stack-row" key={artifact.id}>
+              <span>{artifact.artifact_type}</span>
+              <small>{artifact.status}</small>
+              <small>{artifact.path}</small>
+            </div>
+          ))}
+        </StackEmpty>
+      </div>
+    </section>
+  );
+}
+
+function TaskPanel({ tasks }: { tasks: DashboardData["tasks"] }) {
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Tasks</h2>
+          <p>{tasks.length} canonical tasks</p>
+        </div>
+        <FileCheck2 size={20} className="text-zinc-500" />
+      </div>
+      <StackEmpty empty={tasks.length === 0} label="No tasks">
+        {tasks.slice(0, 8).map((task) => (
+          <div className="stack-row" key={task.id}>
+            <span>{task.title}</span>
+            <small>
+              {task.id} / {task.status}
+            </small>
+          </div>
+        ))}
+      </StackEmpty>
+    </section>
+  );
+}
+
+function EnvironmentInputPanel({
+  envKey,
+  envValue,
+  setEnvKey,
+  setEnvValue,
+  onSubmit
+}: {
+  envKey: string;
+  envValue: string;
+  setEnvKey: (value: string) => void;
+  setEnvValue: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Environment Input</h2>
+        <ServerCog size={18} className="text-zinc-500" />
+      </div>
+      <div className="compact-form">
+        <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="KEY" />
+        <input value={envValue} onChange={(event) => setEnvValue(event.target.value)} placeholder="Value" type="password" />
+        <button onClick={onSubmit} disabled={!envKey.trim() || !envValue}>
+          Save
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ChangeRequestPanel({
+  requests,
+  text,
+  setText,
+  onSubmit
+}: {
+  requests: DashboardData["changeRequests"];
+  text: string;
+  setText: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Change Requests</h2>
+        <RefreshCcw size={18} className="text-zinc-500" />
+      </div>
+      <div className="compact-form">
+        <input value={text} onChange={(event) => setText(event.target.value)} placeholder="Change request" />
+        <button onClick={onSubmit} disabled={!text.trim()}>
+          Add
+        </button>
+      </div>
+      <StackEmpty empty={requests.length === 0} label="No change requests">
+        {requests.slice(0, 5).map((request) => (
+          <div className="stack-row" key={request.id}>
+            <span>{request.body}</span>
+            <small>{request.status}</small>
+          </div>
+        ))}
+      </StackEmpty>
+    </section>
+  );
+}
+
+function DependencyRiskPanel({ risks }: { risks: DashboardData["dependencyRisks"] }) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Dependency Risk</h2>
+        <ShieldAlert size={18} className="text-zinc-500" />
+      </div>
+      <StackEmpty empty={risks.length === 0} label="No dependency risks">
+        {risks.slice(0, 5).map((risk) => (
+          <div className="stack-row" key={risk.id}>
+            <span>{risk.name}</span>
+            <small>
+              {risk.package_manager} / {risk.dependency_type} / {risk.risk}
+            </small>
+          </div>
+        ))}
+      </StackEmpty>
+    </section>
   );
 }
 

@@ -165,6 +165,47 @@ UI/APIの最小取得面は次です。
 - `GET /api/decisions?status=open`: Decision sourceを一覧する。
 - `GET /api/memory?type=baseline_issue`: Baseline Issue Reportとして保存されたmemoryを一覧する。
 
+実装済みのHuman Inbox dashboardは、上記に加えて次のread surfaceを同一画面へ集約します。
+
+- `GET /api/tasks`: canonical task一覧。
+- `GET /api/requests`: Feature Request一覧。
+- `GET /api/queue`: work queue一覧。
+- `GET /api/work/status`: worker run、planning summary、queueを含むwork status。
+- `GET /api/planning/status`: planning run、planning artifact、planning queue。
+- `GET /api/change-requests`: Change Request一覧。
+- `GET /api/dependency-risks`: dependency risk ledger一覧。
+- `GET /api/artifacts/trusted`: approved artifactのtrusted context bundle。
+- `GET /api/platform/path-mappings`: path mapping状態。
+- `GET /api/platform/toolchain-setup`: Toolchain Setup Card。
+- `GET /api/merge/status`: merge blockerとmerge gate状態。
+- `GET /api/check`: project invariant check結果。
+
+実装済みのdashboard write surfaceは次です。いずれもUIがsource of truthを直接編集せず、Orchestrator APIを通して正規repository / state transitionへ委譲します。
+
+- `POST /api/inbox/{id}/approve`: Decision / approval sourceを解決する。
+- `POST /api/requests`: Feature Requestを作成し、Request Queueへ投入する。
+- `POST /api/change-requests`: Change Requestを作成する。
+- `POST /api/env/bindings`: secret値をレスポンスへ返さず、`.env.local` またはsecret storeへ反映し、DBにはredacted binding metadataだけを保存する。
+
+実装済みのdashboard panels:
+
+- Autonomy Status
+- Needs Attention / Human Inbox
+- Request Queue
+- Work And Planning
+- Tasks
+- Next Command
+- Environment Input
+- Change Requests
+- Dependency Risk
+- Setup Cards
+- Merge Gate
+- Project Check
+- Trusted Artifacts
+- Path Mappings
+- Open Decisions
+- Baseline Issues
+
 source of truth:
 
 - `decisions`

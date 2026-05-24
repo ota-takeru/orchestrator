@@ -224,6 +224,82 @@ INSERT INTO verification_results(
 	}
 }
 
+func TestCheckProjectInvariantsDetectsInvalidCommandEventJSON(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit,
+  created_at, updated_at
+) VALUES (
+  'RUN-001', 'PROJECT-001', 'TASK-001', 'verification', 'running', 1, 'BASE',
+  ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO command_events(
+  id, project_id, run_id, environment_id, command_kind, runner, cwd,
+  argv_json, shell_invocation, network_policy, status, detected_risks_json,
+  created_at, updated_at, started_at, completed_at
+) VALUES (
+  'CMD-001', 'PROJECT-001', 'RUN-001', 'linux-main', 'verification', 'direct', '/repo',
+  '[]', 0, 'off', 'succeeded', '[]',
+  ?, ?, ?, ?
+)`, now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "command_event_argv_json_invalid") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsInvalidGateResultSchema(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO runs(
+  id, project_id, task_id, run_type, status, attempt_no, base_commit,
+  created_at, updated_at
+) VALUES (
+  'RUN-001', 'PROJECT-001', 'TASK-001', 'verification', 'failed', 1, 'BASE',
+  ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO gate_results(
+  id, project_id, task_id, run_id, status, severity, detector,
+  human_action_type, evidence_json, created_at
+) VALUES (
+  'GATE-001', 'PROJECT-001', 'TASK-001', 'RUN-001', 'HUMAN_DECISION', 'high', '',
+  NULL, '{}', ?
+)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "gate_result_schema_invalid") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
 func TestCheckProjectInvariantsDetectsRunArtifactHashMismatch(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

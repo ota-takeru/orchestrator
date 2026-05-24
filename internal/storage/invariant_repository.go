@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 )
 
 type InvariantViolation struct {
@@ -50,6 +52,8 @@ func (db *DB) CheckProjectInvariants(ctx context.Context, projectID string) ([]I
 		db.checkConcurrentRunningRuns,
 		db.checkVerificationRunTypes,
 		db.checkRequiredVerificationFailuresClassified,
+		db.checkCommandEventJSON,
+		db.checkGateResultSchemas,
 		db.checkRunArtifactFiles,
 		db.checkPathMappingServiceBuilds,
 	}
@@ -543,6 +547,94 @@ WHERE project_id = ?
 			Code:    "required_verification_failure_unclassified",
 			Message: "required-for-merge verification failure requires failure_class",
 		})
+	}
+	return violations, rows.Err()
+}
+
+func (db *DB) checkCommandEventJSON(ctx context.Context, projectID string) ([]InvariantViolation, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, argv_json
+FROM command_events
+WHERE project_id = ?`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var violations []InvariantViolation
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		var argv []string
+		if err := json.Unmarshal([]byte(raw), &argv); err != nil {
+			violations = append(violations, InvariantViolation{
+				Scope:   "command_event",
+				ID:      id,
+				Code:    "command_event_argv_json_invalid",
+				Message: err.Error(),
+			})
+			continue
+		}
+		if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
+			violations = append(violations, InvariantViolation{
+				Scope:   "command_event",
+				ID:      id,
+				Code:    "command_event_argv_json_invalid",
+				Message: "argv_json requires a non-empty argv",
+			})
+		}
+	}
+	return violations, rows.Err()
+}
+
+func (db *DB) checkGateResultSchemas(ctx context.Context, projectID string) ([]InvariantViolation, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, status, severity, detector, human_action_type, evidence_json
+FROM gate_results
+WHERE project_id = ?`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var violations []InvariantViolation
+	for rows.Next() {
+		var id, status, severity, detector, evidence string
+		var humanActionType sql.NullString
+		if err := rows.Scan(&id, &status, &severity, &detector, &humanActionType, &evidence); err != nil {
+			return nil, err
+		}
+		var evidenceValue any
+		if err := json.Unmarshal([]byte(evidence), &evidenceValue); err != nil {
+			violations = append(violations, InvariantViolation{
+				Scope:   "gate_result",
+				ID:      id,
+				Code:    "gate_result_evidence_json_invalid",
+				Message: err.Error(),
+			})
+			continue
+		}
+		payload := map[string]any{
+			"status":   status,
+			"severity": severity,
+			"detector": detector,
+			"evidence": evidenceValue,
+		}
+		if humanActionType.Valid {
+			payload["human_action_type"] = humanActionType.String
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		if err := schemas.ValidateGateResult(string(raw)); err != nil {
+			violations = append(violations, InvariantViolation{
+				Scope:   "gate_result",
+				ID:      id,
+				Code:    "gate_result_schema_invalid",
+				Message: err.Error(),
+			})
+		}
 	}
 	return violations, rows.Err()
 }

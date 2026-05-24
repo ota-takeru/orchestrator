@@ -122,6 +122,71 @@ func TestCheckProjectInvariantsDetectsInvalidCurrentRun(t *testing.T) {
 	}
 }
 
+func TestCheckProjectInvariantsDetectsInvalidPrimaryEnvironmentCount(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "primary_environment_count_invalid") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsInvalidRunProfileEnvironmentJSON(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", "/repo")
+	now := now()
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO project_run_profiles(
+  id, project_id, name, mode, status, primary_environment_id,
+  implementation_environment_id, git_environment_id, merge_environment_id,
+  required_verification_environment_ids_json, optional_verification_environment_ids_json,
+  canonical_operations_json, created_at, updated_at
+) VALUES (
+  'RUNPROFILE-001', 'PROJECT-001', 'default', 'single_environment', 'active', 'linux-main',
+  'linux-main', 'linux-main', 'linux-main',
+  '{not-json', '[]', '{}', ?, ?
+)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "run_profile_environment_ids_json_invalid") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckProjectInvariantsDetectsInvalidTaskVerificationCommands(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", "/repo")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE tasks
+SET verification_commands_json = ?
+WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"sidecar","environment":"missing-env","runner":"auto","required_for_merge":true,"working_dir":"project_root","command":{"argv":[]},"timeout":"not-a-duration","network":false}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := db.CheckProjectInvariants(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInvariantViolation(violations, "task_verification_command_invalid") || !hasInvariantViolation(violations, "task_verification_environment_invalid") {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
 func TestCheckProjectInvariantsDetectsUnclassifiedRequiredVerificationFailure(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

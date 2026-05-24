@@ -30,6 +30,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/platform/path-mappings", s.handlePathMappings)
 	mux.HandleFunc("/api/platform/toolchain-setup", s.handleToolchainSetup)
 	mux.HandleFunc("/api/merge/status", s.handleMergeStatus)
+	mux.HandleFunc("/api/check", s.handleProjectCheck)
 	return mux
 }
 
@@ -186,6 +187,19 @@ func (s *Server) handleMergeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleProjectCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	violations, err := s.db.CheckProjectInvariants(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "check_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"violations": violations})
 }
 
 func parseInboxActionPath(path string) (string, string, bool) {

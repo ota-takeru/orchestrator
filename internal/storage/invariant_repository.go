@@ -3,10 +3,12 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type InvariantViolation struct {
@@ -41,6 +43,9 @@ func (db *DB) CheckProjectInvariants(ctx context.Context, projectID string) ([]I
 		return nil, err
 	}
 	checks := []func(context.Context, string) ([]InvariantViolation, error){
+		db.checkPrimaryEnvironmentCount,
+		db.checkRunProfileEnvironmentReferences,
+		db.checkTaskVerificationCommands,
 		db.checkTaskCurrentRunReferences,
 		db.checkConcurrentRunningRuns,
 		db.checkVerificationRunTypes,
@@ -54,6 +59,234 @@ func (db *DB) CheckProjectInvariants(ctx context.Context, projectID string) ([]I
 			return nil, err
 		}
 		violations = append(violations, found...)
+	}
+	return violations, nil
+}
+
+func (db *DB) checkPrimaryEnvironmentCount(ctx context.Context, projectID string) ([]InvariantViolation, error) {
+	var count int
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM execution_environments
+WHERE project_id = ? AND role = 'primary'`, projectID).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count != 1 {
+		return []InvariantViolation{{
+			Scope:   "project",
+			ID:      projectID,
+			Code:    "primary_environment_count_invalid",
+			Message: fmt.Sprintf("project requires exactly one primary environment, found %d", count),
+		}}, nil
+	}
+	return nil, nil
+}
+
+func (db *DB) checkRunProfileEnvironmentReferences(ctx context.Context, projectID string) ([]InvariantViolation, error) {
+	type profileReference struct {
+		id             string
+		primary        sql.NullString
+		implementation sql.NullString
+		git            sql.NullString
+		merge          sql.NullString
+		requiredJSON   string
+		optionalJSON   string
+	}
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, primary_environment_id, implementation_environment_id, git_environment_id,
+       merge_environment_id, required_verification_environment_ids_json,
+       optional_verification_environment_ids_json
+FROM project_run_profiles
+WHERE project_id = ? AND status = 'active'`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var profiles []profileReference
+	for rows.Next() {
+		var profile profileReference
+		if err := rows.Scan(&profile.id, &profile.primary, &profile.implementation, &profile.git, &profile.merge, &profile.requiredJSON, &profile.optionalJSON); err != nil {
+			return nil, err
+		}
+		profiles = append(profiles, profile)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	var violations []InvariantViolation
+	for _, profile := range profiles {
+		for label, envID := range map[string]sql.NullString{
+			"primary":        profile.primary,
+			"implementation": profile.implementation,
+			"git":            profile.git,
+			"merge":          profile.merge,
+		} {
+			if !envID.Valid || strings.TrimSpace(envID.String) == "" {
+				violations = append(violations, InvariantViolation{
+					Scope:   "run_profile",
+					ID:      profile.id,
+					Code:    "run_profile_environment_reference_missing",
+					Message: label + " environment id is required",
+				})
+				continue
+			}
+			if ok, err := db.environmentExists(ctx, projectID, envID.String); err != nil {
+				return nil, err
+			} else if !ok {
+				violations = append(violations, InvariantViolation{
+					Scope:   "run_profile",
+					ID:      profile.id,
+					Code:    "run_profile_environment_reference_invalid",
+					Message: fmt.Sprintf("%s environment %s does not exist", label, envID.String),
+				})
+			}
+		}
+		for label, raw := range map[string]string{
+			"required": profile.requiredJSON,
+			"optional": profile.optionalJSON,
+		} {
+			envIDs, err := decodeJSONStringArray(raw)
+			if err != nil {
+				violations = append(violations, InvariantViolation{
+					Scope:   "run_profile",
+					ID:      profile.id,
+					Code:    "run_profile_environment_ids_json_invalid",
+					Message: fmt.Sprintf("%s verification environment ids are invalid: %v", label, err),
+				})
+				continue
+			}
+			for _, envID := range envIDs {
+				if ok, err := db.environmentExists(ctx, projectID, envID); err != nil {
+					return nil, err
+				} else if !ok {
+					violations = append(violations, InvariantViolation{
+						Scope:   "run_profile",
+						ID:      profile.id,
+						Code:    "run_profile_environment_reference_invalid",
+						Message: fmt.Sprintf("%s verification environment %s does not exist", label, envID),
+					})
+				}
+			}
+		}
+	}
+	return violations, nil
+}
+
+func (db *DB) environmentExists(ctx context.Context, projectID string, envID string) (bool, error) {
+	var count int
+	if err := db.sql.QueryRowContext(ctx, "SELECT COUNT(*) FROM execution_environments WHERE project_id = ? AND id = ?", projectID, envID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func decodeJSONStringArray(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	for i, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("item %d is empty", i)
+		}
+	}
+	return values, nil
+}
+
+func (db *DB) checkTaskVerificationCommands(ctx context.Context, projectID string) ([]InvariantViolation, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, verification_commands_json
+FROM tasks
+WHERE project_id = ?`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	type taskCommands struct {
+		taskID string
+		raw    string
+	}
+	var tasks []taskCommands
+	for rows.Next() {
+		var task taskCommands
+		if err := rows.Scan(&task.taskID, &task.raw); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	var violations []InvariantViolation
+	for _, task := range tasks {
+		raw := strings.TrimSpace(task.raw)
+		if raw == "" {
+			raw = "[]"
+		}
+		var commands []TaskVerificationCommand
+		if err := json.Unmarshal([]byte(raw), &commands); err != nil {
+			violations = append(violations, InvariantViolation{
+				Scope:   "task",
+				ID:      task.taskID,
+				Code:    "task_verification_commands_json_invalid",
+				Message: err.Error(),
+			})
+			continue
+		}
+		for i, command := range commands {
+			if strings.TrimSpace(command.ID) == "" {
+				violations = append(violations, InvariantViolation{
+					Scope:   "task",
+					ID:      task.taskID,
+					Code:    "task_verification_command_invalid",
+					Message: fmt.Sprintf("verification command %d requires id", i),
+				})
+			}
+			if len(command.Command.Argv) == 0 || strings.TrimSpace(command.Command.Argv[0]) == "" {
+				violations = append(violations, InvariantViolation{
+					Scope:   "task",
+					ID:      task.taskID,
+					Code:    "task_verification_command_invalid",
+					Message: fmt.Sprintf("verification command %s requires argv", command.ID),
+				})
+			}
+			if command.Timeout != "" {
+				if _, err := time.ParseDuration(command.Timeout); err != nil {
+					violations = append(violations, InvariantViolation{
+						Scope:   "task",
+						ID:      task.taskID,
+						Code:    "task_verification_command_invalid",
+						Message: fmt.Sprintf("verification command %s has invalid timeout: %v", command.ID, err),
+					})
+				}
+			}
+			envID := strings.TrimSpace(command.Environment)
+			if envID == "" || envID == "primary" {
+				continue
+			}
+			if ok, err := db.environmentExists(ctx, projectID, envID); err != nil {
+				return nil, err
+			} else if !ok {
+				violations = append(violations, InvariantViolation{
+					Scope:   "task",
+					ID:      task.taskID,
+					Code:    "task_verification_environment_invalid",
+					Message: fmt.Sprintf("verification command %s references missing environment %s", command.ID, envID),
+				})
+			}
+		}
 	}
 	return violations, nil
 }

@@ -88,6 +88,7 @@ function App() {
           <CommandPanel command={nextCommand} />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
           <MergeGatePanel status={data?.mergeStatus} />
+          <ProjectCheckPanel violations={data?.projectViolations ?? []} />
           <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
           <PathMappingsPanel mappings={data?.pathMappings ?? []} />
           <DecisionPanel decisions={data?.decisions ?? []} />
@@ -272,6 +273,28 @@ function MergeGatePanel({ status }: { status?: DashboardData["mergeStatus"] }) {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function ProjectCheckPanel({ violations }: { violations: DashboardData["projectViolations"] }) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Project Check</h2>
+        <AlertTriangle size={18} className="text-zinc-500" />
+      </div>
+      <StackEmpty empty={violations.length === 0} label="No invariant violations">
+        {violations.map((violation) => (
+          <div className="stack-row" key={`${violation.scope}:${violation.id}:${violation.code}`}>
+            <span>{violation.code}</span>
+            <small>
+              {violation.scope} {violation.id}
+            </small>
+            <small>{violation.message}</small>
+          </div>
+        ))}
+      </StackEmpty>
     </section>
   );
 }

@@ -115,6 +115,13 @@ export type MergeGateStatus = {
   ready: boolean;
 };
 
+export type InvariantViolation = {
+  scope: string;
+  id: string;
+  code: string;
+  message: string;
+};
+
 export type DashboardData = {
   snapshot: HumanInboxSnapshot;
   decisions: Decision[];
@@ -123,4 +130,5 @@ export type DashboardData = {
   pathMappings: PathMapping[];
   toolchainSetupCards: ToolchainSetupCard[];
   mergeStatus: MergeGateStatus;
+  projectViolations: InvariantViolation[];
 };

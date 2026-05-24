@@ -1,4 +1,4 @@
-import type { DashboardData, Decision, HumanInboxSnapshot, MemoryRecord, MergeGateStatus, PathMapping, ToolchainSetupCard, TrustedArtifact } from "./types";
+import type { DashboardData, Decision, HumanInboxSnapshot, InvariantViolation, MemoryRecord, MergeGateStatus, PathMapping, ToolchainSetupCard, TrustedArtifact } from "./types";
 
 async function getJSON<T>(path: string): Promise<T> {
   const response = await fetch(path, {
@@ -14,14 +14,15 @@ async function getJSON<T>(path: string): Promise<T> {
 }
 
 export async function loadDashboardData(): Promise<DashboardData> {
-  const [snapshot, decisionBody, memoryBody, artifactBody, pathMappingBody, setupBody, mergeStatus] = await Promise.all([
+  const [snapshot, decisionBody, memoryBody, artifactBody, pathMappingBody, setupBody, mergeStatus, checkBody] = await Promise.all([
     getJSON<HumanInboxSnapshot>("/api/ui/snapshot?limit=12"),
     getJSON<{ decisions: Decision[] }>("/api/decisions?status=open"),
     getJSON<{ memories: MemoryRecord[] }>("/api/memory?type=baseline_issue"),
     getJSON<{ artifacts: TrustedArtifact[] }>("/api/artifacts/trusted"),
     getJSON<{ mappings: PathMapping[] }>("/api/platform/path-mappings"),
     getJSON<{ cards: ToolchainSetupCard[] }>("/api/platform/toolchain-setup"),
-    getJSON<MergeGateStatus>("/api/merge/status")
+    getJSON<MergeGateStatus>("/api/merge/status"),
+    getJSON<{ violations: InvariantViolation[] }>("/api/check")
   ]);
 
   return {
@@ -31,7 +32,8 @@ export async function loadDashboardData(): Promise<DashboardData> {
     trustedArtifacts: artifactBody.artifacts,
     pathMappings: pathMappingBody.mappings,
     toolchainSetupCards: setupBody.cards,
-    mergeStatus
+    mergeStatus,
+    projectViolations: checkBody.violations
   };
 }
 

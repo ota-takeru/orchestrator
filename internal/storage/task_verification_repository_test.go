@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ota-takeru/orchestrator/internal/decisions"
 )
 
 func TestVerifyTaskFakeAdvancesThroughGate(t *testing.T) {
@@ -149,6 +151,84 @@ WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"wsl-smoke","envi
 	}
 	if len(result.Commands) != 1 || result.Commands[0].EnvironmentID != "wsl-main" || result.Commands[0].Runner != "direct" {
 		t.Fatalf("commands = %#v", result.Commands)
+	}
+}
+
+func TestOptionalSidecarVerificationFailureIsReportOnlyByDefault(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", root)
+	insertWSLEnvironmentWithRoot(t, db, "wsl-sidecar", "PROJECT-001", "sidecar", root)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE tasks
+SET verification_commands_json = ?
+WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[
+  {"id":"required-main","environment":"primary","runner":"auto","required_for_merge":true,"working_dir":"project_root","command":{"argv":["verify"]},"network":false},
+  {"id":"optional-sidecar","environment":"wsl-sidecar","runner":"auto","required_for_merge":false,"working_dir":"project_root","command":{"argv":["fail"]},"network":false}
+]`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Gates) != 1 || result.Gates[0].Status != decisions.GateReportOnly || result.Gates[0].Detector != "optional_verification_failed" {
+		t.Fatalf("gates = %#v", result.Gates)
+	}
+	var optionalCount int
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT COUNT(*) FROM verification_results
+WHERE run_id = ? AND environment_id = 'wsl-sidecar' AND required_for_merge = 0 AND status = 'failed'`, result.VerificationRun).Scan(&optionalCount); err != nil {
+		t.Fatal(err)
+	}
+	if optionalCount != 1 {
+		t.Fatalf("optional sidecar result count = %d", optionalCount)
+	}
+}
+
+func TestRequiredSidecarVerificationFailureBlocksMerge(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", root)
+	insertWSLEnvironmentWithRoot(t, db, "wsl-sidecar", "PROJECT-001", "sidecar", root)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE tasks
+SET verification_commands_json = ?
+WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[
+  {"id":"required-main","environment":"primary","runner":"auto","required_for_merge":true,"working_dir":"project_root","command":{"argv":["verify"]},"network":false},
+  {"id":"required-sidecar","environment":"wsl-sidecar","runner":"auto","required_for_merge":true,"working_dir":"project_root","command":{"argv":["fail"]},"network":false}
+]`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "repairing" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Gates) != 1 || result.Gates[0].Status != decisions.GateAutoRepair || result.Gates[0].Detector != "verification_failed_current_diff" {
+		t.Fatalf("gates = %#v", result.Gates)
+	}
+	var repairItems int
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT COUNT(*) FROM work_queue_items
+WHERE project_id = 'PROJECT-001' AND item_type = 'task_repair' AND item_id = 'TASK-001' AND status = 'queued'`).Scan(&repairItems); err != nil {
+		t.Fatal(err)
+	}
+	if repairItems != 1 {
+		t.Fatalf("repair items = %d", repairItems)
 	}
 }
 

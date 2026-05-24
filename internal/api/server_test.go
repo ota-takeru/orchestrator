@@ -250,6 +250,34 @@ INSERT INTO inbox_items(
 	}
 }
 
+func TestServerExposesProjectCheck(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/check", nil)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Violations []storage.InvariantViolation `json:"violations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !hasAPIViolation(body.Violations, "primary_environment_count_invalid") {
+		t.Fatalf("violations = %#v", body.Violations)
+	}
+}
+
+func hasAPIViolation(violations []storage.InvariantViolation, code string) bool {
+	for _, violation := range violations {
+		if violation.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func openAPITestDB(t *testing.T) (*storage.DB, string) {
 	t.Helper()
 	ctx := context.Background()

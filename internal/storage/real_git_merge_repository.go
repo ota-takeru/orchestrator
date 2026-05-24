@@ -69,6 +69,11 @@ func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input R
 	if status != "" {
 		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, Blockers: []string{"main worktree is not clean"}, FailureClass: "worktree_dirty"}, nil
 	}
+	if ok, err := db.hasSavedDiffArtifact(ctx, projectID, entry.TaskID); err != nil {
+		return RealGitMergeResult{}, err
+	} else if !ok {
+		return RealGitMergeResult{MergeQueueEntryID: entry.ID, TaskID: entry.TaskID, Status: "blocked", Target: input.Target, Blockers: []string{"diff artifact is not saved"}, FailureClass: "missing_diff_artifact"}, nil
+	}
 	preMain := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "refs/heads/"+input.Target)
 	candidate := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "--verify", entry.HeadCommit+"^{commit}")
 	if preMain == "UNKNOWN" || candidate == "UNKNOWN" {

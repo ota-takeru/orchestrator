@@ -2049,9 +2049,28 @@ func runPreflight(ctx context.Context, args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("preflight", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
+	repairSchemas := fs.Bool("repair-schemas", false, "restore orchestrator-owned schema registry files")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if *repairSchemas {
+		result, err := preflight.RepairSchemas(ctx, *projectRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "preflight_repair_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, result, exitFromPreflight(result.PreflightReport))
+		}
+		fmt.Fprintf(stdout, "Schema registry repaired: %s\n", result.SchemaInstall.Root)
+		for _, path := range result.SchemaInstall.CreatedPaths {
+			fmt.Fprintf(stdout, "created: %s\n", path)
+		}
+		for _, path := range result.SchemaInstall.UpdatedPaths {
+			fmt.Fprintf(stdout, "updated: %s\n", path)
+		}
+		printFindings(stdout, result.PreflightReport)
+		return exitFromPreflight(result.PreflightReport)
 	}
 	report, err := preflight.Run(ctx, *projectRoot)
 	if err != nil {
@@ -2418,7 +2437,7 @@ func parsePlatformMode(input string) (platform.PlatformMode, error) {
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  devos init [--project-root PATH] [--data-root PATH] [--json] CONCEPT")
-	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos preflight [--project-root PATH] [--repair-schemas] [--json]")
 	fmt.Fprintln(w, "  devos spec [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan start [--project-root PATH] [--data-root PATH] [--concurrency N] [--json]")

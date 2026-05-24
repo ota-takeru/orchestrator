@@ -386,6 +386,39 @@ func TestEnvSetCLI(t *testing.T) {
 	}
 }
 
+func TestPreflightRepairSchemasCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Preflight repair workflow")
+	schemaPath := filepath.Join(projectRoot, ".devagent", "schemas", "semantic-behavior-diff.v1.schema.json")
+	if err := os.WriteFile(schemaPath, []byte(`{"tampered":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := runCLI(t, "preflight", "--project-root", projectRoot, "--repair-schemas", "--json")
+	var result struct {
+		SchemaInstall struct {
+			UpdatedPaths []string `json:"updated_paths"`
+		} `json:"schema_install"`
+		PreflightReport struct {
+			Findings []struct {
+				ID       string `json:"id"`
+				Severity string `json:"severity"`
+			} `json:"findings"`
+		} `json:"preflight_report"`
+	}
+	decodeJSON(t, out, &result)
+	if len(result.SchemaInstall.UpdatedPaths) == 0 {
+		t.Fatalf("repair result = %#v", result)
+	}
+	for _, finding := range result.PreflightReport.Findings {
+		if finding.ID == "schema_registry" && finding.Severity != "pass" {
+			t.Fatalf("schema registry finding = %#v", finding)
+		}
+	}
+}
+
 func TestVerifyCLIWithFakeAdapter(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

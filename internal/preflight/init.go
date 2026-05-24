@@ -19,6 +19,28 @@ type InitResult struct {
 	CreatedPaths    []string `json:"created_paths"`
 }
 
+type SchemaRepairResult struct {
+	ProjectRoot     string                `json:"project_root"`
+	SchemaInstall   schemas.InstallResult `json:"schema_install"`
+	PreflightReport Report                `json:"preflight_report"`
+}
+
+func RepairSchemas(ctx context.Context, projectRoot string) (SchemaRepairResult, error) {
+	root, err := ResolveProjectRoot(projectRoot)
+	if err != nil {
+		return SchemaRepairResult{}, err
+	}
+	install, err := schemas.Install(root)
+	if err != nil {
+		return SchemaRepairResult{}, err
+	}
+	report, err := Run(ctx, root)
+	if err != nil {
+		return SchemaRepairResult{}, err
+	}
+	return SchemaRepairResult{ProjectRoot: root, SchemaInstall: install, PreflightReport: report}, nil
+}
+
 func InitProject(ctx context.Context, projectRoot string, concept string) (InitResult, error) {
 	if strings.TrimSpace(concept) == "" {
 		return InitResult{}, fmt.Errorf("concept is required")

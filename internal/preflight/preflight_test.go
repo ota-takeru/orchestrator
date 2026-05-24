@@ -75,6 +75,35 @@ func TestInitProjectCreatesConceptAndPolicy(t *testing.T) {
 	}
 }
 
+func TestRepairSchemasRestoresTamperedRegistry(t *testing.T) {
+	root := newGitRepo(t)
+	writeFile(t, filepath.Join(root, ".gitignore"), ".devagent-worktrees/\norchestrator-data/\n.env.*\n")
+	writeFile(t, filepath.Join(root, ".gitattributes"), "* text=auto\n")
+	if _, err := InitProject(context.Background(), root, "作りたいアプリ"); err != nil {
+		t.Fatal(err)
+	}
+	schemaPath := filepath.Join(root, ".devagent", "schemas", "semantic-behavior-diff.v1.schema.json")
+	writeFile(t, schemaPath, `{"tampered":true}`)
+
+	report, err := Run(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.HasBlocks() {
+		t.Fatalf("expected tampered schema to block: %#v", report.Findings)
+	}
+	repaired, err := RepairSchemas(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired.PreflightReport.HasBlocks() {
+		t.Fatalf("repair report = %#v", repaired.PreflightReport.Findings)
+	}
+	if len(repaired.SchemaInstall.UpdatedPaths) == 0 {
+		t.Fatalf("expected schema update: %#v", repaired.SchemaInstall)
+	}
+}
+
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

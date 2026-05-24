@@ -59,6 +59,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runQueue(ctx, args[1:], stdout)
 	case "work":
 		return runWork(ctx, args[1:], stdout)
+	case "change":
+		return runChange(ctx, args[1:], stdout)
 	case "run":
 		return runTaskCommand(ctx, args[1:], stdout)
 	case "verify":
@@ -625,6 +627,48 @@ func runWorkResume(ctx context.Context, args []string, stdout io.Writer) int {
 		return writeJSON(stdout, record, 0)
 	}
 	fmt.Fprintf(stdout, "Worker resumed: %s %s\n", record.ID, record.Status)
+	return 0
+}
+
+func runChange(ctx context.Context, args []string, stdout io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stdout, false, exitValidation, "invalid_arguments", errors.New("change subcommand is required"))
+	}
+	switch args[0] {
+	case "request":
+		return runChangeRequest(ctx, args[1:], stdout)
+	default:
+		return writeError(stdout, false, exitValidation, "invalid_arguments", fmt.Errorf("unknown change subcommand: %s", args[0]))
+	}
+}
+
+func runChangeRequest(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("change request", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	body := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if body == "" {
+		return writeError(stdout, *jsonOut, exitValidation, "change_request_failed", errors.New("change request text is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "change_request_failed", err)
+	}
+	defer db.Close()
+	result, err := db.CreateChangeRequest(ctx, projectID, body)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "change_request_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Change request proposed: %s\n", result.ChangeRequest.ID)
+	fmt.Fprintf(stdout, "Work queue item: %s %s\n", result.QueueItem.ID, result.QueueItem.Lane)
 	return 0
 }
 
@@ -2214,6 +2258,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos work status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos work pause [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")
 	fmt.Fprintln(w, "  devos work resume [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")
+	fmt.Fprintln(w, "  devos change request [--project-root PATH] [--data-root PATH] [--json] TEXT")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--verify] [--verify-adapter local|fake] [--verify-env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos verify [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")

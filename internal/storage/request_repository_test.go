@@ -56,6 +56,23 @@ func TestCreateFeatureRequestAllowsDuplicateBody(t *testing.T) {
 	}
 }
 
+func TestCreateChangeRequestCreatesAnalysisQueueItem(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+
+	result, err := db.CreateChangeRequest(ctx, "PROJECT-001", "タスク画面を今日中心に変える")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChangeRequest.Status != "proposed" || result.ChangeRequest.ID == "" {
+		t.Fatalf("change request = %#v", result.ChangeRequest)
+	}
+	if result.QueueItem.ItemType != "change_request_analysis" || result.QueueItem.ItemID != result.ChangeRequest.ID {
+		t.Fatalf("queue item = %#v", result.QueueItem)
+	}
+}
+
 func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

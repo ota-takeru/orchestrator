@@ -124,6 +124,20 @@ func TestRequestQueueCLIWorkflow(t *testing.T) {
 	}
 }
 
+func TestChangeRequestCLIWorkflow(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Change request workflow")
+	out := runCLI(t, "change", "request", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "タスク画面を今日中心に変える")
+	var created storage.ChangeRequestCreateResult
+	decodeJSON(t, out, &created)
+	if created.ChangeRequest.Status != "proposed" || created.QueueItem.ItemType != "change_request_analysis" {
+		t.Fatalf("change request = %#v", created)
+	}
+}
+
 func TestPlanStartCLIWorkflow(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()

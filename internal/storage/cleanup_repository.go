@@ -80,6 +80,23 @@ type CleanupQuarantineRestoreRecord struct {
 	Blockers       []string `json:"blockers,omitempty"`
 }
 
+type CleanupDeleteMove struct {
+	TaskID       string `json:"task_id"`
+	WorktreePath string `json:"worktree_path"`
+	Status       string `json:"status"`
+	Error        string `json:"error,omitempty"`
+}
+
+type CleanupDeleteRecord struct {
+	RunID               string                 `json:"run_id"`
+	Status              string                 `json:"status"`
+	ActualDeleteEnabled bool                   `json:"actual_delete_enabled"`
+	Items               []CleanupPlanItem      `json:"items"`
+	WorktreeSafety      []WorktreeSafetyRecord `json:"worktree_safety"`
+	Deletes             []CleanupDeleteMove    `json:"deletes"`
+	Blockers            []string               `json:"blockers,omitempty"`
+}
+
 func (db *DB) BuildCleanupDryRunPlan(ctx context.Context, projectID string, options CleanupPlanOptions) ([]CleanupPlanItem, error) {
 	statuses := cleanupStatuses(options)
 	args := []any{projectID}
@@ -470,6 +487,59 @@ func (db *DB) RestoreCleanupQuarantine(ctx context.Context, projectID string, ta
 	return record, nil
 }
 
+func (db *DB) DeleteCleanupCandidates(ctx context.Context, projectID string, plan []CleanupPlanItem, safety []WorktreeSafetyRecord) (CleanupDeleteRecord, error) {
+	attemptNo, err := db.nextProjectRunAttempt(ctx, projectID, "cleanup")
+	if err != nil {
+		return CleanupDeleteRecord{}, err
+	}
+	blockers := cleanupExecuteBlockers(plan, safety)
+	deletes := []CleanupDeleteMove{}
+	if len(blockers) == 0 {
+		env, err := db.ResolveCanonicalGitEnvironment(ctx, projectID)
+		if err != nil {
+			return CleanupDeleteRecord{}, err
+		}
+		safetyByTask := map[string]WorktreeSafetyRecord{}
+		for _, record := range safety {
+			safetyByTask[record.TaskID] = record
+		}
+		for _, item := range plan {
+			if !item.Eligible {
+				continue
+			}
+			record := safetyByTask[item.TaskID]
+			del := CleanupDeleteMove{TaskID: item.TaskID, WorktreePath: record.WorktreePath, Status: "deleted"}
+			if err := runGit(ctx, env.ProjectRoot, "worktree", "remove", "--force", record.WorktreePath); err != nil {
+				del.Status = "failed"
+				del.Error = err.Error()
+				blockers = append(blockers, item.TaskID+": worktree remove failed")
+			}
+			deletes = append(deletes, del)
+		}
+	}
+	status := "deleted"
+	if len(blockers) > 0 {
+		status = "blocked"
+		if len(deletes) > 0 {
+			status = "partial"
+		}
+	}
+	runID := "RUN-" + stableShortHash(projectID+"|cleanup-delete|"+time.Now().UTC().Format(time.RFC3339Nano))
+	record := CleanupDeleteRecord{
+		RunID:               runID,
+		Status:              status,
+		ActualDeleteEnabled: true,
+		Items:               plan,
+		WorktreeSafety:      safety,
+		Deletes:             deletes,
+		Blockers:            blockers,
+	}
+	if err := db.saveCleanupDeleteEvidence(ctx, projectID, record, attemptNo); err != nil {
+		return CleanupDeleteRecord{}, err
+	}
+	return record, nil
+}
+
 func (db *DB) readCleanupQuarantineRecord(artifactPath string) (CleanupQuarantineRecord, error) {
 	raw, err := os.ReadFile(filepath.Join(db.dataRoot, artifactPath))
 	if err != nil {
@@ -527,6 +597,59 @@ func (db *DB) saveCleanupQuarantineRestoreEvidence(ctx context.Context, projectI
 		"from_path":       record.FromPath,
 		"quarantine_path": record.QuarantinePath,
 		"blockers":        record.Blockers,
+	}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (db *DB) saveCleanupDeleteEvidence(ctx context.Context, projectID string, record CleanupDeleteRecord, attemptNo int) error {
+	summary, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	runStatus := "succeeded"
+	if record.Status == "blocked" || record.Status == "partial" {
+		runStatus = "failed"
+	}
+	if err := insertRun(ctx, tx, SaveVerificationInput{
+		ProjectID:  projectID,
+		RunID:      record.RunID,
+		RunType:    "cleanup",
+		AttemptNo:  attemptNo,
+		BaseCommit: "cleanup-delete",
+	}, runStatus, now); err != nil {
+		return err
+	}
+	if _, err := db.saveRunArtifactInTx(ctx, tx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        record.RunID,
+		ArtifactType: "summary",
+		ArtifactKey:  "cleanup-delete-summary.json",
+		Content:      summary,
+	}, now); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "cleanup_delete", map[string]any{
+		"run_id":       record.RunID,
+		"status":       record.Status,
+		"delete_count": len(record.Deletes),
+		"blockers":     record.Blockers,
 	}, now); err != nil {
 		return err
 	}

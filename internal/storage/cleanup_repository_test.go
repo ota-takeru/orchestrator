@@ -145,6 +145,50 @@ func TestQuarantineCleanupCandidatesMovesWorktree(t *testing.T) {
 	}
 }
 
+func TestDeleteCleanupCandidatesRemovesWorktree(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	repo := initStorageGitRepo(t)
+	worktreePath := filepath.Join(repo, ".devagent-worktrees", "TASK-001")
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "worktree", "add", "--detach", worktreePath, "HEAD")
+
+	projectID := "PROJECT-001"
+	insertProjectWithRoot(t, db, projectID, repo)
+	insertEnvironmentWithRoot(t, db, "linux-main", projectID, "primary", repo)
+	insertTask(t, db, projectID, "TASK-001", "merged")
+	runID, err := db.createTerminalRun(ctx, projectID, "TASK-001", "implementation", "succeeded", 1, "BASE", "HEAD", "DIFF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SaveRunArtifact(ctx, RunArtifactInput{
+		ProjectID:    projectID,
+		RunID:        runID,
+		ArtifactType: "diff",
+		ArtifactKey:  "diff.patch",
+		Content:      []byte("diff --git a/fake.txt b/fake.txt\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := db.BuildCleanupDryRunPlan(ctx, projectID, CleanupPlanOptions{IncludeMerged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	safety := []WorktreeSafetyRecord{{RunID: "RUN-SAFE", TaskID: "TASK-001", Status: "succeeded", WorktreePath: worktreePath}}
+	record, err := db.DeleteCleanupCandidates(ctx, projectID, plan, safety)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "deleted" || !record.ActualDeleteEnabled || len(record.Deletes) != 1 {
+		t.Fatalf("delete record = %#v", record)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree path still exists or stat failed unexpectedly: %v", err)
+	}
+}
+
 func TestBuildCleanupDryRunPlanSkipsNonTerminalTasks(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

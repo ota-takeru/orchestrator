@@ -919,12 +919,19 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 	execute := fs.Bool("execute", false, "run cleanup execute guard without deleting")
 	quarantine := fs.Bool("quarantine", false, "move eligible worktrees to quarantine instead of deleting")
 	quarantineRoot := fs.String("quarantine-root", "", "directory for quarantined worktrees")
+	deleteWorktrees := fs.Bool("delete", false, "permanently remove eligible worktrees")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
 	}
 	if *quarantine && !*execute {
 		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("--quarantine requires --execute"))
+	}
+	if *deleteWorktrees && !*execute {
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("--delete requires --execute"))
+	}
+	if *deleteWorktrees && *quarantine {
+		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("--delete and --quarantine are mutually exclusive"))
 	}
 	if !*dryRun && !*execute {
 		return writeError(stdout, *jsonOut, exitValidation, "cleanup_failed", errors.New("cleanup deletion is not implemented; use --execute guard or --dry-run"))
@@ -960,6 +967,24 @@ func runCleanup(ctx context.Context, args []string, stdout io.Writer) int {
 		record.WorktreeSafety = append(record.WorktreeSafety, safety)
 	}
 	if *execute {
+		if *deleteWorktrees {
+			deleteRecord, err := db.DeleteCleanupCandidates(ctx, projectID, record.Items, record.WorktreeSafety)
+			if err != nil {
+				return writeError(stdout, *jsonOut, exitStorage, "cleanup_failed", err)
+			}
+			if *jsonOut {
+				return writeJSON(stdout, deleteRecord, 0)
+			}
+			fmt.Fprintf(stdout, "Cleanup delete: %s\n", deleteRecord.Status)
+			fmt.Fprintf(stdout, "Actual delete enabled: %t\n", deleteRecord.ActualDeleteEnabled)
+			for _, del := range deleteRecord.Deletes {
+				fmt.Fprintf(stdout, "delete: %s\t%s\t%s\n", del.TaskID, del.Status, del.WorktreePath)
+			}
+			for _, blocker := range deleteRecord.Blockers {
+				fmt.Fprintf(stdout, "blocker: %s\n", blocker)
+			}
+			return 0
+		}
 		if *quarantine {
 			qRoot := strings.TrimSpace(*quarantineRoot)
 			if qRoot == "" {
@@ -1791,7 +1816,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch status [--project-root PATH] [--data-root PATH] [--json] [TASK_ID]")
-	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--quarantine] [--quarantine-root PATH] [--merged] [--applied] [--older-than AGE] [--json]")
+	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--quarantine] [--quarantine-root PATH] [--delete] [--merged] [--applied] [--older-than AGE] [--json]")
 	fmt.Fprintln(w, "  devos cleanup quarantine list [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos cleanup quarantine restore [--project-root PATH] [--data-root PATH] [--run RUN_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos publish [--project-root PATH] [--data-root PATH] [--remote origin] [--branch main] [--dry-run] [--json]")

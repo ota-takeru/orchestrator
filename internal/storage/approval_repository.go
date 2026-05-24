@@ -369,6 +369,9 @@ LIMIT 1`, projectID, taskID).Scan(&evidence.RunID); err != nil {
 	if len(gateIDs) == 0 {
 		return approvalEvidence{}, fmt.Errorf("approval requires gate result evidence")
 	}
+	if err := ensureNoBlockingGateResults(ctx, tx, projectID, evidence.RunID); err != nil {
+		return approvalEvidence{}, err
+	}
 	if err := ensureBaselineFailuresReported(ctx, tx, projectID, evidence.RunID); err != nil {
 		return approvalEvidence{}, err
 	}
@@ -399,6 +402,21 @@ WHERE project_id = ? AND run_id = ?
 	}
 	if reportCount == 0 {
 		return fmt.Errorf("approval requires baseline issue report for run %s", runID)
+	}
+	return nil
+}
+
+func ensureNoBlockingGateResults(ctx context.Context, tx *sql.Tx, projectID string, runID string) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM gate_results
+WHERE project_id = ? AND run_id = ?
+  AND status NOT IN ('PASS', 'REPORT_ONLY')`, projectID, runID).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("approval requires all blocking gate results to be resolved for run %s", runID)
 	}
 	return nil
 }

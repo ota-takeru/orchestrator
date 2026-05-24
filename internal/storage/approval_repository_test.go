@@ -149,6 +149,64 @@ func TestApprovalRequiresBaselineIssueReport(t *testing.T) {
 	}
 }
 
+func TestUnclassifiedVerificationFailureBlocksMerge(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready_for_human_review")
+	insertSucceededRun(t, db, "PROJECT-001", "TASK-001", "RUN-UNKNOWN", "HEAD", "DIFF")
+	insertUnknownVerificationEvidence(t, db, "PROJECT-001", "RUN-UNKNOWN", "linux-main", "VERIF-UNKNOWN")
+	action := "decision"
+	gates := []decisions.GateResult{{
+		Status:          decisions.GateHumanDecision,
+		Severity:        decisions.SeverityHigh,
+		Detector:        "required_verification_unclassified",
+		HumanActionType: &action,
+		Evidence:        map[string]any{"run_id": "RUN-UNKNOWN"},
+	}}
+	if err := db.SaveGateResults(ctx, "PROJECT-001", ptr("TASK-001"), "RUN-UNKNOWN", gates); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{
+		ProjectID:    "PROJECT-001",
+		TaskID:       "TASK-001",
+		ApprovalType: ApprovalFinalReview,
+	}); err == nil {
+		t.Fatal("expected unclassified verification gate to block approval")
+	}
+}
+
+func TestHumanDecisionBlocksMerge(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready_for_human_review")
+	insertSucceededRun(t, db, "PROJECT-001", "TASK-001", "RUN-DECISION", "HEAD", "DIFF")
+	insertVerificationEvidence(t, db, "PROJECT-001", "RUN-DECISION", "linux-main", "VERIF-DECISION")
+	action := "decision"
+	gates := []decisions.GateResult{{
+		Status:          decisions.GateHumanDecision,
+		Severity:        decisions.SeverityHigh,
+		Detector:        "policy_requires_human_decision",
+		HumanActionType: &action,
+		Evidence:        map[string]any{"run_id": "RUN-DECISION"},
+	}}
+	if err := db.SaveGateResults(ctx, "PROJECT-001", ptr("TASK-001"), "RUN-DECISION", gates); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{
+		ProjectID:    "PROJECT-001",
+		TaskID:       "TASK-001",
+		ApprovalType: ApprovalFinalReview,
+	}); err == nil {
+		t.Fatal("expected human decision gate to block approval")
+	}
+}
+
 func TestApproveHumanApprovalApprovesOpenSourceAndResolvesInbox(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -327,6 +385,20 @@ INSERT INTO verification_results(
   id, project_id, run_id, environment_id, command_id, required_for_merge,
   status, failure_class, evidence_json, created_at
 ) VALUES (?, ?, ?, ?, 'go-test', 1, 'failed', 'baseline', '{}', ?)`,
+		resultID, projectID, runID, envID, now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertUnknownVerificationEvidence(t *testing.T, db *DB, projectID string, runID string, envID string, resultID string) {
+	t.Helper()
+	_, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO verification_results(
+  id, project_id, run_id, environment_id, command_id, required_for_merge,
+  status, failure_class, evidence_json, created_at
+) VALUES (?, ?, ?, ?, 'go-test', 1, 'failed', 'unknown', '{}', ?)`,
 		resultID, projectID, runID, envID, now(),
 	)
 	if err != nil {

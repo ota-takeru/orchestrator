@@ -70,6 +70,7 @@ type TaskGroupRecord struct {
 
 type PlanConsolidateResult struct {
 	TaskGroups        []TaskGroupRecord        `json:"task_groups"`
+	ProposedTasks     []TaskRecord             `json:"proposed_tasks"`
 	AcceptedArtifacts []PlanningArtifactRecord `json:"accepted_artifacts"`
 }
 
@@ -141,14 +142,16 @@ func (db *DB) ConsolidatePlanning(ctx context.Context, projectID string) (PlanCo
 	}
 	result := PlanConsolidateResult{
 		TaskGroups:        make([]TaskGroupRecord, 0, len(candidates)),
+		ProposedTasks:     make([]TaskRecord, 0, len(candidates)),
 		AcceptedArtifacts: make([]PlanningArtifactRecord, 0, len(candidates)),
 	}
 	for _, candidate := range candidates {
-		group, artifact, err := db.consolidatePlanningArtifact(ctx, projectID, candidate)
+		group, task, artifact, err := db.consolidatePlanningArtifact(ctx, projectID, candidate)
 		if err != nil {
 			return PlanConsolidateResult{}, err
 		}
 		result.TaskGroups = append(result.TaskGroups, group)
+		result.ProposedTasks = append(result.ProposedTasks, task)
 		result.AcceptedArtifacts = append(result.AcceptedArtifacts, artifact)
 	}
 	return result, nil
@@ -415,12 +418,14 @@ WHERE project_id = ? AND id = ?`,
 		}, nil
 }
 
-func (db *DB) consolidatePlanningArtifact(ctx context.Context, projectID string, candidate planningConsolidationCandidate) (TaskGroupRecord, PlanningArtifactRecord, error) {
+func (db *DB) consolidatePlanningArtifact(ctx context.Context, projectID string, candidate planningConsolidationCandidate) (TaskGroupRecord, TaskRecord, PlanningArtifactRecord, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	groupID := "TG-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|feature_chunk")
+	taskID := "TASK-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|implementation")
+	taskTitle := "Implement " + candidate.FeatureRequest.Title
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
-		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	committed := false
 	defer func() {
@@ -435,7 +440,16 @@ INSERT INTO task_groups(
 ) VALUES (?, ?, ?, 'proposed', ?, NULL, 'feature_chunk', ?, ?)`,
 		groupID, projectID, candidate.FeatureRequest.ID, candidate.FeatureRequest.Title, now, now,
 	); err != nil {
-		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO tasks(
+  id, project_id, task_group_id, status, title, base_branch,
+  verification_commands_json, created_at, updated_at
+) VALUES (?, ?, ?, 'proposed', ?, 'main', '[]', ?, ?)`,
+		taskID, projectID, groupID, taskTitle, now, now,
+	); err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE feature_requests
@@ -443,7 +457,7 @@ SET task_group_id = ?, status = 'planned', updated_at = ?
 WHERE project_id = ? AND id = ? AND task_group_id IS NULL`,
 		groupID, now, projectID, candidate.FeatureRequest.ID,
 	); err != nil {
-		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE planning_artifacts
@@ -451,17 +465,18 @@ SET status = 'accepted', updated_at = ?
 WHERE project_id = ? AND id = ? AND status = 'proposed'`,
 		now, projectID, candidate.Artifact.ID,
 	); err != nil {
-		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "planning_consolidated", map[string]any{
 		"task_group_id":        groupID,
+		"task_id":              taskID,
 		"planning_artifact_id": candidate.Artifact.ID,
 		"feature_request_id":   candidate.FeatureRequest.ID,
 	}, now); err != nil {
-		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	committed = true
 
@@ -470,14 +485,18 @@ WHERE project_id = ? AND id = ? AND status = 'proposed'`,
 	acceptedArtifact.Status = "accepted"
 	acceptedArtifact.UpdatedAt = now
 	return TaskGroupRecord{
-		ID:               groupID,
-		FeatureRequestID: &featureRequestID,
-		Status:           "proposed",
-		Title:            candidate.FeatureRequest.Title,
-		PlanningUnit:     "feature_chunk",
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}, acceptedArtifact, nil
+			ID:               groupID,
+			FeatureRequestID: &featureRequestID,
+			Status:           "proposed",
+			Title:            candidate.FeatureRequest.Title,
+			PlanningUnit:     "feature_chunk",
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}, TaskRecord{
+			ID:     taskID,
+			Status: "proposed",
+			Title:  taskTitle,
+		}, acceptedArtifact, nil
 }
 
 func (db *DB) writePlanningArtifactFile(relPath string, content []byte) error {

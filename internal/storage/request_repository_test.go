@@ -171,6 +171,9 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 	if len(result.TaskGroups) != 1 || result.TaskGroups[0].FeatureRequestID == nil || *result.TaskGroups[0].FeatureRequestID != created.FeatureRequest.ID {
 		t.Fatalf("task groups = %#v", result.TaskGroups)
 	}
+	if len(result.ProposedTasks) != 1 || result.ProposedTasks[0].Status != "proposed" {
+		t.Fatalf("proposed tasks = %#v", result.ProposedTasks)
+	}
 	if result.TaskGroups[0].Status != "proposed" || result.TaskGroups[0].PlanningUnit != "feature_chunk" {
 		t.Fatalf("task group = %#v", result.TaskGroups[0])
 	}

@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,6 +30,7 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
 	projectRoot := t.TempDir()
+	t.Setenv("CODEX_HOME", "/tmp/devos-codex-home")
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
@@ -56,6 +60,26 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	}
 	if artifactCount < 4 {
 		t.Fatalf("artifact count = %d", artifactCount)
+	}
+	var summaryPath string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT path FROM run_artifacts WHERE run_id = ? AND artifact_key = 'real-codex-summary.json'", result.ImplementationRun).Scan(&summaryPath); err != nil {
+		t.Fatal(err)
+	}
+	rawSummary, err := os.ReadFile(filepath.Join(db.dataRoot, summaryPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary struct {
+		EnvironmentID   string `json:"environment_id"`
+		CodexAdapter    string `json:"codex_adapter"`
+		SandboxProfile  string `json:"sandbox_profile"`
+		CodexHomeSource string `json:"codex_home_source"`
+	}
+	if err := json.Unmarshal(rawSummary, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.EnvironmentID != "linux-main" || summary.CodexAdapter != "codex-linux" || summary.SandboxProfile != "linux-bubblewrap" || summary.CodexHomeSource != "CODEX_HOME" {
+		t.Fatalf("summary = %#v", summary)
 	}
 }
 

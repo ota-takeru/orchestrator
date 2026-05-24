@@ -368,12 +368,16 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 		{ProjectID: projectID, RunID: runID, ArtifactType: "diff", ArtifactKey: "diff.patch", Content: []byte(diff)},
 	}
 	summary, err := json.MarshalIndent(map[string]any{
-		"task_id":        taskID,
-		"run_id":         runID,
-		"status":         runStatus,
-		"classification": classification,
-		"blockers":       blockers,
-		"exit_code":      execResult.ExitCode,
+		"task_id":           taskID,
+		"run_id":            runID,
+		"status":            runStatus,
+		"classification":    classification,
+		"blockers":          blockers,
+		"exit_code":         execResult.ExitCode,
+		"environment_id":    env.ID,
+		"codex_adapter":     env.CodexAdapter,
+		"sandbox_profile":   env.SandboxProfile,
+		"codex_home_source": codexHomeSourceForEnvironment(env, os.LookupEnv),
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -398,6 +402,28 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 	}
 	committed = true
 	return nil
+}
+
+func codexHomeSourceForEnvironment(env platform.ExecutionEnvironment, lookupEnv func(string) (string, bool)) string {
+	if value, ok := lookupEnv("CODEX_HOME"); ok && strings.TrimSpace(value) != "" {
+		return "CODEX_HOME"
+	}
+	switch env.OSFamily {
+	case platform.OSFamilyWindows, platform.OSFamilyRemoteWindows:
+		if value, ok := lookupEnv("USERPROFILE"); ok && strings.TrimSpace(value) != "" {
+			return "USERPROFILE"
+		}
+		drive, driveOK := lookupEnv("HOMEDRIVE")
+		path, pathOK := lookupEnv("HOMEPATH")
+		if driveOK && pathOK && strings.TrimSpace(drive+path) != "" {
+			return "HOMEDRIVE/HOMEPATH"
+		}
+	default:
+		if value, ok := lookupEnv("HOME"); ok && strings.TrimSpace(value) != "" {
+			return "HOME"
+		}
+	}
+	return "unknown"
 }
 
 func (db *DB) openCodexBlockedDecision(ctx context.Context, projectID string, taskID string, runID string, classification string, blockers []string) error {

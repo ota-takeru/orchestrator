@@ -19,6 +19,10 @@
 
 2026-05-24:
 
+- WSL実機の一時projectで Real Codex E2E を再実行し、`wsl-main` readinessがready、`devos run --real-codex --verify --verify-adapter fake --verify-env wsl-main TASK-001` が `classification=succeeded`、fake verification PASS、review approval、merge approval、fake merge reverifyを経て `TASK-001` が `merged` になることを確認しました。最終 `devos check` はviolations 0、`devos inbox` はopen item 0です。
+- Windows実機の一時projectで Windows native `devos.exe` から Real Codex E2E を実行し、`windows-main` readinessがready、`devos run --real-codex --verify --verify-adapter fake --verify-env windows-main TASK-001` が `classification=succeeded`、fake verification PASS、review approval、merge approval、fake merge reverifyを経て `TASK-001` が `merged` になることを確認しました。最終 `devos check` はviolationsなし、`devos inbox` はopen itemなしです。
+- Windows-hosted multi-repo registry/APIの実機E2Eとして、Windows projectとWSL projectをglobal registryへ登録し、Windows API `/api/projects` が2件を返すこと、Windows project snapshotとWSL bridge経由snapshotを取得できること、WSL project refreshがactiveになることを確認しました。WSL bridge検証用に一時配置したPATH shimは検証後に削除済みです。
+- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`。
 - Multi-repo Windows UI + WSL Authority Bridgeの基盤として、Windows/global用の `internal/registry` を追加し、project-local DBとは別のregistry SQLiteへWindows/WSL project routing metadataを保存するようにしました。`devos project add/list/remove/refresh` を追加し、WSL project IDは `wsl_distro:wsl_project_root` 由来で安定化しています。
 - `internal/projecthub` にProjectAuthority interface、WindowsLocalAuthority、WSL command bridge authorityを追加しました。WSL authorityは `wsl.exe -d <distro> -- devos ... --project-root <wsl_project_root> --json` のみをinterface境界で組み立て、`\\wsl$` project rootを拒否し、timeoutとstructured errorを返します。
 - Windows-hosted APIへ `/api/projects` と `/api/projects/{project_id}/...` routeを追加し、global registryからproject authorityへdispatchするようにしました。既存の単一project APIは互換維持しています。

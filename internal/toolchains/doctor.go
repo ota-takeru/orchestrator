@@ -3,7 +3,9 @@ package toolchains
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
 )
@@ -48,6 +50,8 @@ type Report struct {
 type Options struct {
 	IncludeCodex bool
 	LookupPath   func(file string) (string, error)
+	LookupEnv    func(key string) (string, bool)
+	FileExists   func(path string) bool
 }
 
 func RunDoctor(ctx context.Context, env platform.ExecutionEnvironment, opts Options) Report {
@@ -55,6 +59,14 @@ func RunDoctor(ctx context.Context, env platform.ExecutionEnvironment, opts Opti
 	lookup := opts.LookupPath
 	if lookup == nil {
 		lookup = exec.LookPath
+	}
+	lookupEnv := opts.LookupEnv
+	if lookupEnv == nil {
+		lookupEnv = os.LookupEnv
+	}
+	fileExists := opts.FileExists
+	if fileExists == nil {
+		fileExists = regularFileExists
 	}
 
 	report := Report{EnvironmentID: env.ID}
@@ -71,6 +83,7 @@ func RunDoctor(ctx context.Context, env platform.ExecutionEnvironment, opts Opti
 			req.Message = "Codex CLI is required only for real Codex adapter runs"
 		}
 		report.Requirements = append(report.Requirements, req)
+		report.Requirements = append(report.Requirements, checkCodexAuth(env, lookupEnv, fileExists))
 	}
 	return report
 }
@@ -128,4 +141,66 @@ func executableForShell(env platform.ExecutionEnvironment) string {
 	default:
 		return "none"
 	}
+}
+
+func checkCodexAuth(env platform.ExecutionEnvironment, lookupEnv func(string) (string, bool), fileExists func(string) bool) Requirement {
+	req := Requirement{
+		ToolchainKey:     "codex-auth",
+		RequiredFor:      RequiredForImplementation,
+		RequiredForMerge: true,
+		Executable:       "auth.json",
+	}
+	codexHome, source := codexHomeForEnvironment(env, lookupEnv)
+	if strings.TrimSpace(codexHome) == "" {
+		req.Status = StatusSetupRequired
+		req.Message = "CODEX_HOME could not be determined for this environment"
+		return req
+	}
+	req.DetectedPath = codexHome
+	authPath := joinCodexHome(env.OSFamily, codexHome, "auth.json")
+	if !fileExists(authPath) {
+		req.Status = StatusSetupRequired
+		req.Message = fmt.Sprintf("Codex auth is not detected in %s for this environment", source)
+		return req
+	}
+	req.Status = StatusDetected
+	req.Message = fmt.Sprintf("Codex auth detected in %s for this environment", source)
+	return req
+}
+
+func codexHomeForEnvironment(env platform.ExecutionEnvironment, lookupEnv func(string) (string, bool)) (string, string) {
+	if value, ok := lookupEnv("CODEX_HOME"); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value), "CODEX_HOME"
+	}
+	switch env.OSFamily {
+	case platform.OSFamilyWindows, platform.OSFamilyRemoteWindows:
+		if userProfile, ok := lookupEnv("USERPROFILE"); ok && strings.TrimSpace(userProfile) != "" {
+			return joinCodexHome(env.OSFamily, strings.TrimSpace(userProfile), ".codex"), "USERPROFILE"
+		}
+		drive, driveOK := lookupEnv("HOMEDRIVE")
+		path, pathOK := lookupEnv("HOMEPATH")
+		if driveOK && pathOK && strings.TrimSpace(drive+path) != "" {
+			return joinCodexHome(env.OSFamily, strings.TrimSpace(drive+path), ".codex"), "HOMEDRIVE/HOMEPATH"
+		}
+	default:
+		if home, ok := lookupEnv("HOME"); ok && strings.TrimSpace(home) != "" {
+			return joinCodexHome(env.OSFamily, strings.TrimSpace(home), ".codex"), "HOME"
+		}
+	}
+	return "", ""
+}
+
+func joinCodexHome(osFamily platform.OSFamily, root string, elem string) string {
+	root = strings.TrimRight(strings.TrimSpace(root), `/\`)
+	switch osFamily {
+	case platform.OSFamilyWindows, platform.OSFamilyRemoteWindows:
+		return root + `\` + elem
+	default:
+		return root + "/" + elem
+	}
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

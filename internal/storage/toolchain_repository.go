@@ -167,6 +167,12 @@ WHERE ii.project_id = ? AND ii.id = ? AND ii.source_type = 'toolchain_requiremen
 
 func setupInstructionsFor(osFamily platform.OSFamily, toolchainKey string) []string {
 	switch toolchainKey {
+	case "codex-auth":
+		return []string{
+			"Authenticate Codex manually in this execution environment.",
+			"Do not copy or share CODEX_HOME between Windows and WSL environments.",
+			"Rerun platform doctor with --save after setup.",
+		}
 	case "codex":
 		return []string{
 			"Install or update the Codex CLI manually using the official OpenAI instructions.",

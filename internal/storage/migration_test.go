@@ -12,10 +12,10 @@ func TestRegisteredMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 12 {
-		t.Fatalf("migration count = %d, want 12", len(migrations))
+	if len(migrations) != 13 {
+		t.Fatalf("migration count = %d, want 13", len(migrations))
 	}
-	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 || migrations[7].Version != 8 || migrations[8].Version != 9 || migrations[9].Version != 10 || migrations[10].Version != 11 || migrations[11].Version != 12 {
+	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 || migrations[7].Version != 8 || migrations[8].Version != 9 || migrations[9].Version != 10 || migrations[10].Version != 11 || migrations[11].Version != 12 || migrations[12].Version != 13 {
 		t.Fatalf("unexpected migration versions: %#v", migrations)
 	}
 }
@@ -77,6 +77,19 @@ func TestMigration012AddsSemanticBehaviorDiffDetails(t *testing.T) {
 	for _, token := range []string{"ADD COLUMN category", "ADD COLUMN summary", "ADD COLUMN confidence", "idx_semantic_behavior_diffs_category"} {
 		if !strings.Contains(sql, token) {
 			t.Fatalf("migration 012 missing %q", token)
+		}
+	}
+}
+
+func TestMigration013AddsMemories(t *testing.T) {
+	migrations, err := RegisteredMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := migrations[12].SQL
+	for _, token := range []string{"CREATE TABLE memories", "memory_type", "source_type", "idx_memories_project_scope"} {
+		if !strings.Contains(sql, token) {
+			t.Fatalf("migration 013 missing %q", token)
 		}
 	}
 }

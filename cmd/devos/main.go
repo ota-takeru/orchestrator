@@ -75,6 +75,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runDecisions(ctx, args[1:], stdout)
 	case "approve":
 		return runApproveDecision(ctx, args[1:], stdout)
+	case "memory":
+		return runMemory(ctx, args[1:], stdout)
 	case "env":
 		return runEnv(ctx, args[1:], stdout, stderr)
 	case "review":
@@ -1880,6 +1882,11 @@ func runApproveDecision(ctx context.Context, args []string, stdout io.Writer) in
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
 	option := fs.String("option", "", "selected option")
 	notes := fs.String("notes", "", "approval notes")
+	remember := fs.Bool("remember", false, "record approved decision as policy memory")
+	memoryKey := fs.String("memory-key", "", "policy memory key")
+	memoryScope := fs.String("memory-scope", "project", "policy memory scope")
+	memoryScopeID := fs.String("memory-scope-id", "", "policy memory scope id")
+	memoryExpiresAt := fs.String("memory-expires-at", "", "policy memory expiry timestamp")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -1897,6 +1904,13 @@ func runApproveDecision(ctx context.Context, args []string, stdout io.Writer) in
 		DecisionID: fs.Arg(0),
 		Option:     *option,
 		Notes:      *notes,
+		Remember:   *remember,
+		Memory: storage.RememberDecisionInput{
+			Key:       *memoryKey,
+			Scope:     *memoryScope,
+			ScopeID:   *memoryScopeID,
+			ExpiresAt: *memoryExpiresAt,
+		},
 	})
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "decision_approve_failed", err)
@@ -1905,6 +1919,38 @@ func runApproveDecision(ctx context.Context, args []string, stdout io.Writer) in
 		return writeJSON(stdout, decision, 0)
 	}
 	fmt.Fprintf(stdout, "%s\t%s\t%s\n", decision.ID, decision.Status, decision.SelectedOption)
+	return 0
+}
+
+func runMemory(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("memory", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	memoryType := fs.String("type", "", "memory type")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "memory_list_failed", err)
+	}
+	defer db.Close()
+	memories, err := db.ListMemories(ctx, projectID, *memoryType)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "memory_list_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"memories": memories}, 0)
+	}
+	if len(memories) == 0 {
+		fmt.Fprintln(stdout, "No memories.")
+		return 0
+	}
+	for _, memory := range memories {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", memory.ID, memory.MemoryType, memory.Scope, memory.Key)
+	}
 	return 0
 }
 
@@ -2479,7 +2525,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos inbox approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
-	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] DECISION_ID")
+	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--remember --memory-key KEY] [--json] DECISION_ID")
+	fmt.Fprintln(w, "  devos memory [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
 	fmt.Fprintln(w, "  devos review [--project-root PATH] [--data-root PATH] [--json] TASK_ID")

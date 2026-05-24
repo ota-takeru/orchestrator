@@ -278,7 +278,7 @@ func TestApproveDecisionCLI(t *testing.T) {
 
 	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Decision approve workflow")
 	insertCLIDecisionWithInbox(t, ctx, dataRoot, projectRoot)
-	out := runCLI(t, "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--option", "A", "--notes", "recommended", "--json", "DEC-001")
+	out := runCLI(t, "approve", "--project-root", projectRoot, "--data-root", dataRoot, "--option", "A", "--notes", "recommended", "--remember", "--memory-key", "decision.dec-001", "--json", "DEC-001")
 	var result storage.DecisionRecord
 	decodeJSON(t, out, &result)
 	if result.Status != "approved" || result.SelectedOption != "A" {
@@ -292,6 +292,14 @@ func TestApproveDecisionCLI(t *testing.T) {
 	decodeJSON(t, listOut, &list)
 	if len(list.Decisions) != 1 || list.Decisions[0].SelectedOption != "A" {
 		t.Fatalf("approved decisions = %#v", list.Decisions)
+	}
+	memoryOut := runCLI(t, "memory", "--project-root", projectRoot, "--data-root", dataRoot, "--type", "policy", "--json")
+	var memoryList struct {
+		Memories []storage.MemoryRecord `json:"memories"`
+	}
+	decodeJSON(t, memoryOut, &memoryList)
+	if len(memoryList.Memories) != 1 || memoryList.Memories[0].Key != "decision.dec-001" {
+		t.Fatalf("memories = %#v", memoryList.Memories)
 	}
 }
 

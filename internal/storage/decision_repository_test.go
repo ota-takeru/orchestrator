@@ -74,6 +74,35 @@ func TestApproveDecisionRejectsResolvedDecision(t *testing.T) {
 	}
 }
 
+func TestApproveDecisionCanRecordPolicyMemory(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertOpenDecisionWithInbox(t, db, "PROJECT-001", "DEC-001")
+
+	if _, err := db.ApproveDecision(ctx, DecisionApprovalInput{
+		ProjectID:  "PROJECT-001",
+		DecisionID: "DEC-001",
+		Option:     "A",
+		Notes:      "remember this",
+		Remember:   true,
+		Memory: RememberDecisionInput{
+			Key:     "form_validation_library",
+			Scope:   "project",
+			ScopeID: "",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	memories, err := db.ListMemories(ctx, "PROJECT-001", "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memories) != 1 || memories[0].Key != "form_validation_library" || memories[0].SourceID != "DEC-001" {
+		t.Fatalf("memories = %#v", memories)
+	}
+}
+
 func TestApproveRetryDecisionResumesTask(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

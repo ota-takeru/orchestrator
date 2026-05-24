@@ -26,6 +26,8 @@ type DecisionApprovalInput struct {
 	DecisionID string
 	Option     string
 	Notes      string
+	Remember   bool
+	Memory     RememberDecisionInput
 }
 
 func (db *DB) ListDecisions(ctx context.Context, projectID string, status string) ([]DecisionRecord, error) {
@@ -146,6 +148,9 @@ WHERE project_id = ? AND source_type = 'decision' AND source_id = ? AND status =
 		"selected_option": option,
 		"notes":           strings.TrimSpace(input.Notes),
 	}, now); err != nil {
+		return DecisionRecord{}, err
+	}
+	if err := rememberApprovedDecision(ctx, tx, input.ProjectID, decision, input, now); err != nil {
 		return DecisionRecord{}, err
 	}
 	if taskID.Valid && option == "retry_after_manual_action" {

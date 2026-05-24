@@ -46,6 +46,26 @@ func TestPreflightDetectsCaseCollision(t *testing.T) {
 	}
 }
 
+func TestPreflightIgnoresDependencySymlinks(t *testing.T) {
+	root := newGitRepo(t)
+	writeFile(t, filepath.Join(root, ".gitignore"), "node_modules/\n.devagent-worktrees/\norchestrator-data/\n.env.*\n")
+	writeFile(t, filepath.Join(root, ".gitattributes"), "* text=auto\n")
+	writeFile(t, filepath.Join(root, "node_modules", "pkg", "target.txt"), "dependency")
+	if err := os.Symlink("target.txt", filepath.Join(root, "node_modules", "pkg", "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Run(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range report.Findings {
+		if finding.ID == "symlink_support" && finding.Severity != SeverityPass {
+			t.Fatalf("dependency symlink should be ignored: %#v", finding)
+		}
+	}
+}
+
 func TestInitProjectCreatesConceptAndPolicy(t *testing.T) {
 	root := newGitRepo(t)
 	writeFile(t, filepath.Join(root, ".gitignore"), ".devagent-worktrees/\norchestrator-data/\n.env.*\n")

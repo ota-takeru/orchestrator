@@ -155,8 +155,7 @@ func checkCaseCollisions(root string) Finding {
 		if err != nil {
 			return nil
 		}
-		name := d.Name()
-		if d.IsDir() && (name == ".git" || name == ".devagent-worktrees" || name == "orchestrator-data") {
+		if shouldSkipPreflightWalkDir(d) {
 			return filepath.SkipDir
 		}
 		rel, err := filepath.Rel(root, path)
@@ -188,7 +187,7 @@ func checkSymlinkPolicy(root string) Finding {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && (d.Name() == ".git" || d.Name() == ".devagent-worktrees" || d.Name() == "orchestrator-data") {
+		if shouldSkipPreflightWalkDir(d) {
 			return filepath.SkipDir
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
@@ -203,6 +202,18 @@ func checkSymlinkPolicy(root string) Finding {
 		return Finding{ID: "symlink_support", Severity: SeverityWarn, Message: "symlinks exist and require platform-specific support", Details: symlinks}
 	}
 	return Finding{ID: "symlink_support", Severity: SeverityPass, Message: "no symlinks detected"}
+}
+
+func shouldSkipPreflightWalkDir(d fs.DirEntry) bool {
+	if !d.IsDir() {
+		return false
+	}
+	switch d.Name() {
+	case ".git", ".devagent", ".devagent-worktrees", "orchestrator-data", "node_modules", "dist":
+		return true
+	default:
+		return false
+	}
 }
 
 func checkGitignore(root string, pattern string, message string) Finding {

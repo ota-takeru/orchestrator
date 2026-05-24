@@ -96,6 +96,14 @@ func TestArtifactsListCLI(t *testing.T) {
 	if len(trusted.Artifacts) != 1 || trusted.Artifacts[0].ArtifactID != result.Artifacts[0].ArtifactID || trusted.Artifacts[0].ApprovalNotes != "Keep local-first scope." || trusted.Artifacts[0].Content == "" {
 		t.Fatalf("trusted artifacts = %#v", trusted.Artifacts)
 	}
+	checkOut := runCLI(t, "artifacts", "check", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var check struct {
+		Violations []storage.InvariantViolation `json:"violations"`
+	}
+	decodeJSON(t, checkOut, &check)
+	if len(check.Violations) != 0 {
+		t.Fatalf("artifact invariant violations = %#v", check.Violations)
+	}
 }
 
 func TestRequestQueueCLIWorkflow(t *testing.T) {

@@ -1004,6 +1004,8 @@ func runArtifacts(ctx context.Context, args []string, stdout io.Writer, stderr i
 		return 0
 	case "trusted":
 		return runArtifactsTrusted(ctx, args[1:], stdout)
+	case "check":
+		return runArtifactsCheck(ctx, args[1:], stdout)
 	default:
 		fmt.Fprintf(stderr, "unknown artifacts subcommand: %s\n", args[0])
 		return exitValidation
@@ -1071,6 +1073,37 @@ func runArtifactsTrusted(ctx context.Context, args []string, stdout io.Writer) i
 		fmt.Fprintf(stdout, "%s\t%s\tv%d\t%s\t%s\n", artifact.ArtifactID, artifact.ArtifactType, artifact.Version, artifact.Status, artifact.Path)
 	}
 	return 0
+}
+
+func runArtifactsCheck(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("artifacts check", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "artifacts_check_failed", err)
+	}
+	defer db.Close()
+	violations, err := db.CheckArtifactInvariants(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "artifacts_check_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"violations": violations}, 0)
+	}
+	if len(violations) == 0 {
+		fmt.Fprintln(stdout, "Artifact invariants OK.")
+		return 0
+	}
+	for _, violation := range violations {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", violation.Scope, violation.ID, violation.Code, violation.Message)
+	}
+	return exitValidation
 }
 
 func runReview(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -2869,6 +2902,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos plan checkpoint --task TASK_ID [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
 	fmt.Fprintln(w, "  devos artifacts trusted [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos artifacts check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")

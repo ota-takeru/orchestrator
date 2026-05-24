@@ -45,6 +45,18 @@ type ToolchainWaiverRecord struct {
 	RequirementKey string `json:"toolchain_key"`
 }
 
+type toolchainWaiverEvidence struct {
+	InboxID        string `json:"inbox_id"`
+	RequirementID  string `json:"requirement_id"`
+	EnvironmentID  string `json:"environment_id"`
+	ToolchainKey   string `json:"toolchain_key"`
+	Reason         string `json:"reason"`
+	Scope          string `json:"scope"`
+	Expiry         string `json:"expiry"`
+	AllowedEffect  string `json:"allowed_effect"`
+	PreviousStatus string `json:"previous_status"`
+}
+
 func (db *DB) SaveToolchainReport(ctx context.Context, projectID string, report toolchains.Report) error {
 	if strings.TrimSpace(projectID) == "" {
 		return fmt.Errorf("project id is required")
@@ -241,16 +253,16 @@ WHERE ii.project_id = ? AND ii.id = ? AND ii.source_type = 'toolchain_requiremen
 	if err != nil {
 		return ToolchainWaiverRecord{}, err
 	}
-	evidence, err := json.Marshal(map[string]any{
-		"inbox_id":        input.InboxID,
-		"requirement_id":  requirementID,
-		"environment_id":  environmentID,
-		"toolchain_key":   toolchainKey,
-		"reason":          reason,
-		"scope":           scope,
-		"expiry":          expiry,
-		"allowed_effect":  allowedEffect,
-		"previous_status": currentStatus,
+	evidence, err := json.Marshal(toolchainWaiverEvidence{
+		InboxID:        input.InboxID,
+		RequirementID:  requirementID,
+		EnvironmentID:  environmentID,
+		ToolchainKey:   toolchainKey,
+		Reason:         reason,
+		Scope:          scope,
+		Expiry:         expiry,
+		AllowedEffect:  allowedEffect,
+		PreviousStatus: currentStatus,
 	})
 	if err != nil {
 		return ToolchainWaiverRecord{}, err
@@ -300,6 +312,104 @@ WHERE project_id = ? AND id = ? AND status = 'open'`,
 		AllowedEffect:  allowedEffect,
 		RequirementKey: toolchainKey,
 	}, nil
+}
+
+func (db *DB) RevokeExpiredToolchainWaivers(ctx context.Context, projectID string, nowTime time.Time) error {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, environment_id, toolchain_key, evidence_json
+FROM toolchain_requirements
+WHERE project_id = ? AND status = 'waived'`, projectID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type expiredWaiver struct {
+		requirementID string
+		environmentID string
+		toolchainKey  string
+		evidence      toolchainWaiverEvidence
+	}
+	var expired []expiredWaiver
+	for rows.Next() {
+		var item expiredWaiver
+		var evidenceJSON string
+		if err := rows.Scan(&item.requirementID, &item.environmentID, &item.toolchainKey, &evidenceJSON); err != nil {
+			return err
+		}
+		if err := json.Unmarshal([]byte(evidenceJSON), &item.evidence); err != nil {
+			continue
+		}
+		expiry, err := time.Parse(time.RFC3339, item.evidence.Expiry)
+		if err != nil {
+			continue
+		}
+		if !nowTime.Before(expiry) {
+			expired = append(expired, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(expired) == 0 {
+		return nil
+	}
+
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := nowTime.UTC().Format(time.RFC3339Nano)
+	for _, item := range expired {
+		if err := statemachine.ToolchainRequirement.ValidateTransition("waived", "revoked"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE toolchain_requirements
+SET status = 'revoked', updated_at = ?
+WHERE project_id = ? AND id = ? AND status = 'waived'`,
+			now, projectID, item.requirementID,
+		); err != nil {
+			return err
+		}
+		dedupeKey := strings.Join([]string{projectID, item.environmentID, "toolchain_setup", item.requirementID}, ":")
+		inboxID := "INBOX-" + stableShortHash(dedupeKey+"|waiver-expired|"+now)
+		title := fmt.Sprintf("Toolchain setup required: %s", item.toolchainKey)
+		body := fmt.Sprintf("Toolchain waiver expired at %s\nEnvironment: %s", item.evidence.Expiry, item.environmentID)
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, item_type, status, source_type, source_id, dedupe_key,
+  batch_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, 'toolchain_setup', 'open', 'toolchain_requirement', ?, ?, ?, 80, ?, ?, ?, ?)
+ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
+  title = excluded.title,
+  body = excluded.body,
+  priority = excluded.priority,
+  updated_at = excluded.updated_at`,
+			inboxID, projectID, item.requirementID, dedupeKey,
+			projectID+":toolchain_setup:"+item.toolchainKey, title, body, now, now,
+		); err != nil {
+			return err
+		}
+		if err := insertWorkflowEvent(ctx, tx, projectID, "toolchain_waiver_expired", map[string]any{
+			"requirement_id": item.requirementID,
+			"environment_id": item.environmentID,
+			"toolchain_key":  item.toolchainKey,
+			"expiry":         item.evidence.Expiry,
+		}, now); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func setupInstructionsFor(osFamily platform.OSFamily, toolchainKey string) []string {

@@ -186,6 +186,9 @@ func (db *DB) reverifyRealMergeCandidate(ctx context.Context, projectID string, 
 }
 
 func (db *DB) unresolvedMergeBlockers(ctx context.Context, projectID string) ([]string, error) {
+	if err := db.RevokeExpiredToolchainWaivers(ctx, projectID, time.Now().UTC()); err != nil {
+		return nil, err
+	}
 	var count int
 	if err := db.sql.QueryRowContext(ctx, `
 SELECT COUNT(*)
@@ -199,6 +202,17 @@ WHERE ii.project_id = ? AND ii.status = 'open' AND (
 	}
 	if count > 0 {
 		return []string{"unresolved blocking inbox items exist"}, nil
+	}
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM toolchain_requirements
+WHERE project_id = ?
+  AND required_for_merge = 1
+  AND status IN ('missing', 'invalid', 'setup_required', 'unsupported', 'revoked')`, projectID).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count > 0 {
+		return []string{"required toolchain is not ready for merge"}, nil
 	}
 	return nil, nil
 }

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
@@ -202,5 +203,60 @@ func TestWaiveToolchainRequirementRecordsDecision(t *testing.T) {
 	}
 	if reqStatus != "waived" || inboxStatus != "resolved" || decisionStatus != "approved" || selectedOption != "allow_non_merge_without_toolchain" {
 		t.Fatalf("req=%s inbox=%s decision=%s option=%s", reqStatus, inboxStatus, decisionStatus, selectedOption)
+	}
+}
+
+func TestRevokeExpiredToolchainWaivers(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	report := toolchains.Report{
+		EnvironmentID: "linux-main",
+		Requirements: []toolchains.Requirement{
+			{
+				ToolchainKey:     "codex-auth",
+				RequiredFor:      toolchains.RequiredForImplementation,
+				RequiredForMerge: true,
+				Status:           toolchains.StatusSetupRequired,
+				Message:          "Codex auth is not detected",
+			},
+		},
+	}
+	if err := db.SaveToolchainReport(ctx, "PROJECT-001", report); err != nil {
+		t.Fatal(err)
+	}
+	var inboxID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT id FROM inbox_items WHERE item_type = 'toolchain_setup'").Scan(&inboxID); err != nil {
+		t.Fatal(err)
+	}
+	waiver, err := db.WaiveToolchainRequirement(ctx, ToolchainWaiverInput{
+		ProjectID:     "PROJECT-001",
+		InboxID:       inboxID,
+		Reason:        "temporary",
+		Scope:         "local-only",
+		Expiry:        "2026-06-01T00:00:00Z",
+		AllowedEffect: "allow_merge_without_toolchain",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now, err := time.Parse(time.RFC3339, "2026-06-02T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RevokeExpiredToolchainWaivers(ctx, "PROJECT-001", now); err != nil {
+		t.Fatal(err)
+	}
+	var reqStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM toolchain_requirements WHERE id = ?", waiver.RequirementID).Scan(&reqStatus); err != nil {
+		t.Fatal(err)
+	}
+	var openInboxCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE source_id = ? AND status = 'open'", waiver.RequirementID).Scan(&openInboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if reqStatus != "revoked" || openInboxCount != 1 {
+		t.Fatalf("status=%s open_inbox=%d", reqStatus, openInboxCount)
 	}
 }

@@ -335,6 +335,49 @@ func TestPlatformSetupInstructionsAndMarkInstalledCLI(t *testing.T) {
 	}
 }
 
+func TestPlatformSetupWaiveCLI(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Platform setup waive workflow")
+	runCLI(t, "platform", "doctor", "--project-root", projectRoot, "--data-root", dataRoot, "--save", "--json")
+
+	db, err := storage.Open(ctx, filepath.Join(dataRoot, "devos.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projectID := storage.ProjectIDForRoot(projectRoot)
+	var inboxID string
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT ii.id
+FROM inbox_items ii
+JOIN toolchain_requirements tr ON tr.id = ii.source_id
+WHERE ii.project_id = ? AND ii.item_type = 'toolchain_setup' AND tr.toolchain_key = 'bubblewrap'
+LIMIT 1`, projectID).Scan(&inboxID); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCLI(t,
+		"platform", "setup", "waive",
+		"--project-root", projectRoot,
+		"--data-root", dataRoot,
+		"--reason", "not needed for local smoke",
+		"--scope", "local-only",
+		"--expiry", "2026-06-01T00:00:00Z",
+		"--allowed-effect", "report_only",
+		"--json",
+		inboxID,
+	)
+	var waiver storage.ToolchainWaiverRecord
+	decodeJSON(t, out, &waiver)
+	if waiver.InboxID != inboxID || waiver.Status != "waived" || waiver.AllowedEffect != "report_only" {
+		t.Fatalf("waiver = %#v", waiver)
+	}
+}
+
 func TestMergeQueueSimulateConflictCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

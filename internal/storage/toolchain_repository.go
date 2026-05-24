@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
+	"github.com/ota-takeru/orchestrator/internal/statemachine"
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
 
@@ -24,6 +25,24 @@ type ToolchainSetupInstructions struct {
 	Message          string            `json:"message"`
 	Instructions     []string          `json:"instructions"`
 	RerunCommand     string            `json:"rerun_command"`
+}
+
+type ToolchainWaiverInput struct {
+	ProjectID     string
+	InboxID       string
+	Reason        string
+	Scope         string
+	Expiry        string
+	AllowedEffect string
+}
+
+type ToolchainWaiverRecord struct {
+	DecisionID     string `json:"decision_id"`
+	RequirementID  string `json:"requirement_id"`
+	InboxID        string `json:"inbox_id"`
+	Status         string `json:"status"`
+	AllowedEffect  string `json:"allowed_effect"`
+	RequirementKey string `json:"toolchain_key"`
 }
 
 func (db *DB) SaveToolchainReport(ctx context.Context, projectID string, report toolchains.Report) error {
@@ -165,6 +184,124 @@ WHERE ii.project_id = ? AND ii.id = ? AND ii.source_type = 'toolchain_requiremen
 	return out, nil
 }
 
+func (db *DB) WaiveToolchainRequirement(ctx context.Context, input ToolchainWaiverInput) (ToolchainWaiverRecord, error) {
+	if strings.TrimSpace(input.ProjectID) == "" {
+		return ToolchainWaiverRecord{}, fmt.Errorf("project id is required")
+	}
+	if strings.TrimSpace(input.InboxID) == "" {
+		return ToolchainWaiverRecord{}, fmt.Errorf("inbox id is required")
+	}
+	reason := strings.TrimSpace(input.Reason)
+	scope := strings.TrimSpace(input.Scope)
+	expiry := strings.TrimSpace(input.Expiry)
+	allowedEffect := strings.TrimSpace(input.AllowedEffect)
+	if reason == "" || scope == "" || expiry == "" || allowedEffect == "" {
+		return ToolchainWaiverRecord{}, fmt.Errorf("reason, scope, expiry, and allowed-effect are required")
+	}
+	if _, err := time.Parse(time.RFC3339, expiry); err != nil {
+		return ToolchainWaiverRecord{}, fmt.Errorf("expiry must be RFC3339: %w", err)
+	}
+	if !validToolchainWaiverEffect(allowedEffect) {
+		return ToolchainWaiverRecord{}, fmt.Errorf("invalid allowed-effect: %s", allowedEffect)
+	}
+
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var requirementID, environmentID, toolchainKey, currentStatus string
+	if err := tx.QueryRowContext(ctx, `
+SELECT tr.id, tr.environment_id, tr.toolchain_key, tr.status
+FROM inbox_items ii
+JOIN toolchain_requirements tr ON tr.project_id = ii.project_id AND tr.id = ii.source_id
+WHERE ii.project_id = ? AND ii.id = ? AND ii.source_type = 'toolchain_requirement' AND ii.status = 'open'`,
+		input.ProjectID, input.InboxID,
+	).Scan(&requirementID, &environmentID, &toolchainKey, &currentStatus); err != nil {
+		if err == sql.ErrNoRows {
+			return ToolchainWaiverRecord{}, fmt.Errorf("open toolchain setup inbox item not found: %s", input.InboxID)
+		}
+		return ToolchainWaiverRecord{}, err
+	}
+	if err := statemachine.ToolchainRequirement.ValidateTransition(currentStatus, "waived"); err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	decisionID := "DEC-" + stableShortHash(input.ProjectID+"|toolchain-waiver|"+requirementID+"|"+now)
+	options, err := json.Marshal([]map[string]string{
+		{"id": allowedEffect, "label": "Waive toolchain requirement"},
+	})
+	if err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	evidence, err := json.Marshal(map[string]any{
+		"inbox_id":        input.InboxID,
+		"requirement_id":  requirementID,
+		"environment_id":  environmentID,
+		"toolchain_key":   toolchainKey,
+		"reason":          reason,
+		"scope":           scope,
+		"expiry":          expiry,
+		"allowed_effect":  allowedEffect,
+		"previous_status": currentStatus,
+	})
+	if err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO decisions(
+  id, project_id, status, title, options_json, selected_option, evidence_json,
+  created_at, updated_at, resolved_at
+) VALUES (?, ?, 'approved', 'Toolchain requirement waived', ?, ?, ?, ?, ?, ?)`,
+		decisionID, input.ProjectID, string(options), allowedEffect, string(evidence), now, now, now,
+	); err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE toolchain_requirements
+SET status = 'waived', evidence_json = ?, updated_at = ?
+WHERE project_id = ? AND id = ?`,
+		string(evidence), now, input.ProjectID, requirementID,
+	); err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE inbox_items
+SET status = 'resolved', updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND id = ? AND status = 'open'`,
+		now, now, input.ProjectID, input.InboxID,
+	); err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, input.ProjectID, "toolchain_requirement_waived", map[string]any{
+		"decision_id":    decisionID,
+		"requirement_id": requirementID,
+		"inbox_id":       input.InboxID,
+		"allowed_effect": allowedEffect,
+	}, now); err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ToolchainWaiverRecord{}, err
+	}
+	committed = true
+	return ToolchainWaiverRecord{
+		DecisionID:     decisionID,
+		RequirementID:  requirementID,
+		InboxID:        input.InboxID,
+		Status:         "waived",
+		AllowedEffect:  allowedEffect,
+		RequirementKey: toolchainKey,
+	}, nil
+}
+
 func setupInstructionsFor(osFamily platform.OSFamily, toolchainKey string) []string {
 	switch toolchainKey {
 	case "codex-auth":
@@ -216,6 +353,15 @@ func setupInstructionsFor(osFamily platform.OSFamily, toolchainKey string) []str
 			"Make the required executable available on PATH for this environment.",
 			"Rerun platform doctor with --save after setup.",
 		}
+	}
+}
+
+func validToolchainWaiverEffect(effect string) bool {
+	switch effect {
+	case "report_only", "allow_non_merge_without_toolchain", "allow_merge_without_toolchain":
+		return true
+	default:
+		return false
 	}
 }
 

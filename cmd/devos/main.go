@@ -1671,6 +1671,43 @@ func runPlatformSetup(ctx context.Context, args []string, stdout io.Writer, stde
 		}
 		fmt.Fprintf(stdout, "%s\t%s\n", item.ID, item.Status)
 		return exitFromToolchainDoctor(report)
+	case "waive":
+		fs := flag.NewFlagSet("platform setup waive", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		reason := fs.String("reason", "", "waiver reason")
+		scope := fs.String("scope", "", "waiver scope")
+		expiry := fs.String("expiry", "", "waiver expiry in RFC3339")
+		allowedEffect := fs.String("allowed-effect", "", "report_only, allow_non_merge_without_toolchain, or allow_merge_without_toolchain")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("platform setup waive requires INBOX_ID"))
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "setup_waive_failed", err)
+		}
+		defer db.Close()
+		waiver, err := db.WaiveToolchainRequirement(ctx, storage.ToolchainWaiverInput{
+			ProjectID:     projectID,
+			InboxID:       fs.Arg(0),
+			Reason:        *reason,
+			Scope:         *scope,
+			Expiry:        *expiry,
+			AllowedEffect: *allowedEffect,
+		})
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "setup_waive_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, waiver, 0)
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", waiver.InboxID, waiver.Status, waiver.AllowedEffect)
+		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown platform setup subcommand: %s\n", args[0])
 		return exitValidation
@@ -1850,6 +1887,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos platform map add [--project-root PATH] [--data-root PATH] --from-root PATH --to-root PATH --mode MODE [--write-owner ENV_ID] [--json] FROM_ENV TO_ENV")
 	fmt.Fprintln(w, "  devos platform setup instructions [--project-root PATH] [--data-root PATH] [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform setup mark-installed [--project-root PATH] [--data-root PATH] [--include-codex] [--json] INBOX_ID")
+	fmt.Fprintln(w, "  devos platform setup waive [--project-root PATH] [--data-root PATH] --reason TEXT --scope SCOPE --expiry RFC3339 --allowed-effect EFFECT [--json] INBOX_ID")
 	fmt.Fprintln(w, "  devos platform doctor [--project-root PATH] [--data-root PATH] [--env ENV_ID] [--include-codex] [--save] [--json]")
 }
 

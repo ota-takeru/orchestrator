@@ -150,3 +150,57 @@ func TestToolchainSetupInstructions(t *testing.T) {
 		t.Fatalf("instructions = %#v", instructions)
 	}
 }
+
+func TestWaiveToolchainRequirementRecordsDecision(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	report := toolchains.Report{
+		EnvironmentID: "linux-main",
+		Requirements: []toolchains.Requirement{
+			{
+				ToolchainKey:     "codex-auth",
+				RequiredFor:      toolchains.RequiredForImplementation,
+				RequiredForMerge: true,
+				Status:           toolchains.StatusSetupRequired,
+				Message:          "Codex auth is not detected",
+			},
+		},
+	}
+	if err := db.SaveToolchainReport(ctx, "PROJECT-001", report); err != nil {
+		t.Fatal(err)
+	}
+	var inboxID string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT id FROM inbox_items WHERE item_type = 'toolchain_setup'").Scan(&inboxID); err != nil {
+		t.Fatal(err)
+	}
+
+	waiver, err := db.WaiveToolchainRequirement(ctx, ToolchainWaiverInput{
+		ProjectID:     "PROJECT-001",
+		InboxID:       inboxID,
+		Reason:        "temporary local validation only",
+		Scope:         "TASK-001",
+		Expiry:        "2026-06-01T00:00:00Z",
+		AllowedEffect: "allow_non_merge_without_toolchain",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiver.Status != "waived" || waiver.AllowedEffect != "allow_non_merge_without_toolchain" || waiver.RequirementKey != "codex-auth" {
+		t.Fatalf("waiver = %#v", waiver)
+	}
+	var reqStatus, inboxStatus, decisionStatus, selectedOption string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM toolchain_requirements WHERE id = ?", waiver.RequirementID).Scan(&reqStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM inbox_items WHERE id = ?", inboxID).Scan(&inboxStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status, selected_option FROM decisions WHERE id = ?", waiver.DecisionID).Scan(&decisionStatus, &selectedOption); err != nil {
+		t.Fatal(err)
+	}
+	if reqStatus != "waived" || inboxStatus != "resolved" || decisionStatus != "approved" || selectedOption != "allow_non_merge_without_toolchain" {
+		t.Fatalf("req=%s inbox=%s decision=%s option=%s", reqStatus, inboxStatus, decisionStatus, selectedOption)
+	}
+}

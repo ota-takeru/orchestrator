@@ -85,3 +85,38 @@ func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
 		t.Fatalf("planning status = %#v", status)
 	}
 }
+
+func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	created, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.StartPlanning(ctx, PlanStartInput{ProjectID: "PROJECT-001", Concurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.ConsolidatePlanning(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.TaskGroups) != 1 || result.TaskGroups[0].FeatureRequestID == nil || *result.TaskGroups[0].FeatureRequestID != created.FeatureRequest.ID {
+		t.Fatalf("task groups = %#v", result.TaskGroups)
+	}
+	if result.TaskGroups[0].Status != "proposed" || result.TaskGroups[0].PlanningUnit != "feature_chunk" {
+		t.Fatalf("task group = %#v", result.TaskGroups[0])
+	}
+	if len(result.AcceptedArtifacts) != 1 || result.AcceptedArtifacts[0].Status != "accepted" {
+		t.Fatalf("accepted artifacts = %#v", result.AcceptedArtifacts)
+	}
+
+	second, err := db.ConsolidatePlanning(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.TaskGroups) != 0 {
+		t.Fatalf("second consolidation should be empty: %#v", second)
+	}
+}

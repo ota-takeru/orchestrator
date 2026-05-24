@@ -144,6 +144,13 @@ func TestPlanStartCLIWorkflow(t *testing.T) {
 	if len(status.Runs) != 1 || len(status.Artifacts) != 1 {
 		t.Fatalf("planning status = %#v", status)
 	}
+
+	consolidateOut := runCLI(t, "plan", "consolidate", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var consolidated storage.PlanConsolidateResult
+	decodeJSON(t, consolidateOut, &consolidated)
+	if len(consolidated.TaskGroups) != 1 || consolidated.TaskGroups[0].Status != "proposed" {
+		t.Fatalf("consolidated = %#v", consolidated)
+	}
 }
 
 func TestReviewRejectCLI(t *testing.T) {

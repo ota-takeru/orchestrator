@@ -521,6 +521,8 @@ func runPlan(ctx context.Context, args []string, stdout io.Writer) int {
 			return runPlanStart(ctx, args[1:], stdout)
 		case "status":
 			return runPlanStatus(ctx, args[1:], stdout)
+		case "consolidate":
+			return runPlanConsolidate(ctx, args[1:], stdout)
 		}
 	}
 
@@ -618,6 +620,37 @@ func runPlanStatus(ctx context.Context, args []string, stdout io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Planning runs: %d\n", len(status.Runs))
 	fmt.Fprintf(stdout, "Planning artifacts: %d\n", len(status.Artifacts))
+	return 0
+}
+
+func runPlanConsolidate(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("plan consolidate", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "plan_consolidate_failed", err)
+	}
+	defer db.Close()
+	result, err := db.ConsolidatePlanning(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "plan_consolidate_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	if len(result.TaskGroups) == 0 {
+		fmt.Fprintln(stdout, "No planning artifacts to consolidate.")
+		return 0
+	}
+	for _, group := range result.TaskGroups {
+		fmt.Fprintf(stdout, "Task group proposed: %s %s\n", group.ID, group.Title)
+	}
 	return 0
 }
 
@@ -2025,6 +2058,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos plan [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan start [--project-root PATH] [--data-root PATH] [--concurrency N] [--json]")
 	fmt.Fprintln(w, "  devos plan status [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos plan consolidate [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")

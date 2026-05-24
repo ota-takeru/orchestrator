@@ -55,8 +55,29 @@ type PlanningStatus struct {
 	Queue     []WorkQueueItemRecord    `json:"queue"`
 }
 
+type TaskGroupRecord struct {
+	ID               string  `json:"id"`
+	FeatureRequestID *string `json:"feature_request_id,omitempty"`
+	ChangeRequestID  *string `json:"change_request_id,omitempty"`
+	Status           string  `json:"status"`
+	Title            string  `json:"title"`
+	PlanningUnit     string  `json:"planning_unit"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
+}
+
+type PlanConsolidateResult struct {
+	TaskGroups        []TaskGroupRecord        `json:"task_groups"`
+	AcceptedArtifacts []PlanningArtifactRecord `json:"accepted_artifacts"`
+}
+
 type planningQueueCandidate struct {
 	QueueItem      WorkQueueItemRecord
+	FeatureRequest FeatureRequestRecord
+}
+
+type planningConsolidationCandidate struct {
+	Artifact       PlanningArtifactRecord
 	FeatureRequest FeatureRequestRecord
 }
 
@@ -106,6 +127,29 @@ func (db *DB) GetPlanningStatus(ctx context.Context, projectID string) (Planning
 		return PlanningStatus{}, err
 	}
 	return PlanningStatus{Runs: runs, Artifacts: artifacts, Queue: queue}, nil
+}
+
+func (db *DB) ConsolidatePlanning(ctx context.Context, projectID string) (PlanConsolidateResult, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return PlanConsolidateResult{}, fmt.Errorf("project id is required")
+	}
+	candidates, err := db.listPlanningConsolidationCandidates(ctx, projectID)
+	if err != nil {
+		return PlanConsolidateResult{}, err
+	}
+	result := PlanConsolidateResult{
+		TaskGroups:        make([]TaskGroupRecord, 0, len(candidates)),
+		AcceptedArtifacts: make([]PlanningArtifactRecord, 0, len(candidates)),
+	}
+	for _, candidate := range candidates {
+		group, artifact, err := db.consolidatePlanningArtifact(ctx, projectID, candidate)
+		if err != nil {
+			return PlanConsolidateResult{}, err
+		}
+		result.TaskGroups = append(result.TaskGroups, group)
+		result.AcceptedArtifacts = append(result.AcceptedArtifacts, artifact)
+	}
+	return result, nil
 }
 
 func (db *DB) ListPlanningRuns(ctx context.Context, projectID string) ([]PlanningRunRecord, error) {
@@ -180,6 +224,34 @@ LIMIT ?`, projectID, limit)
 			return nil, err
 		}
 		candidates = append(candidates, planningQueueCandidate{QueueItem: queueItem, FeatureRequest: featureRequest})
+	}
+	return candidates, rows.Err()
+}
+
+func (db *DB) listPlanningConsolidationCandidates(ctx context.Context, projectID string) ([]planningConsolidationCandidate, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT pa.id, pa.planning_run_id, pa.feature_request_id, pa.artifact_type, pa.status,
+       pa.path, pa.content_hash, pa.artifact_snapshot_json, pa.created_at, pa.updated_at,
+       fr.id, fr.status, fr.title, fr.description, fr.source, fr.priority,
+       fr.change_request_id, fr.task_group_id, fr.created_at, fr.updated_at, fr.resolved_at
+FROM planning_artifacts pa
+JOIN feature_requests fr ON fr.project_id = pa.project_id AND fr.id = pa.feature_request_id
+WHERE pa.project_id = ?
+  AND pa.artifact_type = 'feature_detail_report'
+  AND pa.status = 'proposed'
+  AND fr.task_group_id IS NULL
+ORDER BY pa.created_at ASC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var candidates []planningConsolidationCandidate
+	for rows.Next() {
+		artifact, request, err := scanPlanningConsolidationCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, planningConsolidationCandidate{Artifact: artifact, FeatureRequest: request})
 	}
 	return candidates, rows.Err()
 }
@@ -339,6 +411,71 @@ WHERE project_id = ? AND id = ?`,
 		}, nil
 }
 
+func (db *DB) consolidatePlanningArtifact(ctx context.Context, projectID string, candidate planningConsolidationCandidate) (TaskGroupRecord, PlanningArtifactRecord, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	groupID := "TG-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|feature_chunk")
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO task_groups(
+  id, project_id, feature_request_id, status, title,
+  change_request_id, planning_unit, created_at, updated_at
+) VALUES (?, ?, ?, 'proposed', ?, NULL, 'feature_chunk', ?, ?)`,
+		groupID, projectID, candidate.FeatureRequest.ID, candidate.FeatureRequest.Title, now, now,
+	); err != nil {
+		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE feature_requests
+SET task_group_id = ?, status = 'planned', updated_at = ?
+WHERE project_id = ? AND id = ? AND task_group_id IS NULL`,
+		groupID, now, projectID, candidate.FeatureRequest.ID,
+	); err != nil {
+		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE planning_artifacts
+SET status = 'accepted', updated_at = ?
+WHERE project_id = ? AND id = ? AND status = 'proposed'`,
+		now, projectID, candidate.Artifact.ID,
+	); err != nil {
+		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "planning_consolidated", map[string]any{
+		"task_group_id":        groupID,
+		"planning_artifact_id": candidate.Artifact.ID,
+		"feature_request_id":   candidate.FeatureRequest.ID,
+	}, now); err != nil {
+		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return TaskGroupRecord{}, PlanningArtifactRecord{}, err
+	}
+	committed = true
+
+	featureRequestID := candidate.FeatureRequest.ID
+	acceptedArtifact := candidate.Artifact
+	acceptedArtifact.Status = "accepted"
+	acceptedArtifact.UpdatedAt = now
+	return TaskGroupRecord{
+		ID:               groupID,
+		FeatureRequestID: &featureRequestID,
+		Status:           "proposed",
+		Title:            candidate.FeatureRequest.Title,
+		PlanningUnit:     "feature_chunk",
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}, acceptedArtifact, nil
+}
+
 func (db *DB) writePlanningArtifactFile(relPath string, content []byte) error {
 	path := filepath.Join(db.DataRoot(), filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -403,6 +540,53 @@ func scanPlanningCandidate(scanner interface {
 		request.ResolvedAt = resolvedAt.String
 	}
 	return queue, request, nil
+}
+
+func scanPlanningConsolidationCandidate(scanner interface {
+	Scan(dest ...any) error
+}) (PlanningArtifactRecord, FeatureRequestRecord, error) {
+	var artifact PlanningArtifactRecord
+	var request FeatureRequestRecord
+	var artifactFeatureRequestID sql.NullString
+	var changeRequestID, taskGroupID, resolvedAt sql.NullString
+	if err := scanner.Scan(
+		&artifact.ID,
+		&artifact.PlanningRunID,
+		&artifactFeatureRequestID,
+		&artifact.ArtifactType,
+		&artifact.Status,
+		&artifact.Path,
+		&artifact.ContentHash,
+		&artifact.ArtifactSnapshotJSON,
+		&artifact.CreatedAt,
+		&artifact.UpdatedAt,
+		&request.ID,
+		&request.Status,
+		&request.Title,
+		&request.Description,
+		&request.Source,
+		&request.Priority,
+		&changeRequestID,
+		&taskGroupID,
+		&request.CreatedAt,
+		&request.UpdatedAt,
+		&resolvedAt,
+	); err != nil {
+		return PlanningArtifactRecord{}, FeatureRequestRecord{}, err
+	}
+	if artifactFeatureRequestID.Valid {
+		artifact.FeatureRequestID = &artifactFeatureRequestID.String
+	}
+	if changeRequestID.Valid {
+		request.ChangeRequestID = &changeRequestID.String
+	}
+	if taskGroupID.Valid {
+		request.TaskGroupID = &taskGroupID.String
+	}
+	if resolvedAt.Valid {
+		request.ResolvedAt = resolvedAt.String
+	}
+	return artifact, request, nil
 }
 
 func scanPlanningRun(scanner interface {

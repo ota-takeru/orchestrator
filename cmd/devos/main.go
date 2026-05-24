@@ -51,6 +51,12 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runArtifacts(ctx, args[1:], stdout, stderr)
 	case "tasks":
 		return runTasks(ctx, args[1:], stdout, stderr)
+	case "request":
+		return runRequest(ctx, args[1:], stdout)
+	case "requests":
+		return runRequests(ctx, args[1:], stdout)
+	case "queue":
+		return runQueue(ctx, args[1:], stdout)
 	case "run":
 		return runTaskCommand(ctx, args[1:], stdout)
 	case "verify":
@@ -380,6 +386,100 @@ func runTasks(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 	for _, task := range tasks {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", task.ID, task.Status, task.Title)
+	}
+	return 0
+}
+
+func runRequest(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("request", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	body := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if body == "" {
+		return writeError(stdout, *jsonOut, exitValidation, "request_failed", errors.New("request text is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "request_failed", err)
+	}
+	defer db.Close()
+	result, err := db.CreateFeatureRequest(ctx, projectID, body)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "request_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Feature request queued: %s\n", result.FeatureRequest.ID)
+	fmt.Fprintf(stdout, "Work queue item: %s %s\n", result.QueueItem.ID, result.QueueItem.Lane)
+	return 0
+}
+
+func runRequests(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("requests", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	status := fs.String("status", "", "feature request status")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "requests_failed", err)
+	}
+	defer db.Close()
+	requests, err := db.ListFeatureRequests(ctx, projectID, *status)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "requests_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"feature_requests": requests}, 0)
+	}
+	if len(requests) == 0 {
+		fmt.Fprintln(stdout, "No feature requests.")
+		return 0
+	}
+	for _, request := range requests {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", request.ID, request.Status, request.Title)
+	}
+	return 0
+}
+
+func runQueue(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("queue", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	status := fs.String("status", "", "queue item status")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "queue_failed", err)
+	}
+	defer db.Close()
+	items, err := db.ListWorkQueueItems(ctx, projectID, *status)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "queue_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"items": items}, 0)
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(stdout, "No queue items.")
+		return 0
+	}
+	for _, item := range items {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.Status, item.Lane, item.ItemType, item.ItemID)
 	}
 	return 0
 }
@@ -1860,6 +1960,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos request [--project-root PATH] [--data-root PATH] [--json] TEXT")
+	fmt.Fprintln(w, "  devos requests [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos queue [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos run [--project-root PATH] [--data-root PATH] [--adapter fake|real-codex] [--real-codex] [--verify] [--verify-adapter local|fake] [--verify-env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos verify [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--env ENV_ID] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")

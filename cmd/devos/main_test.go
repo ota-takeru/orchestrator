@@ -89,6 +89,41 @@ func TestArtifactsListCLI(t *testing.T) {
 	}
 }
 
+func TestRequestQueueCLIWorkflow(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Request queue workflow")
+	out := runCLI(t, "request", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Today Viewを追加して")
+	var created storage.FeatureRequestCreateResult
+	decodeJSON(t, out, &created)
+	if created.FeatureRequest.ID == "" || created.FeatureRequest.Status != "queued" {
+		t.Fatalf("feature request = %#v", created.FeatureRequest)
+	}
+	if created.QueueItem.ItemType != "feature_request_analysis" || created.QueueItem.ItemID != created.FeatureRequest.ID {
+		t.Fatalf("queue item = %#v", created.QueueItem)
+	}
+
+	requestsOut := runCLI(t, "requests", "--project-root", projectRoot, "--data-root", dataRoot, "--status", "queued", "--json")
+	var requests struct {
+		FeatureRequests []storage.FeatureRequestRecord `json:"feature_requests"`
+	}
+	decodeJSON(t, requestsOut, &requests)
+	if len(requests.FeatureRequests) != 1 || requests.FeatureRequests[0].ID != created.FeatureRequest.ID {
+		t.Fatalf("feature requests = %#v", requests.FeatureRequests)
+	}
+
+	queueOut := runCLI(t, "queue", "--project-root", projectRoot, "--data-root", dataRoot, "--status", "queued", "--json")
+	var queue struct {
+		Items []storage.WorkQueueItemRecord `json:"items"`
+	}
+	decodeJSON(t, queueOut, &queue)
+	if len(queue.Items) != 1 || queue.Items[0].ID != created.QueueItem.ID {
+		t.Fatalf("queue = %#v", queue.Items)
+	}
+}
+
 func TestReviewRejectCLI(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

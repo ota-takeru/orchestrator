@@ -35,8 +35,19 @@
 | Styling | Tailwind |
 | Components | shadcn/ui style components |
 | API client | Go API over local HTTP |
+| Package manager | pnpm pinned by `ui/package.json` `packageManager`, invoked through Corepack |
 
 UIは状態の表示と人間の判断操作に集中します。ワークフローの正規状態、Decision Gate、Codex実行、diff保存はGoバックエンド側で管理します。
+
+UIの検証では、グローバルに `pnpm` executableがPATH上へ直接置かれていることを前提にしません。Node.jsに同梱または別途有効化されたCorepackを使い、`ui/package.json` の `packageManager` に固定されたpnpm versionを実行します。
+
+```text
+corepack pnpm --dir ui test
+corepack pnpm --dir ui lint
+corepack pnpm --dir ui build
+```
+
+`pnpm --dir ui ...` は、環境側でpnpm shimが明示的に有効な場合だけ使ってよい省略形です。正規の検証手順とToolchain Doctorの前提は `node` と `corepack` です。
 
 ## Repository Shape
 
@@ -71,9 +82,9 @@ projects/
 
 ```text
 go test ./...
-pnpm --dir ui test
-pnpm --dir ui lint
-pnpm --dir ui build
+corepack pnpm --dir ui test
+corepack pnpm --dir ui lint
+corepack pnpm --dir ui build
 ```
 
 ## Boundary

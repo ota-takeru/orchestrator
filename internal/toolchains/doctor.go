@@ -49,6 +49,7 @@ type Report struct {
 
 type Options struct {
 	IncludeCodex bool
+	IncludeUI    bool
 	LookupPath   func(file string) (string, error)
 	LookupEnv    func(key string) (string, bool)
 	FileExists   func(path string) bool
@@ -77,6 +78,10 @@ func RunDoctor(ctx context.Context, env platform.ExecutionEnvironment, opts Opti
 	report := Report{EnvironmentID: env.ID}
 	report.Requirements = append(report.Requirements, checkExecutable(lookup, "git", executableForGit(env), RequiredForImplementation, true))
 	report.Requirements = append(report.Requirements, checkExecutable(lookup, string(env.Shell), executableForShell(env), RequiredForVerification, true))
+	if opts.IncludeUI {
+		report.Requirements = append(report.Requirements, checkExecutable(lookup, "node", "node", RequiredForVerification, true))
+		report.Requirements = append(report.Requirements, checkExecutable(lookup, "corepack", "corepack", RequiredForVerification, true))
+	}
 
 	if env.OSFamily == platform.OSFamilyWSL {
 		report.Requirements = append(report.Requirements, checkWSL2(readFile))

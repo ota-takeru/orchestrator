@@ -2,7 +2,7 @@
 
 ## Goal
 
-Toolchain Requirementsは、Git、PowerShell、dotnet、MSBuild、Windows SDK、bash、bubblewrap、Codex CLI / Codex authなど、実行環境で必要なローカルツールを検出し、人間のセットアップ作業へつなぐための仕様です。
+Toolchain Requirementsは、Git、PowerShell、dotnet、MSBuild、Windows SDK、bash、bubblewrap、Node.js / Corepack、Codex CLI / Codex authなど、実行環境で必要なローカルツールを検出し、人間のセットアップ作業へつなぐための仕様です。
 
 ## Difference from Environment Variables
 
@@ -15,7 +15,7 @@ secretやruntime設定。人間が値を入力する。
 Toolchain Requirements:
 
 ```text
-Git、PowerShell、dotnet、MSBuild、Windows SDK、bash、bubblewrap、Codex CLI / Codex authなど。
+Git、PowerShell、dotnet、MSBuild、Windows SDK、bash、bubblewrap、Node.js / Corepack、Codex CLI / Codex authなど。
 値入力ではなく、人間のセットアップやpreflight確認が必要。
 ```
 
@@ -83,6 +83,7 @@ Platform Doctorはexecution environmentごとにtoolchain、path、Git、sandbox
 - environment-specific `CODEX_HOME` のauthが存在する
 - WSL adapterではWSL2である
 - sandbox profileが利用可能
+- UI検証が必要な場合、Node.jsとCorepackが利用可能
 - required toolchain versionが満たされる
 - `.gitattributes` が存在しline ending policyを持つ
 - `core.autocrlf` / `core.filemode` がproject方針と矛盾しない
@@ -120,6 +121,27 @@ Windows-specific setupでadmin elevation、Visual Studio workload install、Deve
 - language-specific tools: Go, Node, Python, Rust, etc.
 
 WSLでCodexを使う場合はWSL2を前提にします。WSL1を検出した場合、Codex WSL adapterをreadyにしてはいけません。
+
+## UI Toolchains
+
+このリポジトリのUIはReact / TypeScript / Vite / Tailwindで、package managerは `ui/package.json` の `packageManager` に固定されたpnpmです。ただし、正規の前提はグローバル `pnpm` executableではなくCorepackです。
+
+正規のUI検証コマンド:
+
+```text
+corepack pnpm --dir ui test
+corepack pnpm --dir ui lint
+corepack pnpm --dir ui build
+```
+
+Toolchain DoctorでUI検証前提を確認する場合は `devos platform doctor --include-ui` を使います。`--include-ui` は少なくとも次をToolchainRequirementとして扱います。
+
+- `node`: Node.js executable。UIのTypeScript/Vite実行に必要。
+- `corepack`: `ui/package.json` の `packageManager` に固定されたpnpmを実行するために必要。
+
+`pnpm --dir ui ...` は、Corepackのshimまたは手動インストールでpnpmがPATH上にある環境だけの省略形です。CI、ドキュメント、Orchestratorの検証証跡では `corepack pnpm --dir ui ...` を優先します。
+
+UI toolchainが不足している場合はEnvironment InputではなくToolchain Setup Cardとして扱います。自動でNode.js、Corepack、pnpmをインストールしてはいけません。
 
 ## Codex Auth Requirement
 

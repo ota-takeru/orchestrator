@@ -82,6 +82,60 @@ func TestFakeBootstrapDoesNotRequireCodexAuth(t *testing.T) {
 	}
 }
 
+func TestDoctorIncludesUIToolchainsWhenRequested(t *testing.T) {
+	env := platform.ExecutionEnvironment{
+		ID:             "linux-main",
+		OSFamily:       platform.OSFamilyLinux,
+		Shell:          platform.ShellBash,
+		GitProvider:    platform.GitProviderLinux,
+		CodexAdapter:   platform.CodexAdapterLinux,
+		SandboxProfile: platform.SandboxNone,
+	}
+	report := RunDoctor(context.Background(), env, Options{
+		IncludeUI: true,
+		LookupPath: func(file string) (string, error) {
+			switch file {
+			case "git", "bash", "node", "corepack":
+				return "/usr/bin/" + file, nil
+			default:
+				return "", errors.New("not found")
+			}
+		},
+	})
+
+	for _, key := range []string{"node", "corepack"} {
+		req := requirementByKey(report, key)
+		if req.Status != StatusDetected || req.RequiredFor != RequiredForVerification || !req.RequiredForMerge {
+			t.Fatalf("%s requirement = %#v", key, req)
+		}
+	}
+}
+
+func TestDoctorOmitsUIToolchainsByDefault(t *testing.T) {
+	env := platform.ExecutionEnvironment{
+		ID:             "linux-main",
+		OSFamily:       platform.OSFamilyLinux,
+		Shell:          platform.ShellBash,
+		GitProvider:    platform.GitProviderLinux,
+		CodexAdapter:   platform.CodexAdapterLinux,
+		SandboxProfile: platform.SandboxNone,
+	}
+	report := RunDoctor(context.Background(), env, Options{
+		LookupPath: func(file string) (string, error) {
+			if file == "git" || file == "bash" {
+				return "/usr/bin/" + file, nil
+			}
+			return "", errors.New("not found")
+		},
+	})
+
+	for _, req := range report.Requirements {
+		if req.ToolchainKey == "node" || req.ToolchainKey == "corepack" {
+			t.Fatalf("%s requirement should not be emitted when IncludeUI=false", req.ToolchainKey)
+		}
+	}
+}
+
 func TestDoctorDetectsEnvironmentSpecificCodexAuth(t *testing.T) {
 	env := platform.ExecutionEnvironment{
 		ID:             "wsl-main",

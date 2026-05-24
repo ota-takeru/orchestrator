@@ -2430,6 +2430,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 		dataRoot := fs.String("data-root", "", "orchestrator data root")
 		envID := fs.String("env", "", "execution environment id")
 		includeCodex := fs.Bool("include-codex", false, "include real Codex adapter preflight")
+		includeUI := fs.Bool("include-ui", false, "include UI toolchain preflight")
 		save := fs.Bool("save", false, "save toolchain requirements and setup cards")
 		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -2468,7 +2469,7 @@ func runPlatform(ctx context.Context, args []string, stdout io.Writer, stderr io
 				return writeError(stdout, *jsonOut, exitValidation, "platform_doctor_failed", fmt.Errorf("execution environment not found: %s", *envID))
 			}
 		}
-		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: *includeCodex})
+		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: *includeCodex, IncludeUI: *includeUI})
 		if *save {
 			if err := db.SaveToolchainReport(ctx, projectID, report); err != nil {
 				return writeError(stdout, *jsonOut, exitStorage, "platform_doctor_save_failed", err)

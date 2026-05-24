@@ -4,7 +4,7 @@ Personal Dev OS は、ユーザーのコンセプトからPRD、設計、ロー�
 
 このリポジトリで作るものは、AIコーディングエージェントそのものではありません。Codex CLI / SDK のような既存のコーディングエンジンを安全に使い、タスク、状態、承認、記録、差分、テスト結果、失敗分類、修復、再計画、変更要求を管理するローカル司令塔です。
 
-バックエンドはGo、UIはReactで実装します。
+バックエンドはGo、UIはReactで実装します。UI package managerは `ui/package.json` の `packageManager` に固定されたpnpmをCorepack経由で使います。
 
 このOrchestratorは、Windows / WSL 両対応の単一製品です。Core workflow、状態機械、DB schema、CLI UXは共有し、OS固有の振る舞いはrunner / platform adapterで扱います。各projectは必ず `primary_environment` を定義し、Windows-primaryとWSL-primaryの両方をサポートします。Hybrid modeもサポートしますが、Git / merge のcanonical environmentは常に1つに固定します。
 
@@ -80,4 +80,15 @@ Local Web UI / CLI
 
 ## Current Status
 
-このリポジトリは設計・ドキュメント整備段階です。artifact model、状態管理、report schema、CLI、Codex実行層、自動修復、Human Inboxの順で実装します。各段階は完了条件を満たすまで完了扱いせず、初回リリースは縦断ワークフローが最後まで通ることを基準にします。
+このリポジトリは、Fake adapterでの縦断ワークフロー、SQLite状態管理、Human Inbox、Decision Gate、Merge Queue、Real Codex adapterの基礎実装まで進んでいます。進捗の正は [docs/progress.md](docs/progress.md) を確認してください。
+
+## Local Verification
+
+```text
+go test ./...
+corepack pnpm --dir ui test
+corepack pnpm --dir ui lint
+corepack pnpm --dir ui build
+```
+
+`pnpm --dir ui ...` はpnpm shimがPATHにある環境だけの省略形です。標準手順ではCorepackを使います。

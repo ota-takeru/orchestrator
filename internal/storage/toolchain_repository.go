@@ -445,6 +445,18 @@ func setupInstructionsFor(osFamily platform.OSFamily, toolchainKey string) []str
 			"Do not run package manager commands through DevOS; perform setup manually.",
 			"Rerun platform doctor with --save after setup.",
 		}
+	case "node":
+		return []string{
+			"Install Node.js manually for this execution environment.",
+			"Make node available on PATH for the configured shell.",
+			"Rerun platform doctor with --include-ui --save after setup.",
+		}
+	case "corepack":
+		return []string{
+			"Install or enable Corepack for the Node.js runtime in this execution environment.",
+			"Use Corepack to run the repository-pinned pnpm version, for example: corepack pnpm --dir ui test.",
+			"Rerun platform doctor with --include-ui --save after setup.",
+		}
 	case "wsl2":
 		return []string{
 			"Upgrade or recreate this Linux environment as WSL2 before using the Codex WSL adapter.",

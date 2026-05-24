@@ -166,7 +166,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos platform set-primary` | `ENV_ID` | projectのprimary_environment変更 | 未解決runやopen worktreeがある場合は拒否 |
 | `devos platform profile list` | `--json` | なし | read-only |
 | `devos platform profile set` | `windows-primary|wsl-primary|hybrid` | canonical_operationsを含むproject_run_profileをactive/default化 | profile snapshotが同じならno-op |
-| `devos platform doctor` | `--env ENV_ID`, `--save`, `--json` | toolchain_requirements検査、setup card projection | 同じ検査結果ならno-op |
+| `devos platform doctor` | `--env ENV_ID`, `--include-codex`, `--include-ui`, `--save`, `--json` | toolchain_requirements検査、setup card projection | 同じ検査結果ならno-op |
 | `devos platform map add` | `FROM_ENV`, `TO_ENV`, `--from-root`, `--to-root`, `--mode` | path_mappings作成 | validation failureなら保存しない |
 | `devos platform setup instructions` | `INBOX_ID`, `--json` | Toolchain Setup Cardの手動セットアップ手順表示 | 自動インストールはしない |
 | `devos platform setup mark-installed` | `INBOX_ID`, `--json` | doctor再実行、toolchain_requirements / setup card同期 | doctorが検出した場合だけresolved |
@@ -182,6 +182,7 @@ platform command details:
 - `devos platform set-primary` はprojectのprimary_environmentを変更する。未解決runやopen worktreeがある場合は拒否する。
 - `devos platform profile set` はcanonical_operationsを含むproject_run_profileをactive/defaultにする。
 - `devos platform doctor` はtoolchain_requirementsを検査し、missing/setup_requiredをHuman Inboxへ投影する。
+- `devos platform doctor --include-ui` はUI検証用のNode.js / Corepackを検査する。pnpmは `ui/package.json` の `packageManager` をCorepack経由で実行するため、正規検証コマンドは `corepack pnpm --dir ui test` / `lint` / `build` とする。
 - `devos platform map add` はpath_mappingsを作成する。mapping後のpath validationを通らない場合は保存しない。
 
 ```text

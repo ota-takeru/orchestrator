@@ -12,7 +12,7 @@ func TestInstallAndValidateSchemaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.CreatedPaths) != 4 {
+	if len(result.CreatedPaths) != 5 {
 		t.Fatalf("created paths = %#v", result.CreatedPaths)
 	}
 	validation := ValidateInstalled(root)
@@ -57,5 +57,31 @@ func TestValidateSemanticBehaviorDiff(t *testing.T) {
 	}
 	if err := ValidateSemanticBehaviorDiff(`[]`); err == nil {
 		t.Fatal("expected empty diff report to fail")
+	}
+}
+
+func TestValidateDependencyRiskLedgerEntry(t *testing.T) {
+	valid := `{
+	  "id":"DEPRISK-ABC123",
+	  "project_id":"PROJECT-001",
+	  "name":"zod",
+	  "package_manager":"npm",
+	  "dependency_type":"production",
+	  "reason":"Runtime schema validation",
+	  "risk":"medium",
+	  "lockfile_changed":true,
+	  "lifecycle_scripts":"unknown",
+	  "approved_scope":"project",
+	  "created_at":"2026-05-24T00:00:00Z",
+	  "updated_at":"2026-05-24T00:00:00Z"
+	}`
+	if err := ValidateDependencyRiskLedgerEntry(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateDependencyRiskLedgerEntry(`{"id":"DEPRISK-ABC123","project_id":"PROJECT-001","name":"zod","package_manager":"npm","dependency_type":"blocks_merge","reason":"bad","risk":"medium","lockfile_changed":true,"lifecycle_scripts":"unknown","approved_scope":"project","created_at":"now","updated_at":"now"}`); err == nil {
+		t.Fatal("expected invalid ledger dependency type to fail")
+	}
+	if err := ValidateDependencyRiskLedgerEntry(`not json`); err == nil {
+		t.Fatal("expected non-json ledger entry to fail")
 	}
 }

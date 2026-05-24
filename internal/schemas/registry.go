@@ -18,6 +18,7 @@ const (
 	SchemaKindTaskYAML          SchemaKind = "task_yaml"
 	SchemaKindCodexFinalMessage SchemaKind = "codex_final_message"
 	SchemaKindSemanticDiff      SchemaKind = "semantic_behavior_diff"
+	SchemaKindDependencyRisk    SchemaKind = "dependency_risk_ledger"
 )
 
 type Definition struct {
@@ -79,6 +80,13 @@ func Definitions() []Definition {
 			Version: "1",
 			File:    "semantic-behavior-diff.v1.schema.json",
 			Content: []byte(semanticBehaviorDiffSchema),
+		},
+		{
+			ID:      "devos.dependency-risk-ledger",
+			Kind:    SchemaKindDependencyRisk,
+			Version: "1",
+			File:    "dependency-risk-ledger.v1.schema.json",
+			Content: []byte(dependencyRiskLedgerSchema),
 		},
 	}
 }
@@ -179,6 +187,84 @@ func ValidateSemanticBehaviorDiff(raw string) error {
 				return fmt.Errorf("semantic behavior diff item %d evidence %d requires source", i, j)
 			}
 		}
+	}
+	return nil
+}
+
+type DependencyRiskLedgerEntry struct {
+	ID                 string `json:"id"`
+	ProjectID          string `json:"project_id"`
+	Name               string `json:"name"`
+	PackageManager     string `json:"package_manager"`
+	DependencyType     string `json:"dependency_type"`
+	IntroducedByTaskID string `json:"introduced_by_task_id,omitempty"`
+	IntroducedByRunID  string `json:"introduced_by_run_id,omitempty"`
+	DecisionID         string `json:"decision_id,omitempty"`
+	Reason             string `json:"reason"`
+	ApprovedBy         string `json:"approved_by,omitempty"`
+	Risk               string `json:"risk"`
+	LockfileChanged    bool   `json:"lockfile_changed"`
+	LifecycleScripts   string `json:"lifecycle_scripts"`
+	CurrentVersion     string `json:"current_version,omitempty"`
+	ApprovedScope      string `json:"approved_scope"`
+	ExpiresAt          string `json:"expires_at,omitempty"`
+	CreatedAt          string `json:"created_at"`
+	UpdatedAt          string `json:"updated_at"`
+}
+
+func DependencyRiskLedgerSchema() []byte {
+	return []byte(dependencyRiskLedgerSchema)
+}
+
+func ValidateDependencyRiskLedgerEntry(raw string) error {
+	var entry DependencyRiskLedgerEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		return fmt.Errorf("dependency risk ledger entry must be JSON: %w", err)
+	}
+	for _, required := range []struct {
+		field string
+		value string
+	}{
+		{"id", entry.ID},
+		{"project_id", entry.ProjectID},
+		{"name", entry.Name},
+		{"package_manager", entry.PackageManager},
+		{"dependency_type", entry.DependencyType},
+		{"reason", entry.Reason},
+		{"risk", entry.Risk},
+		{"lifecycle_scripts", entry.LifecycleScripts},
+		{"approved_scope", entry.ApprovedScope},
+		{"created_at", entry.CreatedAt},
+		{"updated_at", entry.UpdatedAt},
+	} {
+		if strings.TrimSpace(required.value) == "" {
+			return fmt.Errorf("dependency risk ledger entry requires %s", required.field)
+		}
+	}
+	switch entry.PackageManager {
+	case "go", "npm", "pnpm", "yarn", "cargo", "other":
+	default:
+		return fmt.Errorf("dependency risk ledger entry has invalid package manager: %s", entry.PackageManager)
+	}
+	switch entry.DependencyType {
+	case "production", "development", "tool":
+	default:
+		return fmt.Errorf("dependency risk ledger entry has invalid dependency type: %s", entry.DependencyType)
+	}
+	switch entry.Risk {
+	case "low", "medium", "high", "critical":
+	default:
+		return fmt.Errorf("dependency risk ledger entry has invalid risk: %s", entry.Risk)
+	}
+	switch entry.LifecycleScripts {
+	case "none_detected", "detected", "unknown":
+	default:
+		return fmt.Errorf("dependency risk ledger entry has invalid lifecycle scripts: %s", entry.LifecycleScripts)
+	}
+	switch entry.ApprovedScope {
+	case "project", "task", "one_time", "dependency_family":
+	default:
+		return fmt.Errorf("dependency risk ledger entry has invalid approved scope: %s", entry.ApprovedScope)
 	}
 	return nil
 }
@@ -428,5 +514,34 @@ const semanticBehaviorDiffSchema = `{
         }
       }
     }
+  }
+}`
+
+const dependencyRiskLedgerSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devos.dependency-risk-ledger.v1",
+  "title": "DevOS Dependency Risk Ledger Entry",
+  "type": "object",
+  "required": ["id", "project_id", "name", "package_manager", "dependency_type", "reason", "risk", "lockfile_changed", "lifecycle_scripts", "approved_scope", "created_at", "updated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^DEPRISK-[A-Z0-9]+$" },
+    "project_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "package_manager": { "type": "string", "enum": ["go", "npm", "pnpm", "yarn", "cargo", "other"] },
+    "dependency_type": { "type": "string", "enum": ["production", "development", "tool"] },
+    "introduced_by_task_id": { "type": "string" },
+    "introduced_by_run_id": { "type": "string" },
+    "decision_id": { "type": "string" },
+    "reason": { "type": "string", "minLength": 1 },
+    "approved_by": { "type": "string" },
+    "risk": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "lockfile_changed": { "type": "boolean" },
+    "lifecycle_scripts": { "type": "string", "enum": ["none_detected", "detected", "unknown"] },
+    "current_version": { "type": "string" },
+    "approved_scope": { "type": "string", "enum": ["project", "task", "one_time", "dependency_family"] },
+    "expires_at": { "type": "string" },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 }
   }
 }`

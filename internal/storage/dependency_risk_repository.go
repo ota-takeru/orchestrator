@@ -3,9 +3,12 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 )
 
 type DependencyRiskRecord struct {
@@ -70,6 +73,13 @@ func (db *DB) RecordDependencyRisk(ctx context.Context, input DependencyRiskInpu
 	}, "|"))
 	record.CreatedAt = now
 	record.UpdatedAt = now
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return DependencyRiskRecord{}, err
+	}
+	if err := schemas.ValidateDependencyRiskLedgerEntry(string(payload)); err != nil {
+		return DependencyRiskRecord{}, err
+	}
 
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {

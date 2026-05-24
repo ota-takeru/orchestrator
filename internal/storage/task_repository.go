@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var taskYAMLIDPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_-]*-[A-Z0-9_-]+$`)
 
 type TaskRecord struct {
 	ID                   string                    `json:"id"`
@@ -214,10 +217,50 @@ func parseGeneratedTaskYAML(path string) (parsedTaskYAML, error) {
 		return parsedTaskYAML{}, err
 	}
 	task.VerificationCommands = parseVerificationCommandsYAML(lines)
-	if task.ID == "" || task.Title == "" {
-		return parsedTaskYAML{}, fmt.Errorf("task yaml requires id and title")
+	if err := validateParsedTaskYAML(task); err != nil {
+		return parsedTaskYAML{}, err
 	}
 	return task, nil
+}
+
+func validateParsedTaskYAML(task parsedTaskYAML) error {
+	if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.Title) == "" {
+		return fmt.Errorf("task yaml requires id and title")
+	}
+	if !taskYAMLIDPattern.MatchString(task.ID) {
+		return fmt.Errorf("task yaml id is invalid: %s", task.ID)
+	}
+	if strings.TrimSpace(task.BaseBranch) == "" {
+		return fmt.Errorf("task yaml requires base_branch")
+	}
+	seenCommands := map[string]struct{}{}
+	for i, command := range task.VerificationCommands {
+		if strings.TrimSpace(command.ID) == "" {
+			return fmt.Errorf("verification command %d requires id", i)
+		}
+		if _, ok := seenCommands[command.ID]; ok {
+			return fmt.Errorf("verification command id is duplicated: %s", command.ID)
+		}
+		seenCommands[command.ID] = struct{}{}
+		if strings.TrimSpace(command.Environment) == "" {
+			return fmt.Errorf("verification command %s requires environment", command.ID)
+		}
+		if strings.TrimSpace(command.Runner) == "" {
+			return fmt.Errorf("verification command %s requires runner", command.ID)
+		}
+		if strings.TrimSpace(command.WorkingDir) == "" {
+			return fmt.Errorf("verification command %s requires working_dir", command.ID)
+		}
+		if len(command.Command.Argv) == 0 {
+			return fmt.Errorf("verification command %s requires command.argv", command.ID)
+		}
+		for _, arg := range command.Command.Argv {
+			if strings.TrimSpace(arg) == "" {
+				return fmt.Errorf("verification command %s contains empty argv item", command.ID)
+			}
+		}
+	}
+	return nil
 }
 
 func parseVerificationCommandsYAML(lines []string) []TaskVerificationCommand {

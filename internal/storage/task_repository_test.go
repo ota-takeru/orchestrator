@@ -80,6 +80,40 @@ verification_commands:
 	}
 }
 
+func TestMaterializeApprovedTasksRejectsInvalidTaskYAMLID(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	approveRequiredArtifactsWithTaskYAML(t, db, ctx, "PROJECT-001", root, "approved", []byte(`id: task-001
+title: Invalid task id
+base_branch: main
+`))
+	if _, err := db.MaterializeApprovedTasks(ctx, "PROJECT-001"); err == nil {
+		t.Fatal("expected invalid task yaml id to fail")
+	}
+}
+
+func TestMaterializeApprovedTasksRejectsInvalidVerificationCommand(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	approveRequiredArtifactsWithTaskYAML(t, db, ctx, "PROJECT-001", root, "approved", []byte(`id: TASK-001
+title: Invalid verification command
+base_branch: main
+verification_commands:
+  - id: go-test
+    environment: primary
+    runner: auto
+    required_for_merge: true
+    working_dir: task_worktree
+`))
+	if _, err := db.MaterializeApprovedTasks(ctx, "PROJECT-001"); err == nil {
+		t.Fatal("expected invalid verification command to fail")
+	}
+}
+
 func TestRejectedArtifactCannotMaterializeReadyTask(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

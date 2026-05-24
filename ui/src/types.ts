@@ -75,9 +75,21 @@ export type TrustedArtifact = {
   content: string;
 };
 
+export type PathMapping = {
+  id: string;
+  from_environment_id: string;
+  to_environment_id: string;
+  from_root: string;
+  to_root: string;
+  mapping_mode: string;
+  write_owner_environment_id?: string;
+  status: string;
+};
+
 export type DashboardData = {
   snapshot: HumanInboxSnapshot;
   decisions: Decision[];
   baselineIssues: MemoryRecord[];
   trustedArtifacts: TrustedArtifact[];
+  pathMappings: PathMapping[];
 };

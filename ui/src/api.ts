@@ -1,4 +1,4 @@
-import type { DashboardData, Decision, HumanInboxSnapshot, MemoryRecord, TrustedArtifact } from "./types";
+import type { DashboardData, Decision, HumanInboxSnapshot, MemoryRecord, PathMapping, TrustedArtifact } from "./types";
 
 async function getJSON<T>(path: string): Promise<T> {
   const response = await fetch(path, {
@@ -14,18 +14,20 @@ async function getJSON<T>(path: string): Promise<T> {
 }
 
 export async function loadDashboardData(): Promise<DashboardData> {
-  const [snapshot, decisionBody, memoryBody, artifactBody] = await Promise.all([
+  const [snapshot, decisionBody, memoryBody, artifactBody, pathMappingBody] = await Promise.all([
     getJSON<HumanInboxSnapshot>("/api/ui/snapshot?limit=12"),
     getJSON<{ decisions: Decision[] }>("/api/decisions?status=open"),
     getJSON<{ memories: MemoryRecord[] }>("/api/memory?type=baseline_issue"),
-    getJSON<{ artifacts: TrustedArtifact[] }>("/api/artifacts/trusted")
+    getJSON<{ artifacts: TrustedArtifact[] }>("/api/artifacts/trusted"),
+    getJSON<{ mappings: PathMapping[] }>("/api/platform/path-mappings")
   ]);
 
   return {
     snapshot,
     decisions: decisionBody.decisions,
     baselineIssues: memoryBody.memories,
-    trustedArtifacts: artifactBody.artifacts
+    trustedArtifacts: artifactBody.artifacts,
+    pathMappings: pathMappingBody.mappings
   };
 }
 

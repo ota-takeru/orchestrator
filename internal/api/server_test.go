@@ -152,6 +152,40 @@ func TestServerExposesTrustedArtifacts(t *testing.T) {
 	}
 }
 
+func TestServerExposesPathMappings(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	ctx := context.Background()
+	insertAPIEnvironment(t, db, projectID, "linux-main", "linux", "/repo")
+	insertAPIEnvironment(t, db, projectID, "wsl-sidecar", "wsl", "/mnt/repo")
+	if _, err := db.SavePathMapping(ctx, storage.PathMappingInput{
+		ProjectID:               projectID,
+		FromEnvironmentID:       "linux-main",
+		ToEnvironmentID:         "wsl-sidecar",
+		FromRoot:                "/repo",
+		ToRoot:                  "/mnt/repo",
+		Mode:                    "same_filesystem",
+		WriteOwnerEnvironmentID: "linux-main",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/platform/path-mappings", nil)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Mappings []storage.PathMappingRecord `json:"mappings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Mappings) != 1 || body.Mappings[0].Mode != "same_filesystem" {
+		t.Fatalf("path mappings = %#v", body.Mappings)
+	}
+}
+
 func openAPITestDB(t *testing.T) (*storage.DB, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -174,6 +208,20 @@ func openAPITestDB(t *testing.T) (*storage.DB, string) {
 	projectID := "PROJECT-001"
 	insertAPIProject(t, db.SQL(), projectID)
 	return db, projectID
+}
+
+func insertAPIEnvironment(t *testing.T, db *storage.DB, projectID string, envID string, osFamily string, root string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO execution_environments(
+  id, project_id, os_family, role, shell, project_root,
+  git_provider, codex_adapter, sandbox_profile, status, created_at, updated_at
+) VALUES (?, ?, ?, 'sidecar', 'bash', ?, 'linux-git', 'codex-linux', 'linux-bubblewrap', 'configured', ?, ?)`,
+		envID, projectID, osFamily, root, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func insertAPIProject(t *testing.T, db *sql.DB, projectID string) {

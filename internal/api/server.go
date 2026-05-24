@@ -27,6 +27,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	mux.HandleFunc("/api/memory", s.handleMemory)
 	mux.HandleFunc("/api/artifacts/trusted", s.handleTrustedArtifacts)
+	mux.HandleFunc("/api/platform/path-mappings", s.handlePathMappings)
 	return mux
 }
 
@@ -144,6 +145,19 @@ func (s *Server) handleTrustedArtifacts(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
+}
+
+func (s *Server) handlePathMappings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	mappings, err := s.db.ListPathMappings(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "path_mappings_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"mappings": mappings})
 }
 
 func parseInboxActionPath(path string) (string, string, bool) {

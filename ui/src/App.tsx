@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, ServerCog, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { approveInboxItem, loadDashboardData } from "./api";
@@ -87,6 +87,7 @@ function App() {
         <aside className="space-y-5">
           <CommandPanel command={nextCommand} />
           <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
+          <PathMappingsPanel mappings={data?.pathMappings ?? []} />
           <DecisionPanel decisions={data?.decisions ?? []} />
           <BaselinePanel issues={data?.baselineIssues ?? []} />
         </aside>
@@ -234,6 +235,30 @@ function TrustedArtifactsPanel({ artifacts }: { artifacts: DashboardData["truste
             </span>
             <small>{artifact.approval_notes ? `${artifact.status} + notes` : artifact.status}</small>
             <small>{artifact.path}</small>
+          </div>
+        ))}
+      </StackEmpty>
+    </section>
+  );
+}
+
+function PathMappingsPanel({ mappings }: { mappings: DashboardData["pathMappings"] }) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Path Mappings</h2>
+        <Route size={18} className="text-zinc-500" />
+      </div>
+      <StackEmpty empty={mappings.length === 0} label="No path mappings">
+        {mappings.map((mapping) => (
+          <div className="stack-row" key={mapping.id}>
+            <span>
+              {mapping.from_environment_id} to {mapping.to_environment_id}
+            </span>
+            <small>{mapping.mapping_mode}</small>
+            <small>
+              {mapping.from_root} to {mapping.to_root}
+            </small>
           </div>
         ))}
       </StackEmpty>

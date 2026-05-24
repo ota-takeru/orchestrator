@@ -45,6 +45,18 @@ type ArtifactRecord struct {
 	Path              string       `json:"path,omitempty"`
 }
 
+type TrustedArtifactContextRecord struct {
+	ArtifactID    string       `json:"artifact_id"`
+	ArtifactType  ArtifactType `json:"artifact_type"`
+	VersionID     string       `json:"version_id"`
+	Version       int          `json:"version"`
+	Status        string       `json:"status"`
+	Path          string       `json:"path"`
+	ContentHash   string       `json:"content_hash"`
+	ApprovalNotes string       `json:"approval_notes,omitempty"`
+	ReviewedAt    string       `json:"reviewed_at,omitempty"`
+}
+
 func (db *DB) ListArtifacts(ctx context.Context, projectID string, artifactType string) ([]ArtifactRecord, error) {
 	query := `
 SELECT a.id, a.artifact_type, a.status,
@@ -87,6 +99,40 @@ WHERE a.project_id = ?`
 		artifacts = append(artifacts, artifact)
 	}
 	return artifacts, rows.Err()
+}
+
+func (db *DB) TrustedArtifactContext(ctx context.Context, projectID string) ([]TrustedArtifactContextRecord, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT a.id, a.artifact_type, av.id, av.version, av.status, av.path, av.content_hash,
+       COALESCE(av.approval_notes, ''), COALESCE(av.reviewed_at, '')
+FROM artifacts a
+JOIN artifact_versions av ON av.id = a.approved_version_id
+WHERE a.project_id = ?
+  AND av.status IN ('approved', 'approved_with_notes')
+ORDER BY a.artifact_type`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []TrustedArtifactContextRecord
+	for rows.Next() {
+		var record TrustedArtifactContextRecord
+		if err := rows.Scan(
+			&record.ArtifactID,
+			&record.ArtifactType,
+			&record.VersionID,
+			&record.Version,
+			&record.Status,
+			&record.Path,
+			&record.ContentHash,
+			&record.ApprovalNotes,
+			&record.ReviewedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 func (db *DB) SaveArtifactVersion(ctx context.Context, input ArtifactVersionInput) (ArtifactVersionRecord, error) {

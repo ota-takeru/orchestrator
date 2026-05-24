@@ -132,3 +132,76 @@ func TestApprovedWithNotesRequiresNotes(t *testing.T) {
 		t.Fatal("expected approved_with_notes without notes to fail")
 	}
 }
+
+func TestTrustedArtifactContextUsesApprovedVersionsAndNotes(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	first, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD\n\napproved"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := "Keep local-first storage requirement."
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", first.ArtifactID, 1, "approved_with_notes", notes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD\n\nunapproved draft"),
+		Status:       "proposed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := db.TrustedArtifactContext(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("trusted artifact count = %d", len(records))
+	}
+	record := records[0]
+	if record.VersionID != first.VersionID || record.Version != 1 || record.Status != "approved_with_notes" {
+		t.Fatalf("trusted artifact used wrong version: %#v", record)
+	}
+	if record.ApprovalNotes != notes {
+		t.Fatalf("approval notes = %q", record.ApprovalNotes)
+	}
+	if record.ContentHash != first.Hash {
+		t.Fatalf("content hash = %s, want %s", record.ContentHash, first.Hash)
+	}
+	if record.ReviewedAt == "" {
+		t.Fatal("reviewed_at was not included")
+	}
+}
+
+func TestTrustedArtifactContextExcludesUnapprovedArtifacts(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	if _, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactRoadmap,
+		Path:         ".devagent/roadmap.yaml",
+		Content:      []byte("roadmap: []"),
+		Status:       "proposed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := db.TrustedArtifactContext(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("trusted artifact count = %d, want 0", len(records))
+	}
+}

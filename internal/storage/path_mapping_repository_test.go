@@ -85,6 +85,13 @@ func TestSavePathMappingValidatesAndPersists(t *testing.T) {
 	if mapped != "/sidecar/app.go" {
 		t.Fatalf("mapped = %s", mapped)
 	}
+	mappings, err := db.ListPathMappings(ctx, "PROJECT-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mappings) != 1 || mappings[0].ID != mapping.ID || mappings[0].Status != "active" {
+		t.Fatalf("mappings = %#v", mappings)
+	}
 }
 
 func TestSavePathMappingRejectsSameFilesystemWithoutOwner(t *testing.T) {

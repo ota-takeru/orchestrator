@@ -32,6 +32,37 @@ type PathMappingRecord struct {
 	Status                  string               `json:"status"`
 }
 
+func (db *DB) ListPathMappings(ctx context.Context, projectID string) ([]PathMappingRecord, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, from_environment_id, to_environment_id, from_root, to_root,
+       mapping_mode, COALESCE(write_owner_environment_id, ''), status
+FROM path_mappings
+WHERE project_id = ?
+ORDER BY from_environment_id, to_environment_id, from_root, to_root`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var mappings []PathMappingRecord
+	for rows.Next() {
+		var mapping PathMappingRecord
+		if err := rows.Scan(
+			&mapping.ID,
+			&mapping.FromEnvironmentID,
+			&mapping.ToEnvironmentID,
+			&mapping.FromRoot,
+			&mapping.ToRoot,
+			&mapping.Mode,
+			&mapping.WriteOwnerEnvironmentID,
+			&mapping.Status,
+		); err != nil {
+			return nil, err
+		}
+		mappings = append(mappings, mapping)
+	}
+	return mappings, rows.Err()
+}
+
 func (db *DB) BuildPathMappingService(ctx context.Context, projectID string) (*pathmap.Service, error) {
 	envRows, err := db.sql.QueryContext(ctx, `
 SELECT id, os_family, project_root

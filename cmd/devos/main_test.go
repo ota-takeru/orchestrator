@@ -569,6 +569,14 @@ func TestPlatformMapAddCLI(t *testing.T) {
 	if mapping.Status != "active" || mapping.Mode != platform.MappingSameFilesystem || mapping.WriteOwnerEnvironmentID != "windows-main" {
 		t.Fatalf("mapping = %#v", mapping)
 	}
+	listOut := runCLI(t, "platform", "map", "list", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var list struct {
+		Mappings []storage.PathMappingRecord `json:"mappings"`
+	}
+	decodeJSON(t, listOut, &list)
+	if len(list.Mappings) != 1 || list.Mappings[0].ID != mapping.ID {
+		t.Fatalf("mappings = %#v", list.Mappings)
+	}
 }
 
 func TestPlatformDoctorSaveCLI(t *testing.T) {

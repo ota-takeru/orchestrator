@@ -347,6 +347,35 @@ func TestEnvStatusCLI(t *testing.T) {
 	}
 }
 
+func TestEnvSetCLI(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Environment set workflow")
+	stdin := os.Stdin
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = reader
+	t.Cleanup(func() {
+		os.Stdin = stdin
+	})
+	if _, err := writer.WriteString("dummy-secret\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := runCLI(t, "env", "set", "--project-root", projectRoot, "--data-root", dataRoot, "--scope", "project", "--value-stdin", "--json", "OPENAI_API_KEY")
+	var binding storage.EnvBindingRecord
+	decodeJSON(t, out, &binding)
+	if binding.Status != "configured" || binding.Key != "OPENAI_API_KEY" || strings.Contains(binding.StorageRef, "dummy-secret") {
+		t.Fatalf("binding = %#v", binding)
+	}
+}
+
 func TestVerifyCLIWithFakeAdapter(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()

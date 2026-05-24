@@ -1839,10 +1839,59 @@ func runEnv(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	switch args[0] {
 	case "status":
 		return runEnvStatus(ctx, args[1:], stdout)
+	case "set":
+		return runEnvSet(ctx, args[1:], stdout)
 	default:
 		fmt.Fprintf(stderr, "unknown env subcommand: %s\n", args[0])
 		return exitValidation
 	}
+}
+
+func runEnvSet(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("env set", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	scope := fs.String("scope", "project", "binding scope")
+	scopeID := fs.String("scope-id", "", "scope id")
+	environmentID := fs.String("env", "", "environment id")
+	valueStdin := fs.Bool("value-stdin", false, "read value from stdin")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("environment key is required"))
+	}
+	if !*valueStdin {
+		return writeError(stdout, *jsonOut, exitValidation, "env_set_failed", errors.New("--value-stdin is required in non-interactive mode"))
+	}
+	valueBytes, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "env_set_failed", err)
+	}
+	value := strings.TrimRight(string(valueBytes), "\r\n")
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "env_set_failed", err)
+	}
+	defer db.Close()
+	record, err := db.SaveEnvBinding(ctx, storage.EnvBindingInput{
+		ProjectID:     projectID,
+		EnvironmentID: *environmentID,
+		Key:           fs.Arg(0),
+		Scope:         *scope,
+		ScopeID:       *scopeID,
+		Value:         value,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "env_set_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, record, 0)
+	}
+	fmt.Fprintf(stdout, "Environment binding configured: %s %s\n", record.Key, record.Scope)
+	return 0
 }
 
 func runEnvStatus(ctx context.Context, args []string, stdout io.Writer) int {
@@ -2335,6 +2384,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] DECISION_ID")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
 	fmt.Fprintln(w, "  devos review approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos review reject [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos merge approve [--project-root PATH] [--data-root PATH] [--notes TEXT] [--json] TASK_ID")

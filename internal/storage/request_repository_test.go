@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -313,5 +314,31 @@ WHERE id = ?`, expired, second.QueueItem.ID); err != nil {
 	}
 	if len(result.Failed) != 1 || result.Failed[0].ID != second.QueueItem.ID || result.Failed[0].Status != "failed" {
 		t.Fatalf("failed = %#v", result.Failed)
+	}
+}
+
+func TestSaveEnvBindingStoresOnlyRedactedMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+
+	record, err := db.SaveEnvBinding(ctx, EnvBindingInput{
+		ProjectID: "PROJECT-001",
+		Key:       "OPENAI_API_KEY",
+		Scope:     "project",
+		Value:     "secret-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "configured" || record.ValueFingerprint == "" || strings.Contains(record.StorageRef, "secret-value") {
+		t.Fatalf("binding = %#v", record)
+	}
+	var count int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM environment_audit_events WHERE binding_id = ?", record.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("audit count = %d", count)
 	}
 }

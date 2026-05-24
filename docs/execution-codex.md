@@ -104,6 +104,8 @@ Orchestratorは `prompt.md` をimmutable run artifactとして保存します。
 
 Windows Codex authとWSL Codex authは別environment credentialとして扱います。`%USERPROFILE%\.codex` と `~/.codex` を同一視してはいけません。run recordには使用した `execution_environment_id`、`codex_adapter`、`CODEX_HOME` sourceをredacted metadataとして保存します。
 
+Platform Doctorは `codex` executableと `codex-auth` を別requirementとして検出します。`codex-auth` は `CODEX_HOME/auth.json` の存在だけを確認し、authファイルの内容は読まない。未検出の場合はToolchain Setup Cardに投影し、人間が対象environmentで認証してからdoctorを再実行します。
+
 WSLでCodexを使う場合はWSL2を前提にします。preflightでWSL versionを検出し、WSL1ならCodex WSL adapterをreadyにしません。
 
 共通禁止事項:
@@ -279,6 +281,7 @@ CODEX_HOME:
 - Codex CLI実行用credentialは `orchestrator_credentials` として扱い、対象アプリ用の `target_project_environment` とは分ける。
 - `CODEX_API_KEY` はCodex実行用であり、対象アプリの `OPENAI_API_KEY` と混同しない。
 - auth credentialは人間が管理し、Orchestratorはsecret値を読まない。
+- Platform Doctorはauthファイルの存在確認だけを行い、内容を読まない。
 - `CODEX_HOME` の中身をcontextとしてCodexへ渡さない。
 - `~/.codex/auth.json` はprotected pathとして扱う。
 - 専用 `CODEX_HOME` を使う場合も、設定差を避けるため標準runでは `--ignore-user-config` を維持する。

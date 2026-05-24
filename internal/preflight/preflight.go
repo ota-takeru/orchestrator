@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 )
 
 type Severity string
@@ -93,6 +94,7 @@ func Run(ctx context.Context, projectRoot string) (Report, error) {
 	report.add(checkGitignore(root, ".devagent-worktrees/", ".devagent-worktrees/ must be gitignored"))
 	report.add(checkGitignore(root, "orchestrator-data/", "orchestrator-data/ must be gitignored when placed inside the repo"))
 	report.add(checkProtectedSchemaLocation(root))
+	report.add(checkSchemaRegistry(root))
 
 	if err := platform.ValidatePrimaryEnvironment([]platform.ExecutionEnvironment{env}); err != nil {
 		report.add(Finding{ID: "primary_environment", Severity: SeverityBlock, Message: err.Error()})
@@ -271,11 +273,23 @@ func checkProtectedSchemaLocation(root string) Finding {
 	if _, err := os.Stat(filepath.Join(root, ".devagent", "schemas")); err == nil {
 		return Finding{
 			ID:       "protected_schema_location",
-			Severity: SeverityWarn,
-			Message:  ".devagent/schemas exists; coding runs must not include it in writable roots",
+			Severity: SeverityPass,
+			Message:  ".devagent/schemas exists and must be excluded from coding writable roots",
 		}
 	}
 	return Finding{ID: "protected_schema_location", Severity: SeverityPass, Message: "protected schema directory is not present in the worktree"}
+}
+
+func checkSchemaRegistry(root string) Finding {
+	schemaRoot := filepath.Join(root, ".devagent", "schemas")
+	if _, err := os.Stat(schemaRoot); errors.Is(err, os.ErrNotExist) {
+		return Finding{ID: "schema_registry", Severity: SeverityWarn, Message: "schema registry has not been installed"}
+	}
+	validation := schemas.ValidateInstalled(root)
+	if !validation.Valid {
+		return Finding{ID: "schema_registry", Severity: SeverityBlock, Message: "schema registry checksum validation failed", Details: validation.Findings}
+	}
+	return Finding{ID: "schema_registry", Severity: SeverityPass, Message: "schema registry checksum validation passed"}
 }
 
 func normalizeID(s string) string {

@@ -61,8 +61,17 @@ func TestInitProjectCreatesConceptAndPolicy(t *testing.T) {
 	if _, err := os.Stat(result.PolicyPath); err != nil {
 		t.Fatalf("policy not created: %v", err)
 	}
-	if len(result.CreatedPaths) != 2 {
-		t.Fatalf("created paths = %d, want 2", len(result.CreatedPaths))
+	if len(result.CreatedPaths) != 5 {
+		t.Fatalf("created paths = %d, want 5", len(result.CreatedPaths))
+	}
+	var schemaPass bool
+	for _, finding := range result.PreflightReport.Findings {
+		if finding.ID == "schema_registry" && finding.Severity == SeverityPass {
+			schemaPass = true
+		}
+	}
+	if !schemaPass {
+		t.Fatalf("schema registry pass finding not found: %#v", result.PreflightReport.Findings)
 	}
 }
 

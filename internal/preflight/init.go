@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 )
 
 type InitResult struct {
@@ -55,6 +57,16 @@ func InitProject(ctx context.Context, projectRoot string, concept string) (InitR
 		}
 		created = append(created, policyPath)
 	} else if err != nil {
+		return InitResult{}, err
+	}
+	schemaInstall, err := schemas.Install(root)
+	if err != nil {
+		return InitResult{}, err
+	}
+	created = append(created, schemaInstall.CreatedPaths...)
+	created = append(created, schemaInstall.UpdatedPaths...)
+	report, err = Run(ctx, root)
+	if err != nil {
 		return InitResult{}, err
 	}
 

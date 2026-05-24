@@ -179,6 +179,8 @@ runtime不一致、adapter不一致、path style不一致、remote runner未設�
 
 Windows native CodexはWindows上で動くDevOS runtimeからだけ実行できます。Linux/WSL上のDevOS processがWindows pathへ直接 `codex.exe` を起動する設計にはしません。Windows/WSLはそれぞれ別の `CODEX_HOME`、sandbox、auth境界を持つものとして扱い、共有を仮定しません。
 
+環境policyを通過した後、Codex process起動前にPlatform Doctorを `include-codex=true` で実行します。`codex`、`codex-auth`、required shell、WSL2などのrequired requirementが `missing`、`invalid`、`setup_required`、`unsupported` の場合、Codex processは起動せず `toolchain_required` としてblocked runを保存し、Toolchain Setup Cardも同期します。
+
 approval eventが出た場合:
 
 1. Codex processのイベントを保存し、runを `blocked` にする。

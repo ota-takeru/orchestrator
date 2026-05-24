@@ -116,10 +116,10 @@ func (db *DB) verificationEnvironment(ctx context.Context, projectID string, env
 	}
 	var env platform.ExecutionEnvironment
 	if err := db.sql.QueryRowContext(ctx, `
-SELECT id, os_family, role, shell, project_root, git_provider, codex_adapter, sandbox_profile, status
+SELECT id, os_family, role, shell, project_root, COALESCE(worktree_root, ''), git_provider, codex_adapter, sandbox_profile, status
 FROM execution_environments
 WHERE project_id = ? AND id = ?
-LIMIT 1`, projectID, environmentID).Scan(&env.ID, &env.OSFamily, &env.Role, &env.Shell, &env.ProjectRoot, &env.GitProvider, &env.CodexAdapter, &env.SandboxProfile, &env.Status); err != nil {
+LIMIT 1`, projectID, environmentID).Scan(&env.ID, &env.OSFamily, &env.Role, &env.Shell, &env.ProjectRoot, &env.WorktreeRoot, &env.GitProvider, &env.CodexAdapter, &env.SandboxProfile, &env.Status); err != nil {
 		return platform.ExecutionEnvironment{}, err
 	}
 	return env, nil

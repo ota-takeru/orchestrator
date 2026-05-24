@@ -87,6 +87,7 @@ type ExecutionEnvironment struct {
 	Role           Role           `json:"role"`
 	Shell          Shell          `json:"shell"`
 	ProjectRoot    string         `json:"project_root"`
+	WorktreeRoot   string         `json:"worktree_root,omitempty"`
 	GitProvider    GitProvider    `json:"git_provider"`
 	CodexAdapter   CodexAdapter   `json:"codex_adapter"`
 	SandboxProfile SandboxProfile `json:"sandbox_profile"`

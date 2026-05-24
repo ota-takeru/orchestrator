@@ -103,6 +103,38 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskUsesTaskWorktreeWhenGitRepo(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := initStorageGitRepo(t)
+	setRealCodexDoctorDetectedForTest(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	executor := &captureCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+	}
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedWorktree := filepath.Join(projectRoot, ".devagent-worktrees", "TASK-001")
+	if executor.request.ProjectRoot != expectedWorktree || result.WorktreeRoot != expectedWorktree {
+		t.Fatalf("executor root=%s result root=%s expected=%s", executor.request.ProjectRoot, result.WorktreeRoot, expectedWorktree)
+	}
+	if strings.TrimSpace(gitOutput(t, expectedWorktree, "rev-parse", "--is-inside-work-tree")) != "true" {
+		t.Fatalf("expected task worktree at %s", expectedWorktree)
+	}
+	var cwd string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT cwd FROM command_events WHERE run_id = ? AND command_kind = 'codex'", result.ImplementationRun).Scan(&cwd); err != nil {
+		t.Fatal(err)
+	}
+	if cwd != expectedWorktree {
+		t.Fatalf("command cwd = %s", cwd)
+	}
+}
+
 func TestRunRealCodexTaskIncludesTrustedArtifactContext(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

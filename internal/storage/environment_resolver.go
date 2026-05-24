@@ -44,10 +44,10 @@ LIMIT 1`, projectID).Scan(&envID); err != nil && err != sql.ErrNoRows {
 func (db *DB) environmentByID(ctx context.Context, projectID string, envID string) (platform.ExecutionEnvironment, error) {
 	var env platform.ExecutionEnvironment
 	if err := db.sql.QueryRowContext(ctx, `
-SELECT id, os_family, role, shell, project_root, git_provider, codex_adapter, sandbox_profile, status
+SELECT id, os_family, role, shell, project_root, COALESCE(worktree_root, ''), git_provider, codex_adapter, sandbox_profile, status
 FROM execution_environments
 WHERE project_id = ? AND id = ?
-LIMIT 1`, projectID, envID).Scan(&env.ID, &env.OSFamily, &env.Role, &env.Shell, &env.ProjectRoot, &env.GitProvider, &env.CodexAdapter, &env.SandboxProfile, &env.Status); err != nil {
+LIMIT 1`, projectID, envID).Scan(&env.ID, &env.OSFamily, &env.Role, &env.Shell, &env.ProjectRoot, &env.WorktreeRoot, &env.GitProvider, &env.CodexAdapter, &env.SandboxProfile, &env.Status); err != nil {
 		if err == sql.ErrNoRows {
 			return platform.ExecutionEnvironment{}, fmt.Errorf("execution environment not found: %s", envID)
 		}

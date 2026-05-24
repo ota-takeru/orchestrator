@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,23 @@ type fakeCodexExecutor struct {
 
 func (f fakeCodexExecutor) ExecCodex(ctx context.Context, request CodexExecRequest) (CodexExecResult, error) {
 	_ = ctx
+	if f.result.StartedAt.IsZero() {
+		f.result.StartedAt = time.Now().UTC()
+	}
+	if f.result.CompletedAt.IsZero() {
+		f.result.CompletedAt = f.result.StartedAt.Add(time.Second)
+	}
+	return f.result, nil
+}
+
+type captureCodexExecutor struct {
+	request CodexExecRequest
+	result  CodexExecResult
+}
+
+func (f *captureCodexExecutor) ExecCodex(ctx context.Context, request CodexExecRequest) (CodexExecResult, error) {
+	_ = ctx
+	f.request = request
 	if f.result.StartedAt.IsZero() {
 		f.result.StartedAt = time.Now().UTC()
 	}
@@ -82,6 +100,69 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	}
 	if summary.EnvironmentID != "linux-main" || summary.CodexAdapter != "codex-linux" || summary.SandboxProfile != "linux-bubblewrap" || summary.CodexHomeSource != "CODEX_HOME" {
 		t.Fatalf("summary = %#v", summary)
+	}
+}
+
+func TestRunRealCodexTaskIncludesTrustedArtifactContext(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	setRealCodexDoctorDetectedForTest(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	approved, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD\n\napproved"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := "Keep Human Inbox in the first workflow."
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", approved.ArtifactID, approved.Version, "approved_with_notes", notes); err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD\n\nunapproved proposal"),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &captureCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+	}
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(executor.request.Prompt, "Trusted artifact context:") ||
+		!strings.Contains(executor.request.Prompt, "version=1") ||
+		!strings.Contains(executor.request.Prompt, "status=approved_with_notes") ||
+		!strings.Contains(executor.request.Prompt, approved.Hash) ||
+		!strings.Contains(executor.request.Prompt, "approval_notes: "+notes) {
+		t.Fatalf("prompt did not include trusted artifact context:\n%s", executor.request.Prompt)
+	}
+	if strings.Contains(executor.request.Prompt, proposed.Hash) {
+		t.Fatalf("prompt included unapproved artifact hash: %s", executor.request.Prompt)
+	}
+	var promptPath string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT path FROM run_artifacts WHERE run_id = ? AND artifact_key = 'prompt.md'", result.ImplementationRun).Scan(&promptPath); err != nil {
+		t.Fatal(err)
+	}
+	rawPrompt, err := os.ReadFile(filepath.Join(db.dataRoot, promptPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawPrompt), "approval_notes: "+notes) {
+		t.Fatalf("prompt artifact did not preserve approval notes:\n%s", string(rawPrompt))
 	}
 }
 

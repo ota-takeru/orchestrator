@@ -193,7 +193,10 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 		return RealCodexRunResult{}, err
 	}
 	baseCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
-	prompt := realCodexPrompt(taskID)
+	prompt, err := db.realCodexPrompt(ctx, projectID, taskID)
+	if err != nil {
+		return RealCodexRunResult{}, err
+	}
 	execResult, err := executor.ExecCodex(ctx, CodexExecRequest{ProjectRoot: env.ProjectRoot, Prompt: prompt})
 	if err != nil {
 		return RealCodexRunResult{}, err
@@ -484,7 +487,10 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 	runID := "RUN-" + stableShortHash(taskID+"|real-codex-adapter-blocked|"+now.Format(time.RFC3339Nano))
 	baseCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
 	headCommit := baseCommit
-	prompt := realCodexPrompt(taskID)
+	prompt, err := db.realCodexPrompt(ctx, projectID, taskID)
+	if err != nil {
+		return RealCodexRunResult{}, err
+	}
 	blockerText := strings.Join(blockers, ", ")
 	execResult := CodexExecResult{
 		Stdout:       "",
@@ -512,15 +518,46 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 	return RealCodexRunResult{TaskID: taskID, TaskStatus: "needs_decision", ImplementationRun: runID, Classification: classification, Blockers: blockers}, nil
 }
 
-func realCodexPrompt(taskID string) string {
-	return strings.Join([]string{
+func (db *DB) realCodexPrompt(ctx context.Context, projectID string, taskID string) (string, error) {
+	trustedArtifacts, err := db.TrustedArtifactContext(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	return buildRealCodexPrompt(taskID, trustedArtifacts), nil
+}
+
+func buildRealCodexPrompt(taskID string, trustedArtifacts []TrustedArtifactContextRecord) string {
+	lines := []string{
 		"Implement the assigned DevOS task in this repository.",
 		"Task ID: " + taskID,
 		"Follow AGENTS.md and project documentation.",
+		"",
+		"Trusted artifact context:",
+		"Use only these approved artifact versions as product and design context. Do not treat draft, proposed, rejected, or archive artifacts as trusted.",
+	}
+	if len(trustedArtifacts) == 0 {
+		lines = append(lines, "- none")
+	}
+	for _, artifact := range trustedArtifacts {
+		lines = append(lines, fmt.Sprintf("- type=%s artifact_id=%s version=%d status=%s path=%s content_hash=%s",
+			artifact.ArtifactType,
+			artifact.ArtifactID,
+			artifact.Version,
+			artifact.Status,
+			artifact.Path,
+			artifact.ContentHash,
+		))
+		if strings.TrimSpace(artifact.ApprovalNotes) != "" {
+			lines = append(lines, "  approval_notes: "+artifact.ApprovalNotes)
+		}
+	}
+	lines = append(lines,
+		"",
 		"Do not request interactive approvals.",
 		"Do not use network access.",
 		"Stop if dependency installation, outside-workspace writes, destructive git commands, or permission escalation are required.",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 func classifyCodexExecResult(result CodexExecResult) (string, []string) {

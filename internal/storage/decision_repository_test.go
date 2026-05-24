@@ -74,6 +74,34 @@ func TestApproveDecisionRejectsResolvedDecision(t *testing.T) {
 	}
 }
 
+func TestApproveRetryDecisionResumesTask(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "needs_decision")
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO decisions(
+  id, project_id, task_id, status, title, options_json, evidence_json, created_at, updated_at
+) VALUES ('DEC-RETRY', 'PROJECT-001', 'TASK-001', 'open', 'Real Codex run requires human decision', '[]', '{}', ?, ?)`, now(), now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ApproveDecision(ctx, DecisionApprovalInput{
+		ProjectID:  "PROJECT-001",
+		DecisionID: "DEC-RETRY",
+		Option:     "retry_after_manual_action",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "ready" {
+		t.Fatalf("task status = %s", taskStatus)
+	}
+}
+
 func insertOpenDecisionWithInbox(t *testing.T, db *DB, projectID string, decisionID string) {
 	t.Helper()
 	if _, err := db.SQL().ExecContext(context.Background(), `

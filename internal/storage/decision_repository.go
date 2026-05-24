@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/statemachine"
 )
 
 type DecisionRecord struct {
@@ -146,6 +148,11 @@ WHERE project_id = ? AND source_type = 'decision' AND source_id = ? AND status =
 	}, now); err != nil {
 		return DecisionRecord{}, err
 	}
+	if taskID.Valid && option == "retry_after_manual_action" {
+		if err := resumeTaskAfterDecisionApproval(ctx, tx, input.ProjectID, taskID.String, input.DecisionID, now); err != nil {
+			return DecisionRecord{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return DecisionRecord{}, err
 	}
@@ -156,4 +163,26 @@ WHERE project_id = ? AND source_type = 'decision' AND source_id = ? AND status =
 	decision.UpdatedAt = now
 	decision.ResolvedAt = now
 	return decision, nil
+}
+
+func resumeTaskAfterDecisionApproval(ctx context.Context, tx *sql.Tx, projectID string, taskID string, decisionID string, now string) error {
+	var status string
+	if err := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE project_id = ? AND id = ?", projectID, taskID).Scan(&status); err != nil {
+		return err
+	}
+	if status != "needs_decision" {
+		return nil
+	}
+	if err := statemachine.Task.ValidateTransition("needs_decision", "ready"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'ready', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'needs_decision'", now, projectID, taskID); err != nil {
+		return err
+	}
+	return insertWorkflowEvent(ctx, tx, projectID, "task_resumed_after_decision", map[string]any{
+		"task_id":     taskID,
+		"decision_id": decisionID,
+		"from_status": "needs_decision",
+		"to_status":   "ready",
+	}, now)
 }

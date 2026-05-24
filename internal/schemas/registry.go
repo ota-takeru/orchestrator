@@ -75,6 +75,49 @@ func Definitions() []Definition {
 	}
 }
 
+type CodexFinalMessage struct {
+	Status   string                 `json:"status"`
+	Summary  string                 `json:"summary"`
+	Tests    []CodexFinalTestResult `json:"tests,omitempty"`
+	Blockers []string               `json:"blockers,omitempty"`
+}
+
+type CodexFinalTestResult struct {
+	Command string `json:"command"`
+	Status  string `json:"status"`
+	Notes   string `json:"notes,omitempty"`
+}
+
+func CodexFinalMessageSchema() []byte {
+	return []byte(codexFinalMessageSchema)
+}
+
+func ValidateCodexFinalMessage(raw string) error {
+	var message CodexFinalMessage
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		return fmt.Errorf("codex final message must be JSON: %w", err)
+	}
+	switch message.Status {
+	case "succeeded", "blocked", "failed":
+	default:
+		return fmt.Errorf("codex final message has invalid status: %s", message.Status)
+	}
+	if strings.TrimSpace(message.Summary) == "" {
+		return fmt.Errorf("codex final message requires summary")
+	}
+	for i, test := range message.Tests {
+		if strings.TrimSpace(test.Command) == "" {
+			return fmt.Errorf("codex final message test %d requires command", i)
+		}
+		switch test.Status {
+		case "passed", "failed", "not_run":
+		default:
+			return fmt.Errorf("codex final message test %d has invalid status: %s", i, test.Status)
+		}
+	}
+	return nil
+}
+
 func Install(projectRoot string) (InstallResult, error) {
 	if strings.TrimSpace(projectRoot) == "" {
 		return InstallResult{}, fmt.Errorf("project root is required")

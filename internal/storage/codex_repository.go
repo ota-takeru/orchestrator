@@ -13,6 +13,7 @@ import (
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/runners"
+	"github.com/ota-takeru/orchestrator/internal/schemas"
 	"github.com/ota-takeru/orchestrator/internal/toolchains"
 	"github.com/ota-takeru/orchestrator/internal/verifier"
 )
@@ -21,6 +22,7 @@ type CodexExecRequest struct {
 	ProjectRoot           string
 	Prompt                string
 	OutputLastMessagePath string
+	OutputSchemaPath      string
 }
 
 type CodexExecResult struct {
@@ -61,8 +63,24 @@ func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecReques
 	if request.OutputLastMessagePath != "" {
 		finalPath = request.OutputLastMessagePath
 	}
+	schemaFile, err := os.CreateTemp("", "devos-codex-output-schema-*.json")
+	if err != nil {
+		return CodexExecResult{}, err
+	}
+	schemaPath := schemaFile.Name()
+	if _, err := schemaFile.Write(schemas.CodexFinalMessageSchema()); err != nil {
+		_ = schemaFile.Close()
+		return CodexExecResult{}, err
+	}
+	if err := schemaFile.Close(); err != nil {
+		return CodexExecResult{}, err
+	}
+	defer os.Remove(schemaPath)
+	if request.OutputSchemaPath != "" {
+		schemaPath = request.OutputSchemaPath
+	}
 
-	args := codexExecArgv(request.ProjectRoot, request.Prompt, finalPath)
+	args := codexExecArgv(request.ProjectRoot, request.Prompt, finalPath, schemaPath)
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Dir = request.ProjectRoot
 	var stdout, stderr bytes.Buffer
@@ -91,7 +109,7 @@ func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecReques
 	}, nil
 }
 
-func codexExecArgv(projectRoot string, prompt string, finalPath string) []string {
+func codexExecArgv(projectRoot string, prompt string, finalPath string, schemaPath string) []string {
 	return []string{
 		"exec",
 		"--json",
@@ -103,6 +121,7 @@ func codexExecArgv(projectRoot string, prompt string, finalPath string) []string
 		"-c", "sandbox_workspace_write.network_access=false",
 		"--cd", projectRoot,
 		"-o", finalPath,
+		"--output-schema", schemaPath,
 		prompt,
 	}
 }
@@ -146,6 +165,12 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	execResult, err := executor.ExecCodex(ctx, CodexExecRequest{ProjectRoot: env.ProjectRoot, Prompt: prompt})
 	if err != nil {
 		return RealCodexRunResult{}, err
+	}
+	if execResult.ExitCode == 0 {
+		if err := schemas.ValidateCodexFinalMessage(execResult.FinalMessage); err != nil {
+			execResult.ExitCode = 1
+			execResult.Stderr = strings.TrimSpace(execResult.Stderr + "\n" + "schema validation failed: " + err.Error())
+		}
 	}
 	headCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
 	diff := gitOutputOrEmpty(ctx, env.ProjectRoot, "diff", "--binary")
@@ -326,6 +351,8 @@ func classifyCodexExecResult(result CodexExecResult) (string, []string) {
 		classification = "dependency_required"
 	case strings.Contains(output, "git reset") || strings.Contains(output, "git clean") || strings.Contains(output, "destructive"):
 		classification = "destructive_command_required"
+	case strings.Contains(output, "schema validation"):
+		classification = "schema_validation_failed"
 	}
 	return classification, []string{classification}
 }
@@ -360,7 +387,7 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 		EnvironmentID: env.ID,
 		Runner:        "direct",
 		WorkingDir:    env.ProjectRoot,
-		Argv:          codexExecArgv(env.ProjectRoot, "<prompt>", "<final-message-path>"),
+		Argv:          codexExecArgv(env.ProjectRoot, "<prompt>", "<final-message-path>", "<output-schema-path>"),
 		NetworkPolicy: runners.NetworkOff,
 	}
 	commandStatus := runners.CommandSucceeded

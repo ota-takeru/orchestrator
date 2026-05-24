@@ -35,3 +35,15 @@ func TestValidateInstalledDetectsChecksumMismatch(t *testing.T) {
 		t.Fatalf("validation = %#v", validation)
 	}
 }
+
+func TestValidateCodexFinalMessage(t *testing.T) {
+	if err := ValidateCodexFinalMessage(`{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCodexFinalMessage(`{"status":"ok","summary":"done"}`); err == nil {
+		t.Fatal("expected invalid codex final status to fail")
+	}
+	if err := ValidateCodexFinalMessage(`not json`); err == nil {
+		t.Fatal("expected non-json final message to fail")
+	}
+}

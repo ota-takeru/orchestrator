@@ -38,7 +38,7 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestRunRealCodexTaskThenVerificationReachesReview(t *testing.T) {
 	setRealCodexDoctorDetectedForTest(t)
 
 	runResult, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,6 +142,33 @@ func TestRunRealCodexTaskFailureOpensDecision(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskInvalidFinalMessageOpensDecision(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "not json", ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "needs_decision" || result.Classification != "schema_validation_failed" {
+		t.Fatalf("result = %#v", result)
+	}
+	var runStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM runs WHERE id = ?", result.ImplementationRun).Scan(&runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "blocked" {
+		t.Fatalf("run status = %s", runStatus)
+	}
+}
+
 func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -164,7 +191,7 @@ func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 	defer restore()
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +232,7 @@ func TestRunRealCodexTaskUsesRunProfileImplementationEnvironment(t *testing.T) {
 	defer restore()
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +267,7 @@ func TestRunRealCodexTaskSupportsWindowsWhenRuntimeIsWindows(t *testing.T) {
 	defer restore()
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: "done", ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)

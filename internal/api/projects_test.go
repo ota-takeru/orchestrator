@@ -11,6 +11,7 @@ import (
 
 	"github.com/ota-takeru/orchestrator/internal/projecthub"
 	"github.com/ota-takeru/orchestrator/internal/registry"
+	"github.com/ota-takeru/orchestrator/internal/storage"
 	_ "modernc.org/sqlite"
 )
 
@@ -166,6 +167,9 @@ type apiFakeAuthority struct {
 func (a apiFakeAuthority) Snapshot(context.Context, registry.RegisteredProject) (projecthub.ProjectSnapshot, error) {
 	return projecthub.ProjectSnapshot{ProjectID: a.name}, nil
 }
+func (a apiFakeAuthority) Dashboard(context.Context, registry.RegisteredProject) (storage.ProjectDashboardData, error) {
+	return storage.ProjectDashboardData{Snapshot: projecthub.ProjectSnapshot{ProjectID: a.name}}, nil
+}
 func (a apiFakeAuthority) Tasks(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"tasks": []any{a.name}}, nil
 }
@@ -179,5 +183,14 @@ func (a apiFakeAuthority) CreateChangeRequest(context.Context, registry.Register
 	return map[string]any{"ok": a.name}, nil
 }
 func (a apiFakeAuthority) ApproveInboxItem(context.Context, registry.RegisteredProject, string, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) SaveEnvBinding(context.Context, registry.RegisteredProject, storage.EnvBindingInput) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) TaskArtifacts(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"artifacts": []any{a.name}}, nil
+}
+func (a apiFakeAuthority) SetupStatus(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }

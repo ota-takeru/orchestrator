@@ -213,6 +213,69 @@ export type DependencyRisk = {
   created_at: string;
 };
 
+export type EnvBinding = {
+  id: string;
+  environment_id?: string;
+  key: string;
+  scope: string;
+  scope_id?: string;
+  storage: string;
+  storage_ref: string;
+  status: string;
+  redacted_preview: string;
+  value_fingerprint: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SetupStatus = {
+  project_root: string;
+  git_repository: boolean;
+  git_clean: boolean;
+  git_dirty_files?: string[];
+  gitignore_env_local: boolean;
+  required_verification_configured: boolean;
+  protected_paths: string[];
+  environment_bindings: EnvBinding[];
+  toolchain_setup_cards: ToolchainSetupCard[];
+  blockers?: string[];
+};
+
+export type TaskArtifact = {
+  id: string;
+  run_id: string;
+  run_type: string;
+  run_status: string;
+  task_id: string;
+  artifact_type: string;
+  artifact_key: string;
+  path: string;
+  content_hash: string;
+  redaction_status: string;
+  content?: string;
+  created_at: string;
+};
+
+export type DashboardWireData = {
+  snapshot: HumanInboxSnapshot;
+  tasks: TaskRecord[];
+  feature_requests: FeatureRequest[];
+  queue_items: WorkQueueItem[];
+  work_status: WorkStatus;
+  planning_status: PlanningStatus;
+  change_requests: ChangeRequest[];
+  dependency_risks: DependencyRisk[];
+  decisions: Decision[];
+  baseline_issues: MemoryRecord[];
+  trusted_artifacts: TrustedArtifact[];
+  path_mappings: PathMapping[];
+  toolchain_setup_cards: ToolchainSetupCard[];
+  merge_status: MergeGateStatus;
+  project_violations: InvariantViolation[];
+  setup_status: SetupStatus;
+};
+
 export type DashboardData = {
   snapshot: HumanInboxSnapshot;
   tasks: TaskRecord[];
@@ -229,6 +292,7 @@ export type DashboardData = {
   toolchainSetupCards: ToolchainSetupCard[];
   mergeStatus: MergeGateStatus;
   projectViolations: InvariantViolation[];
+  setupStatus?: SetupStatus;
 };
 
 export type RegisteredProject = {

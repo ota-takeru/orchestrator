@@ -1,8 +1,8 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, saveEnvBinding } from "./api";
-import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, WorkQueueItem } from "./types";
+import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, saveEnvBinding } from "./api";
+import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -30,6 +30,8 @@ function App() {
   const [changeText, setChangeText] = useState("");
   const [envKey, setEnvKey] = useState("");
   const [envValue, setEnvValue] = useState("");
+  const [selectedArtifactTaskID, setSelectedArtifactTaskID] = useState("");
+  const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[]>([]);
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
 
@@ -118,16 +120,25 @@ function App() {
   };
 
   const submitEnvBinding = async () => {
-    if (selectedProjectID) return;
     if (!envKey.trim() || !envValue) return;
     setError("");
     try {
-      await saveEnvBinding(envKey, envValue);
+      await saveEnvBinding(envKey, envValue, "project", "", selectedProjectID || undefined);
       setEnvKey("");
       setEnvValue("");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Environment input failed");
+    }
+  };
+
+  const openTaskArtifacts = async (taskID: string) => {
+    setSelectedArtifactTaskID(taskID);
+    setError("");
+    try {
+      setTaskArtifacts(await loadTaskArtifacts(taskID, selectedProjectID || undefined));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Artifact load failed");
     }
   };
 
@@ -158,6 +169,7 @@ function App() {
               setFeatureText={setFeatureText}
               onSubmitFeature={submitFeatureRequest}
               onApprove={approve}
+              onOpenTaskArtifacts={openTaskArtifacts}
             />
           ) : (
             <LoadingPanel />
@@ -172,8 +184,9 @@ function App() {
             setEnvKey={setEnvKey}
             setEnvValue={setEnvValue}
             onSubmit={submitEnvBinding}
-            disabled={Boolean(selectedProjectID)}
           />
+          <SetupWizardPanel setup={data?.setupStatus} />
+          <ArtifactViewerPanel taskID={selectedArtifactTaskID} artifacts={taskArtifacts} />
           <ChangeRequestPanel requests={data?.changeRequests ?? []} text={changeText} setText={setChangeText} onSubmit={submitChangeRequest} />
           <DependencyRiskPanel risks={data?.dependencyRisks ?? []} />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
@@ -257,7 +270,8 @@ function SelectedProjectDashboard({
   featureText,
   setFeatureText,
   onSubmitFeature,
-  onApprove
+  onApprove,
+  onOpenTaskArtifacts
 }: {
   data: DashboardData;
   selectedProject?: RegisteredProject;
@@ -266,6 +280,7 @@ function SelectedProjectDashboard({
   setFeatureText: (value: string) => void;
   onSubmitFeature: () => void;
   onApprove: (item: InboxItem) => void;
+  onOpenTaskArtifacts: (taskID: string) => void;
 }) {
   return (
     <>
@@ -274,7 +289,7 @@ function SelectedProjectDashboard({
       <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
       <WorkPlanningPanel data={data} />
-      <TaskPanel tasks={data.tasks} />
+      <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
     </>
   );
 }
@@ -384,7 +399,7 @@ function WorkPlanningPanel({ data }: { data: DashboardData }) {
   );
 }
 
-function TaskPanel({ tasks }: { tasks: DashboardData["tasks"] }) {
+function TaskPanel({ tasks, onOpenArtifacts }: { tasks: DashboardData["tasks"]; onOpenArtifacts: (taskID: string) => void }) {
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -401,6 +416,9 @@ function TaskPanel({ tasks }: { tasks: DashboardData["tasks"] }) {
             <small>
               {task.id} / {task.status}
             </small>
+            <button className="secondary-button" type="button" onClick={() => onOpenArtifacts(task.id)}>
+              Artifacts
+            </button>
           </div>
         ))}
       </StackEmpty>
@@ -436,6 +454,74 @@ function EnvironmentInputPanel({
           Save
         </button>
       </div>
+    </section>
+  );
+}
+
+function SetupWizardPanel({ setup }: { setup?: DashboardData["setupStatus"] }) {
+  const steps = setup
+    ? [
+        { label: "Project root", done: Boolean(setup.project_root) },
+        { label: "Git repository", done: setup.git_repository },
+        { label: ".env.local ignored", done: setup.gitignore_env_local },
+        { label: "Verification commands", done: setup.required_verification_configured },
+        { label: "Protected paths", done: setup.protected_paths.length > 0 },
+        { label: "Env bindings", done: setup.environment_bindings.length > 0 },
+        { label: "Toolchain setup", done: setup.toolchain_setup_cards.length === 0 },
+        { label: "Git clean", done: setup.git_clean }
+      ]
+    : [];
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Setup Wizard</h2>
+        <Wrench size={18} className="text-zinc-500" />
+      </div>
+      {!setup ? (
+        <div className="empty-stack">Setup status unavailable</div>
+      ) : (
+        <div className="stack">
+          {steps.map((step) => (
+            <div className="setup-step" key={step.label}>
+              <span className={step.done ? "step-dot done" : "step-dot"} />
+              <span>{step.label}</span>
+            </div>
+          ))}
+          <StackEmpty empty={(setup.blockers ?? []).length === 0} label="Project is ready for guarded operation">
+            {(setup.blockers ?? []).map((blocker) => (
+              <div className="stack-row" key={blocker}>
+                <span>{blocker}</span>
+                <small>setup blocker</small>
+              </div>
+            ))}
+          </StackEmpty>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ArtifactViewerPanel({ taskID, artifacts }: { taskID: string; artifacts: TaskArtifact[] }) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Diff & Artifacts</h2>
+        <FileCheck2 size={18} className="text-zinc-500" />
+      </div>
+      <StackEmpty empty={!taskID || artifacts.length === 0} label={taskID ? "No artifacts for selected task" : "Select a task"}>
+        {artifacts.slice(0, 12).map((artifact) => (
+          <div className="stack-row" key={artifact.id}>
+            <span>
+              {artifact.artifact_type} / {artifact.artifact_key}
+            </span>
+            <small>
+              {artifact.run_id} / {artifact.run_status}
+            </small>
+            <small>{artifact.path}</small>
+            {artifact.content ? <pre className="artifact-content">{artifact.content.slice(0, 4000)}</pre> : null}
+          </div>
+        ))}
+      </StackEmpty>
     </section>
   );
 }
@@ -570,6 +656,7 @@ function InboxPanel({
                   <td>
                     <div className="item-title">{item.title}</div>
                     <div className="item-body">{item.body}</div>
+                    <div className="item-body">Recommended: {recommendedInboxAction(item, decisions)}</div>
                   </td>
                   <td>{item.source_type}</td>
                   <td className="row-action">
@@ -803,6 +890,20 @@ function firstDecisionOption(decisions: Decision[], decisionID?: string) {
     return undefined;
   }
   return decisions.find((decision) => decision.id === decisionID)?.options?.[0]?.id;
+}
+
+function recommendedInboxAction(item: InboxItem, decisions: Decision[]) {
+  if (item.source_type === "decision") {
+    const option = decisions.find((decision) => decision.id === item.source_id)?.options?.[0]?.label;
+    return option ? `choose ${option}` : "open the related decision";
+  }
+  if (item.source_type === "human_approval") {
+    return "review evidence, then approve or request changes";
+  }
+  if (item.item_type.includes("setup") || item.source_type.includes("toolchain")) {
+    return "complete setup and rerun doctor";
+  }
+  return "inspect the linked task/run artifact";
 }
 
 export default App;

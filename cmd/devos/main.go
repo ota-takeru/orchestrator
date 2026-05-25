@@ -65,7 +65,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "status":
 		return runStatusCommand(ctx, args[1:], stdout)
 	case "doctor":
-		return runPlatform(ctx, append([]string{"doctor", "--include-codex", "--include-ui"}, args[1:]...), stdout, stderr)
+		return runDoctorCommand(ctx, args[1:], stdout)
 	case "request":
 		return runRequest(ctx, args[1:], stdout)
 	case "requests":
@@ -446,6 +446,8 @@ func runTask(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	switch args[0] {
 	case "show":
 		return runTaskShow(ctx, args[1:], stdout)
+	case "artifacts":
+		return runTaskArtifacts(ctx, args[1:], stdout)
 	default:
 		fmt.Fprintf(stderr, "unknown task subcommand: %s\n", args[0])
 		return exitValidation
@@ -489,6 +491,37 @@ func runTaskShow(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runTaskArtifacts(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("task artifacts", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	includeContent := fs.Bool("include-content", false, "include safe text artifact content")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("TASK_ID is required"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "task_artifacts_failed", err)
+	}
+	defer db.Close()
+	artifacts, err := db.ListTaskRunArtifacts(ctx, projectID, fs.Arg(0), *includeContent)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "task_artifacts_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"artifacts": artifacts}, 0)
+	}
+	for _, artifact := range artifacts {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", artifact.RunID, artifact.ArtifactType, artifact.ArtifactKey, artifact.Path)
+	}
+	return 0
+}
+
 func runStatusCommand(ctx context.Context, args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -517,6 +550,99 @@ func runStatusCommand(ctx context.Context, args []string, stdout io.Writer) int 
 	fmt.Fprintf(stdout, "Merge queue: %v\n", status["merge_queue"])
 	fmt.Fprintf(stdout, "Last run: %s\n", status["last_run"])
 	fmt.Fprintf(stdout, "Next action: %s\n", status["next_action"])
+	return 0
+}
+
+func runDoctorCommand(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	envID := fs.String("env", "", "execution environment id")
+	save := fs.Bool("save", false, "save toolchain report")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, root, errCode, err := openMigratedProjectDBWithRoot(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "doctor_failed", err)
+	}
+	defer db.Close()
+	env := platform.DetectHostEnvironment(root)
+	if strings.TrimSpace(*envID) != "" {
+		envs, err := db.ListExecutionEnvironments(ctx, projectID)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "doctor_failed", err)
+		}
+		found := false
+		for _, candidate := range envs {
+			if candidate.ID == *envID {
+				env = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			return writeError(stdout, *jsonOut, exitValidation, "doctor_failed", fmt.Errorf("execution environment not found: %s", *envID))
+		}
+	}
+	toolchainReport := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: true, IncludeUI: true})
+	if *save {
+		if err := db.SaveToolchainReport(ctx, projectID, toolchainReport); err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "doctor_failed", err)
+		}
+	}
+	setup, err := db.LoadSetupStatus(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "doctor_failed", err)
+	}
+	status, err := projectStatusSummary(ctx, db, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "doctor_failed", err)
+	}
+	mergeStatus, err := db.MergeGateStatus(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "doctor_failed", err)
+	}
+	profiles, err := db.ListRunProfiles(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "doctor_failed", err)
+	}
+	activeProfile := ""
+	for _, profile := range profiles {
+		if profile.Status == "active" {
+			activeProfile = profile.ID
+			break
+		}
+	}
+	schemaValidation := schemas.ValidateInstalled(root)
+	result := map[string]any{
+		"project_root":      root,
+		"project_id":        projectID,
+		"active_profile":    activeProfile,
+		"environment":       env,
+		"toolchain_report":  toolchainReport,
+		"setup_status":      setup,
+		"status":            status,
+		"schema_registry":   schemaValidation,
+		"merge_status":      mergeStatus,
+		"last_real_run":     lastRunSummary(ctx, db, projectID, "implementation"),
+		"last_verification": lastRunSummary(ctx, db, projectID, "verification"),
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Project: %s\n", status["project"])
+	fmt.Fprintf(stdout, "Project ID: %s\n", projectID)
+	fmt.Fprintf(stdout, "Root: %s\n", root)
+	fmt.Fprintf(stdout, "Environment: %s %s\n", env.ID, env.OSFamily)
+	fmt.Fprintf(stdout, "Git clean: %t\n", setup.GitClean)
+	fmt.Fprintf(stdout, "Active profile: %s\n", activeProfile)
+	fmt.Fprintf(stdout, "Schema registry valid: %t\n", schemaValidation.Valid)
+	fmt.Fprintf(stdout, "Required verification configured: %t\n", setup.RequiredVerificationConfigured)
+	fmt.Fprintf(stdout, "Merge ready: %t\n", mergeStatus.Ready)
+	fmt.Fprintf(stdout, "Open inbox: %v\n", status["open_inbox"])
 	return 0
 }
 
@@ -2481,6 +2607,57 @@ func runUI(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 			fmt.Fprintf(stdout, "%s\t%s\t%s\n", item.ID, item.ItemType, item.Title)
 		}
 		return 0
+	case "dashboard":
+		fs := flag.NewFlagSet("ui dashboard", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		limit := fs.Int("limit", 20, "maximum open inbox items")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "ui_dashboard_failed", err)
+		}
+		defer db.Close()
+		dashboard, err := db.LoadProjectDashboard(ctx, projectID, *limit)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "ui_dashboard_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, dashboard, 0)
+		}
+		fmt.Fprintf(stdout, "Dashboard: %s\n", dashboard.Snapshot.ProjectID)
+		fmt.Fprintf(stdout, "Tasks: %d\n", len(dashboard.Tasks))
+		fmt.Fprintf(stdout, "Inbox: %d\n", len(dashboard.Snapshot.OpenInboxItems))
+		return 0
+	case "setup":
+		fs := flag.NewFlagSet("ui setup", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "ui_setup_failed", err)
+		}
+		defer db.Close()
+		status, err := db.LoadSetupStatus(ctx, projectID)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitStorage, "ui_setup_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, status, 0)
+		}
+		fmt.Fprintf(stdout, "Project root: %s\n", status.ProjectRoot)
+		fmt.Fprintf(stdout, "Git clean: %t\n", status.GitClean)
+		fmt.Fprintf(stdout, "Required verification configured: %t\n", status.RequiredVerificationConfigured)
+		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown ui subcommand: %s\n", args[0])
 		return exitValidation
@@ -2686,6 +2863,26 @@ LIMIT 1`, projectID, taskID).Scan(&latestRunID, &runStatus, &headCommit, &diffHa
 		detail["artifacts"] = artifacts
 	}
 	return detail, nil
+}
+
+func lastRunSummary(ctx context.Context, db *storage.DB, projectID string, runType string) map[string]any {
+	var runID, status, taskID, headCommit, diffHash sql.NullString
+	err := db.SQL().QueryRowContext(ctx, `
+SELECT id, status, COALESCE(task_id, ''), COALESCE(head_commit, ''), COALESCE(diff_hash, '')
+FROM runs
+WHERE project_id = ? AND run_type = ?
+ORDER BY updated_at DESC
+LIMIT 1`, projectID, runType).Scan(&runID, &status, &taskID, &headCommit, &diffHash)
+	if err != nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"id":          runID.String,
+		"status":      status.String,
+		"task_id":     taskID.String,
+		"head_commit": headCommit.String,
+		"diff_hash":   diffHash.String,
+	}
 }
 
 func uiStaticHandler(apiHandler http.Handler, uiDir string) http.Handler {
@@ -3429,6 +3626,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos task show [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos task artifacts [--project-root PATH] [--data-root PATH] [--include-content] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos doctor [--project-root PATH] [--data-root PATH] [--env ENV_ID] [--save] [--json]")
 	fmt.Fprintln(w, "  devos request [--project-root PATH] [--data-root PATH] [--json] TEXT")
@@ -3457,6 +3655,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos dependency risk add [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT --risk medium [--lockfile-changed] [--lifecycle-scripts VALUE] [--approved-scope project] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk list [--project-root PATH] [--data-root PATH] [--manager npm] [--type production] [--risk medium] [--json]")
 	fmt.Fprintln(w, "  devos ui snapshot [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
+	fmt.Fprintln(w, "  devos ui dashboard [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
+	fmt.Fprintln(w, "  devos ui setup [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos serve [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765] [--ui] [--open] [--json]")
 	fmt.Fprintln(w, "  devos start [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")

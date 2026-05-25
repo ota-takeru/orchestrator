@@ -556,6 +556,38 @@ func TestRunRealCodexTaskFinalMessageClassifiesRunStatus(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskDependencyCommandBlocksAndSavesNetworkEvidence(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := initStorageGitRepo(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
+	stdout := `{"type":"item.completed","item":{"type":"command_execution","command":"npm install zod"}}` + "\n"
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+		result: CodexExecResult{Stdout: stdout, FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "needs_decision" || result.Classification != "policy_blocked" {
+		t.Fatalf("result = %#v", result)
+	}
+	var artifactPath string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT path FROM run_artifacts WHERE run_id = ? AND artifact_key = 'network-evidence.json'", result.ImplementationRun).Scan(&artifactPath); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(db.dataRoot, artifactPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "dependency installation requires approval") {
+		t.Fatalf("network evidence = %s", string(raw))
+	}
+}
+
 func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

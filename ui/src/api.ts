@@ -1,6 +1,7 @@
 import type {
   ChangeRequest,
   DashboardData,
+  DashboardWireData,
   Decision,
   DependencyRisk,
   FeatureRequest,
@@ -11,6 +12,8 @@ import type {
   PathMapping,
   PlanningStatus,
   RegisteredProject,
+  SetupStatus,
+  TaskArtifact,
   TaskRecord,
   ToolchainSetupCard,
   TrustedArtifact,
@@ -55,7 +58,8 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     pathMappingBody,
     setupBody,
     mergeStatus,
-    checkBody
+    checkBody,
+    setupStatus
   ] = await Promise.all([
     getJSON<HumanInboxSnapshot>("/api/ui/snapshot?limit=12"),
     getJSON<{ tasks: TaskRecord[] }>("/api/tasks"),
@@ -71,7 +75,8 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     getJSON<{ mappings: PathMapping[] }>("/api/platform/path-mappings"),
     getJSON<{ cards: ToolchainSetupCard[] }>("/api/platform/toolchain-setup"),
     getJSON<MergeGateStatus>("/api/merge/status"),
-    getJSON<{ violations: InvariantViolation[] }>("/api/check")
+    getJSON<{ violations: InvariantViolation[] }>("/api/check"),
+    getJSON<SetupStatus>("/api/setup")
   ]);
 
   return {
@@ -89,34 +94,14 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     pathMappings: pathMappingBody.mappings,
     toolchainSetupCards: setupBody.cards,
     mergeStatus,
-    projectViolations: checkBody.violations
+    projectViolations: checkBody.violations,
+    setupStatus
   };
 }
 
 async function loadProjectDashboardData(projectID: string): Promise<DashboardData> {
   const base = `/api/projects/${encodeURIComponent(projectID)}`;
-  const [snapshot, taskBody, inboxBody] = await Promise.all([
-    getJSON<HumanInboxSnapshot>(`${base}/snapshot`),
-    getJSON<{ tasks: TaskRecord[] }>(`${base}/tasks`),
-    getJSON<{ items: HumanInboxSnapshot["open_inbox_items"] }>(`${base}/inbox?status=open`)
-  ]);
-  return {
-    snapshot: { ...snapshot, open_inbox_items: snapshot.open_inbox_items ?? inboxBody.items },
-    tasks: taskBody.tasks,
-    featureRequests: [],
-    queueItems: [],
-    workStatus: emptyWorkStatus(),
-    planningStatus: { runs: [], artifacts: [], queue: [] },
-    changeRequests: [],
-    dependencyRisks: [],
-    decisions: [],
-    baselineIssues: [],
-    trustedArtifacts: [],
-    pathMappings: [],
-    toolchainSetupCards: [],
-    mergeStatus: { queue: [], ready: true },
-    projectViolations: []
-  };
+  return normalizeDashboard(await getJSON<DashboardWireData>(`${base}/dashboard`));
 }
 
 export async function approveInboxItem(id: string, notes: string, option?: string, projectID?: string): Promise<void> {
@@ -145,8 +130,17 @@ export async function createChangeRequest(text: string, projectID?: string): Pro
   await postJSON(path, { text });
 }
 
-export async function saveEnvBinding(key: string, value: string, scope = "project", environmentID = ""): Promise<void> {
-  await postJSON("/api/env/bindings", { key, value, scope, environment_id: environmentID });
+export async function saveEnvBinding(key: string, value: string, scope = "project", environmentID = "", projectID?: string): Promise<void> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/env/bindings` : "/api/env/bindings";
+  await postJSON(path, { key, value, scope, environment_id: environmentID });
+}
+
+export async function loadTaskArtifacts(taskID: string, projectID?: string): Promise<TaskArtifact[]> {
+  const path = projectID
+    ? `/api/projects/${encodeURIComponent(projectID)}/tasks/${encodeURIComponent(taskID)}/artifacts`
+    : `/api/tasks/${encodeURIComponent(taskID)}/artifacts`;
+  const body = await getJSON<{ artifacts: TaskArtifact[] }>(path);
+  return body.artifacts;
 }
 
 async function postJSON(path: string, body: unknown): Promise<void> {
@@ -172,5 +166,26 @@ function emptyWorkStatus(): WorkStatus {
       artifacts: [],
       queue: []
     }
+  };
+}
+
+function normalizeDashboard(data: DashboardWireData): DashboardData {
+  return {
+    snapshot: data.snapshot,
+    tasks: data.tasks ?? [],
+    featureRequests: data.feature_requests ?? [],
+    queueItems: data.queue_items ?? [],
+    workStatus: data.work_status ?? emptyWorkStatus(),
+    planningStatus: data.planning_status ?? { runs: [], artifacts: [], queue: [] },
+    changeRequests: data.change_requests ?? [],
+    dependencyRisks: data.dependency_risks ?? [],
+    decisions: data.decisions ?? [],
+    baselineIssues: data.baseline_issues ?? [],
+    trustedArtifacts: data.trusted_artifacts ?? [],
+    pathMappings: data.path_mappings ?? [],
+    toolchainSetupCards: data.toolchain_setup_cards ?? [],
+    mergeStatus: data.merge_status ?? { queue: [], ready: true },
+    projectViolations: data.project_violations ?? [],
+    setupStatus: data.setup_status
   };
 }

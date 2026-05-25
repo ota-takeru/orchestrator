@@ -45,6 +45,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	mux.HandleFunc("/api/memory", s.handleMemory)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
+	mux.HandleFunc("/api/tasks/", s.handleTaskRoute)
 	mux.HandleFunc("/api/requests", s.handleRequests)
 	mux.HandleFunc("/api/queue", s.handleQueue)
 	mux.HandleFunc("/api/work/status", s.handleWorkStatus)
@@ -57,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/platform/toolchain-setup", s.handleToolchainSetup)
 	mux.HandleFunc("/api/merge/status", s.handleMergeStatus)
 	mux.HandleFunc("/api/check", s.handleProjectCheck)
+	mux.HandleFunc("/api/setup", s.handleSetupStatus)
 	return s.localMiddleware(mux)
 }
 
@@ -80,6 +82,10 @@ func (s *Server) localMiddleware(next http.Handler) http.Handler {
 			writeAPIError(w, http.StatusUnauthorized, "local_token_required", "X-DevOS-Token is required")
 			return
 		}
+		if s.localToken != "" && requiresLocalNonce(r) && strings.TrimSpace(r.Header.Get("X-DevOS-Nonce")) == "" {
+			writeAPIError(w, http.StatusForbidden, "local_nonce_required", "X-DevOS-Nonce is required")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -101,7 +107,14 @@ func requiresLocalToken(r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodOptions {
 		return false
 	}
-	return r.URL.Path == "/api/env/bindings" || strings.Contains(r.URL.Path, "/approve") || strings.Contains(r.URL.Path, "/merge")
+	return r.URL.Path == "/api/env/bindings" || strings.HasSuffix(r.URL.Path, "/env/bindings") || strings.Contains(r.URL.Path, "/approve") || strings.Contains(r.URL.Path, "/merge")
+}
+
+func requiresLocalNonce(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodOptions {
+		return false
+	}
+	return strings.Contains(r.URL.Path, "/approve") || strings.Contains(r.URL.Path, "/merge")
 }
 
 func urlParse(origin string) (string, error) {
@@ -126,6 +139,24 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "tasks" || parts[3] != "artifacts" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown task route")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	artifacts, err := s.db.ListTaskRunArtifacts(r.Context(), s.projectID, parts[2], true)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "task_artifacts_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -174,12 +205,34 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, snapshot)
+	case len(parts) == 4 && action == "dashboard":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.Dashboard(r.Context(), project)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
 	case len(parts) == 4 && action == "tasks":
 		if r.Method != http.MethodGet {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
 			return
 		}
 		body, err := authority.Tasks(r.Context(), project)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "tasks" && parts[4] != "" && parts[5] == "artifacts":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.TaskArtifacts(r.Context(), project, parts[4])
 		if err != nil {
 			writeProjectHubError(w, err)
 			return
@@ -221,6 +274,32 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, err := authority.CreateChangeRequest(r.Context(), project, text)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 5 && action == "env" && parts[4] == "bindings":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		input, ok := decodeEnvBindingBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.SaveEnvBinding(r.Context(), project, input)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "setup":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.SetupStatus(r.Context(), project)
 		if err != nil {
 			writeProjectHubError(w, err)
 			return
@@ -392,25 +471,12 @@ func (s *Server) handleEnvBindings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
 		return
 	}
-	var input struct {
-		EnvironmentID string `json:"environment_id"`
-		Key           string `json:"key"`
-		Scope         string `json:"scope"`
-		ScopeID       string `json:"scope_id"`
-		Value         string `json:"value"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+	input, ok := decodeEnvBindingBody(w, r)
+	if !ok {
 		return
 	}
-	record, err := s.db.SaveEnvBinding(r.Context(), storage.EnvBindingInput{
-		ProjectID:     s.projectID,
-		EnvironmentID: input.EnvironmentID,
-		Key:           input.Key,
-		Scope:         input.Scope,
-		ScopeID:       input.ScopeID,
-		Value:         input.Value,
-	})
+	input.ProjectID = s.projectID
+	record, err := s.db.SaveEnvBinding(r.Context(), input)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "env_binding_failed", err.Error())
 		return
@@ -586,6 +652,19 @@ func (s *Server) handleProjectCheck(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, map[string]any{"violations": violations})
 }
 
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	status, err := s.db.LoadSetupStatus(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "setup_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, status)
+}
+
 func parseInboxActionPath(path string) (string, string, bool) {
 	trimmed := strings.Trim(path, "/")
 	parts := strings.Split(trimmed, "/")
@@ -607,6 +686,27 @@ func decodeTextBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return input.Text, true
+}
+
+func decodeEnvBindingBody(w http.ResponseWriter, r *http.Request) (storage.EnvBindingInput, bool) {
+	var input struct {
+		EnvironmentID string `json:"environment_id"`
+		Key           string `json:"key"`
+		Scope         string `json:"scope"`
+		ScopeID       string `json:"scope_id"`
+		Value         string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return storage.EnvBindingInput{}, false
+	}
+	return storage.EnvBindingInput{
+		EnvironmentID: input.EnvironmentID,
+		Key:           input.Key,
+		Scope:         input.Scope,
+		ScopeID:       input.ScopeID,
+		Value:         input.Value,
+	}, true
 }
 
 func writeProjectHubError(w http.ResponseWriter, err error) {

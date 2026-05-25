@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -226,9 +227,10 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	}
 	diff := commitResult.Diff
 	diffHash := sha256Hex([]byte(diff))
-	classification, blockers, runStatus, taskTo := classifyCodexOutcome(execResult, commitResult)
+	policyEvidence := classifyCodexPolicyEvidence(execResult.Stdout, diff)
+	classification, blockers, runStatus, taskTo := classifyCodexOutcome(execResult, commitResult, policyEvidence)
 	runID := "RUN-" + stableShortHash(taskID+"|real-codex|"+time.Now().UTC().Format(time.RFC3339Nano))
-	if err := db.saveCodexRun(ctx, projectID, taskID, env, workspaceRoot, runID, attemptNo, baseCommit, headCommit, diffHash, diff, prompt, execResult, runStatus, classification, blockers); err != nil {
+	if err := db.saveCodexRun(ctx, projectID, taskID, env, workspaceRoot, runID, attemptNo, baseCommit, headCommit, diffHash, diff, prompt, execResult, runStatus, classification, blockers, policyEvidence); err != nil {
 		return RealCodexRunResult{}, err
 	}
 	if taskTo == "needs_decision" {
@@ -510,7 +512,7 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 		StartedAt:    now,
 		CompletedAt:  now,
 	}
-	if err := db.saveCodexRun(ctx, projectID, taskID, env, env.ProjectRoot, runID, attemptNo, baseCommit, headCommit, sha256Hex(nil), "", prompt, execResult, "blocked", classification, blockers); err != nil {
+	if err := db.saveCodexRun(ctx, projectID, taskID, env, env.ProjectRoot, runID, attemptNo, baseCommit, headCommit, sha256Hex(nil), "", prompt, execResult, "blocked", classification, blockers, codexPolicyEvidence{NetworkMode: "read_only"}); err != nil {
 		return RealCodexRunResult{}, err
 	}
 	if err := db.openCodexBlockedDecision(ctx, projectID, taskID, runID, classification, blockers); err != nil {
@@ -591,6 +593,16 @@ type codexCommitResult struct {
 	HardBlock  bool
 }
 
+type codexPolicyEvidence struct {
+	NetworkMode       string   `json:"network_mode"`
+	NetworkUsed       bool     `json:"network_used"`
+	Domains           []string `json:"domains"`
+	DependencyChanges bool     `json:"dependency_changes"`
+	SecretsExposed    bool     `json:"secrets_exposed"`
+	Commands          []string `json:"commands,omitempty"`
+	PolicyViolations  []string `json:"policy_violations,omitempty"`
+}
+
 func finalizeCodexWorktree(ctx context.Context, workspaceRoot string, taskID string, execResult CodexExecResult) codexCommitResult {
 	if strings.TrimSpace(gitOutputOrEmpty(ctx, workspaceRoot, "rev-parse", "--is-inside-work-tree")) != "true" {
 		return codexCommitResult{InGit: false}
@@ -630,7 +642,7 @@ func finalizeCodexWorktree(ctx context.Context, workspaceRoot string, taskID str
 	}
 }
 
-func classifyCodexOutcome(result CodexExecResult, commit codexCommitResult) (string, []string, string, string) {
+func classifyCodexOutcome(result CodexExecResult, commit codexCommitResult, policy codexPolicyEvidence) (string, []string, string, string) {
 	final, finalErr := schemas.ParseCodexFinalMessage(result.FinalMessage)
 	if result.ExitCode != 0 {
 		classification, blockers := classifyCodexExecResult(result)
@@ -665,7 +677,104 @@ func classifyCodexOutcome(result CodexExecResult, commit codexCommitResult) (str
 		}
 		return classification, commit.Blockers, "blocked", "needs_decision"
 	}
+	if len(policy.PolicyViolations) > 0 {
+		return "policy_blocked", append([]string(nil), policy.PolicyViolations...), "blocked", "needs_decision"
+	}
 	return "succeeded", nil, "succeeded", "verifying"
+}
+
+func classifyCodexPolicyEvidence(stdout string, diff string) codexPolicyEvidence {
+	evidence := codexPolicyEvidence{NetworkMode: "read_only", SecretsExposed: false}
+	domains := map[string]struct{}{}
+	for _, command := range codexExecutedCommands(stdout) {
+		evidence.Commands = append(evidence.Commands, command)
+		lower := strings.ToLower(command)
+		switch {
+		case strings.Contains(lower, "pnpm add") || strings.Contains(lower, "npm install") || strings.Contains(lower, "npm i ") || strings.Contains(lower, "go get") || strings.Contains(lower, "pip install"):
+			evidence.DependencyChanges = true
+			evidence.PolicyViolations = append(evidence.PolicyViolations, "dependency installation requires approval: "+command)
+		case strings.Contains(lower, "terraform apply") || strings.Contains(lower, "docker push") || strings.Contains(lower, " gh repo delete") || strings.Contains(lower, "deploy"):
+			evidence.PolicyViolations = append(evidence.PolicyViolations, "dangerous command requires manual execution: "+command)
+		}
+		if strings.Contains(lower, "curl ") || strings.Contains(lower, "wget ") || strings.Contains(lower, "npm view") || strings.Contains(lower, "git ls-remote") {
+			evidence.NetworkUsed = true
+			for _, domain := range domainsFromCommand(command) {
+				domains[domain] = struct{}{}
+			}
+		}
+		if strings.Contains(lower, "$openai_api_key") || strings.Contains(lower, "%openai_api_key%") || strings.Contains(lower, "authorization: bearer") {
+			evidence.SecretsExposed = true
+			evidence.PolicyViolations = append(evidence.PolicyViolations, "possible secret-bearing network command: "+command)
+		}
+	}
+	if diffTouchesDependencyFiles(diff) {
+		evidence.DependencyChanges = true
+		evidence.PolicyViolations = append(evidence.PolicyViolations, "dependency file changed without dependency approval")
+	}
+	for domain := range domains {
+		evidence.Domains = append(evidence.Domains, domain)
+	}
+	sort.Strings(evidence.Domains)
+	return evidence
+}
+
+func codexExecutedCommands(stdout string) []string {
+	var commands []string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, `"command_execution"`) {
+			continue
+		}
+		var event struct {
+			Item struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+		if event.Item.Type == "command_execution" && strings.TrimSpace(event.Item.Command) != "" {
+			commands = append(commands, event.Item.Command)
+		}
+	}
+	return commands
+}
+
+func domainsFromCommand(command string) []string {
+	var domains []string
+	fields := strings.Fields(command)
+	for _, field := range fields {
+		trimmed := strings.Trim(field, `"'`)
+		if strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://") {
+			host := strings.TrimPrefix(strings.TrimPrefix(trimmed, "https://"), "http://")
+			if slash := strings.Index(host, "/"); slash >= 0 {
+				host = host[:slash]
+			}
+			if host != "" {
+				domains = append(domains, host)
+			}
+		}
+	}
+	return domains
+}
+
+func diffTouchesDependencyFiles(diff string) bool {
+	for _, marker := range []string{
+		"diff --git a/package.json ",
+		"diff --git a/pnpm-lock.yaml ",
+		"diff --git a/package-lock.json ",
+		"diff --git a/yarn.lock ",
+		"diff --git a/go.mod ",
+		"diff --git a/go.sum ",
+		"diff --git a/requirements.txt ",
+		"diff --git a/pyproject.toml ",
+	} {
+		if strings.Contains(diff, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyCodexExecResult(result CodexExecResult) (string, []string) {
@@ -741,7 +850,7 @@ func secretScanBlockers(root string, files []string) []string {
 	return blockers
 }
 
-func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, workspaceRoot string, runID string, attemptNo int, baseCommit string, headCommit string, diffHash string, diff string, prompt string, execResult CodexExecResult, runStatus string, classification string, blockers []string) error {
+func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, workspaceRoot string, runID string, attemptNo int, baseCommit string, headCommit string, diffHash string, diff string, prompt string, execResult CodexExecResult, runStatus string, classification string, blockers []string, policyEvidence codexPolicyEvidence) error {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -802,6 +911,11 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 		{ProjectID: projectID, RunID: runID, ArtifactType: "final_message", ArtifactKey: "final.txt", Content: []byte(execResult.FinalMessage)},
 		{ProjectID: projectID, RunID: runID, ArtifactType: "diff", ArtifactKey: "diff.patch", Content: []byte(diff)},
 	}
+	networkEvidence, err := json.MarshalIndent(policyEvidence, "", "  ")
+	if err != nil {
+		return err
+	}
+	artifacts = append(artifacts, RunArtifactInput{ProjectID: projectID, RunID: runID, ArtifactType: "summary", ArtifactKey: "network-evidence.json", Content: networkEvidence})
 	summary, err := json.MarshalIndent(map[string]any{
 		"task_id":           taskID,
 		"run_id":            runID,
@@ -815,6 +929,7 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 		"codex_adapter":     env.CodexAdapter,
 		"sandbox_profile":   env.SandboxProfile,
 		"codex_home_source": codexHomeSourceForEnvironment(env, os.LookupEnv),
+		"network_evidence":  policyEvidence,
 	}, "", "  ")
 	if err != nil {
 		return err

@@ -19,6 +19,11 @@
 
 2026-05-25:
 
+- Multi-project選択時のdashboardを `/api/projects/{id}/dashboard` と `devos ui dashboard` で一括取得できるようにし、feature requests、queue、planning、change requests、dependency risks、decisions、baseline issues、trusted artifacts、path mappings、toolchain setup、merge status、project check、setup statusを空配列で埋めずにauthority runtimeから取得するようにしました。
+- WSL authority bridgeに `ui dashboard`、`ui setup`、`task artifacts --include-content`、`env set --value-stdin` 経路を追加しました。env binding secretはWSL command argvへ入れずstdinで渡し、Windows UI/APIがWSL DBや `\\wsl$` worktreeを直接書かない境界を維持しています。
+- UIにSetup Wizard、selected project対応のEnvironment Input、task別Diff & Artifacts viewer、Human Inbox推奨action表示を追加しました。`devos task artifacts` と `/api/tasks/{task_id}/artifacts` も追加し、diff/final message/summary/test output系artifactをUIから確認できるようにしました。
+- Real Codex runに `network-evidence.json` summary artifactを追加し、Codex JSONL内のcommandからread-only network利用、domain、dependency install command、dangerous command、secret-bearing command疑い、dependency file変更を分類します。依存追加や危険commandは成功扱いせず `policy_blocked` Decision / Human Inboxへ接続します。
+- `devos doctor` をplatform doctor aliasから、project id、active profile、git clean、schema registry、toolchain、setup status、merge blockers、last implementation/verification runを含む一発診断へ拡張しました。
 - Real Codex実行後のtask worktree差分をOrchestrator側で検査し、protected path / secret scanを通したうえで `devos: implement TASK-...` commitを作成し、そのcommit hashをimplementation runの `head_commit` として保存するようにしました。差分なし、protected path、secret疑い、final message blocker、test failed/not_run は成功扱いにせず `needs_decision` / `failed` へ分類します。
 - implementation verificationは最新のsuccessful implementation runのtask worktree/head commitを対象にし、`verification_results.evidence_json` へ `verified_worktree`、`verified_commit`、`verification_plan_hash` を保存するようにしました。merge reverifyもtask/project由来のverification planを再利用し、required commandが空ならHuman Inboxへ `verification_required` Decisionを出してblockします。
 - Codex final message schemaをembedded定義と `.devagent/schemas/` で同期し、repository schema registryがembedded定義からdriftしていないことをテストで検出するようにしました。

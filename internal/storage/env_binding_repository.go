@@ -129,6 +129,43 @@ INSERT INTO environment_audit_events(
 	}, nil
 }
 
+func (db *DB) ListEnvBindings(ctx context.Context, projectID string) ([]EnvBindingRecord, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, COALESCE(environment_id, ''), key, scope, COALESCE(scope_id, ''),
+       storage, storage_ref, status, redacted_preview, value_fingerprint,
+       created_by, created_at, updated_at
+FROM environment_bindings
+WHERE project_id = ?
+ORDER BY scope, key`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []EnvBindingRecord
+	for rows.Next() {
+		var record EnvBindingRecord
+		if err := rows.Scan(
+			&record.ID,
+			&record.EnvironmentID,
+			&record.Key,
+			&record.Scope,
+			&record.ScopeID,
+			&record.Storage,
+			&record.StorageRef,
+			&record.Status,
+			&record.RedactedPreview,
+			&record.ValueFingerprint,
+			&record.CreatedBy,
+			&record.CreatedAt,
+			&record.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
 func (db *DB) projectRootForEnvBinding(ctx context.Context, projectID string) (string, error) {
 	var root sql.NullString
 	if err := db.sql.QueryRowContext(ctx, "SELECT root_path FROM projects WHERE id = ?", projectID).Scan(&root); err != nil {

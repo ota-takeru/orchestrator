@@ -18,11 +18,15 @@ type ProjectSnapshot = storage.HumanInboxSnapshot
 
 type ProjectAuthority interface {
 	Snapshot(ctx context.Context, project registry.RegisteredProject) (ProjectSnapshot, error)
+	Dashboard(ctx context.Context, project registry.RegisteredProject) (storage.ProjectDashboardData, error)
 	Tasks(ctx context.Context, project registry.RegisteredProject) (any, error)
 	Inbox(ctx context.Context, project registry.RegisteredProject, status string) (any, error)
 	CreateFeatureRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
 	CreateChangeRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
 	ApproveInboxItem(ctx context.Context, project registry.RegisteredProject, inboxID string, option string, notes string) (any, error)
+	SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error)
+	TaskArtifacts(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error)
+	SetupStatus(ctx context.Context, project registry.RegisteredProject) (any, error)
 }
 
 type Hub struct {
@@ -99,6 +103,15 @@ func (WindowsLocalAuthority) Snapshot(ctx context.Context, project registry.Regi
 	return db.LoadHumanInboxSnapshot(ctx, projectID, 20)
 }
 
+func (WindowsLocalAuthority) Dashboard(ctx context.Context, project registry.RegisteredProject) (storage.ProjectDashboardData, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return storage.ProjectDashboardData{}, err
+	}
+	defer db.Close()
+	return db.LoadProjectDashboard(ctx, projectID, 20)
+}
+
 func (WindowsLocalAuthority) Tasks(ctx context.Context, project registry.RegisteredProject) (any, error) {
 	db, projectID, err := openProjectDB(ctx, project)
 	if err != nil {
@@ -157,6 +170,38 @@ func (WindowsLocalAuthority) ApproveInboxItem(ctx context.Context, project regis
 	})
 }
 
+func (WindowsLocalAuthority) SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	input.ProjectID = projectID
+	return db.SaveEnvBinding(ctx, input)
+}
+
+func (WindowsLocalAuthority) TaskArtifacts(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	artifacts, err := db.ListTaskRunArtifacts(ctx, projectID, taskID, true)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"artifacts": artifacts}, nil
+}
+
+func (WindowsLocalAuthority) SetupStatus(ctx context.Context, project registry.RegisteredProject) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.LoadSetupStatus(ctx, projectID)
+}
+
 func openProjectDB(ctx context.Context, project registry.RegisteredProject) (*storage.DB, string, error) {
 	root := strings.TrimSpace(project.ProjectRoot)
 	if root == "" {
@@ -186,10 +231,32 @@ type CommandExecutor interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error)
 }
 
+type StdinCommandExecutor interface {
+	RunWithInput(ctx context.Context, stdin string, name string, args ...string) ([]byte, []byte, int, error)
+}
+
 type DefaultCommandExecutor struct{}
 
 func (DefaultCommandExecutor) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	stdout, err := cmd.Output()
+	var stderr []byte
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			stderr = exitErr.Stderr
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+	return stdout, stderr, exitCode, err
+}
+
+func (DefaultCommandExecutor) RunWithInput(ctx context.Context, stdin string, name string, args ...string) ([]byte, []byte, int, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
 	stdout, err := cmd.Output()
 	var stderr []byte
 	exitCode := 0
@@ -242,6 +309,14 @@ func (a WslAuthority) Snapshot(ctx context.Context, project registry.RegisteredP
 	return snapshot, nil
 }
 
+func (a WslAuthority) Dashboard(ctx context.Context, project registry.RegisteredProject) (storage.ProjectDashboardData, error) {
+	var dashboard storage.ProjectDashboardData
+	if err := a.runJSON(ctx, project, &dashboard, "ui", "dashboard"); err != nil {
+		return storage.ProjectDashboardData{}, err
+	}
+	return dashboard, nil
+}
+
 func (a WslAuthority) Tasks(ctx context.Context, project registry.RegisteredProject) (any, error) {
 	var body map[string]any
 	if err := a.runJSON(ctx, project, &body, "tasks"); err != nil {
@@ -288,6 +363,58 @@ func (a WslAuthority) ApproveInboxItem(ctx context.Context, project registry.Reg
 		args = append(args, "--notes", notes)
 	}
 	if err := a.runJSONWithTrailing(ctx, project, &body, args, inboxID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error) {
+	executor, ok := a.executor.(StdinCommandExecutor)
+	if !ok {
+		return nil, &AuthorityError{Code: "wsl_stdin_missing", Message: "wsl command executor does not support stdin for secret input"}
+	}
+	scope := strings.TrimSpace(input.Scope)
+	if scope == "" {
+		scope = "project"
+	}
+	args := []string{"env", "set", "--scope", scope, "--value-stdin"}
+	if strings.TrimSpace(input.EnvironmentID) != "" {
+		args = append(args, "--env", input.EnvironmentID)
+	}
+	if strings.TrimSpace(input.ScopeID) != "" {
+		args = append(args, "--scope-id", input.ScopeID)
+	}
+	base, err := a.commandArgs(project, args, input.Key)
+	if err != nil {
+		return nil, err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	stdout, stderr, exitCode, runErr := executor.RunWithInput(runCtx, input.Value, "wsl.exe", base...)
+	if runCtx.Err() == context.DeadlineExceeded {
+		return nil, &AuthorityError{Code: "wsl_timeout", Message: "wsl authority command timed out"}
+	}
+	if runErr != nil {
+		return nil, &AuthorityError{Code: "wsl_command_failed", Message: runErr.Error(), ExitCode: exitCode, Stderr: strings.TrimSpace(string(stderr))}
+	}
+	var body map[string]any
+	if err := json.Unmarshal(stdout, &body); err != nil {
+		return nil, &AuthorityError{Code: "wsl_invalid_json", Message: err.Error(), Stderr: strings.TrimSpace(string(stdout))}
+	}
+	return body, nil
+}
+
+func (a WslAuthority) TaskArtifacts(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error) {
+	var body map[string]any
+	if err := a.runJSONWithTrailing(ctx, project, &body, []string{"task", "artifacts", "--include-content"}, taskID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) SetupStatus(ctx context.Context, project registry.RegisteredProject) (any, error) {
+	var body map[string]any
+	if err := a.runJSON(ctx, project, &body, "ui", "setup"); err != nil {
 		return nil, err
 	}
 	return body, nil

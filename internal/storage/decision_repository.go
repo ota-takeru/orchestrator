@@ -128,14 +128,16 @@ func (db *DB) ApproveDecision(ctx context.Context, input DecisionApprovalInput) 
 
 	var decision DecisionRecord
 	var taskID sql.NullString
+	var evidenceJSON string
 	if err := tx.QueryRowContext(ctx, `
-SELECT id, task_id, status, title, created_at, updated_at
+SELECT id, task_id, status, title, evidence_json, created_at, updated_at
 FROM decisions
 WHERE project_id = ? AND id = ?`, input.ProjectID, input.DecisionID).Scan(
 		&decision.ID,
 		&taskID,
 		&decision.Status,
 		&decision.Title,
+		&evidenceJSON,
 		&decision.CreatedAt,
 		&decision.UpdatedAt,
 	); err != nil {
@@ -173,6 +175,9 @@ WHERE project_id = ? AND source_type = 'decision' AND source_id = ? AND status =
 		"selected_option": option,
 		"notes":           strings.TrimSpace(input.Notes),
 	}, now); err != nil {
+		return DecisionRecord{}, err
+	}
+	if err := db.recordApprovedDependencyDecision(ctx, tx, input, evidenceJSON, option, now); err != nil {
 		return DecisionRecord{}, err
 	}
 	if err := rememberApprovedDecision(ctx, tx, input.ProjectID, decision, input, now); err != nil {

@@ -19,6 +19,8 @@
 
 2026-05-25:
 
+- 依存追加の専用approval laneとして `devos dependency approval request`、`/api/dependency-approvals`、`/api/projects/{id}/dependency-approvals` を追加しました。依存追加要求はDependency DecisionとHuman Inbox itemとして保存し、承認optionが `approve_dependency` の場合だけdependency risk ledgerへ記録します。UIのDependency Risk panelからselected project単位でpackage manager、dependency type、risk、reason、alternatives、affected filesを入力して承認依頼を作れるようにしました。
+- Setup Wizardの次アクションを表示だけでなく実行できるようにし、`devos ui setup-action ACTION_ID`、`/api/setup/actions/{action_id}`、`/api/projects/{id}/setup/actions/{action_id}` を追加しました。Windows authorityはproject-local DBでdoctor/Codex readinessを保存し、WSL authorityは `wsl.exe -d <distro> -- devos ui setup-action --project-root <wsl_root> --json ACTION_ID` に閉じ込めて、Windows UIがWSL DBやworktreeを直接触らない境界を維持しています。
 - Multi-project選択時のdashboardを `/api/projects/{id}/dashboard` と `devos ui dashboard` で一括取得できるようにし、feature requests、queue、planning、change requests、dependency risks、decisions、baseline issues、trusted artifacts、path mappings、toolchain setup、merge status、project check、setup statusを空配列で埋めずにauthority runtimeから取得するようにしました。
 - WSL authority bridgeに `ui dashboard`、`ui setup`、`task artifacts --include-content`、`env set --value-stdin` 経路を追加しました。env binding secretはWSL command argvへ入れずstdinで渡し、Windows UI/APIがWSL DBや `\\wsl$` worktreeを直接書かない境界を維持しています。
 - UIにSetup Wizard、selected project対応のEnvironment Input、task別Diff & Artifacts viewer、Human Inbox推奨action表示を追加しました。`devos task artifacts` と `/api/tasks/{task_id}/artifacts` も追加し、diff/final message/summary/test output系artifactをUIから確認できるようにしました。
@@ -35,7 +37,7 @@
 - env bindingは `.env.local` がGit trackedなら保存拒否し、同一keyはappendではなくreplaceします。fingerprintはsecret値のSHA-256直ではなくproject/key salt付きHMACに変更しました。
 - WSL実機の一時projectで、新しいReal Codex safety E2Eを実行しました。`TASK-REAL-E2E` はtask worktree `.devagent-worktrees/TASK-REAL-E2E` 上で marker fileを作成し、Orchestrator commit `9348ba7525e9ceb8e8a0433fe66f21e71059c831` を保存、local verification evidenceに同commit/worktree/plan hashを記録して `ready_for_human_review` へ到達しました。
 - Windows実機では、Windows native Codex 0.133.0 がworkspace-write指定、writable root明示、`--add-dir` 明示後も「filesystem write access unavailable」とstructured final messageでblockを返すことを確認しました。一方で、同一の一時Git repo smokeは `--sandbox danger-full-access` でfile writeに成功したため、DevOSはWindows native / `windows-native` sandbox profileに限り、隔離task worktree、protected path check、secret scan、Orchestrator commit gateを前提にこのfallbackを使うようにしました。Windows用 `devos.exe` のbuildとWindows temp repoでの `init` / `doctor` 起動も確認済みです。
-- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`。
+- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`、`git diff --check`。
 
 2026-05-24:
 

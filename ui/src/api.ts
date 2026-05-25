@@ -12,6 +12,7 @@ import type {
   PathMapping,
   PlanningStatus,
   RegisteredProject,
+  SetupActionResult,
   SetupStatus,
   TaskArtifact,
   TaskRecord,
@@ -136,6 +137,26 @@ export async function saveEnvBinding(key: string, value: string, scope = "projec
   await postJSON(path, { key, value, scope, environment_id: environmentID });
 }
 
+export async function requestDependencyApproval(input: {
+  name: string;
+  package_manager: string;
+  dependency_type: string;
+  reason: string;
+  risk: string;
+  alternatives?: string;
+  files_affected?: string;
+}, projectID?: string): Promise<void> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/dependency-approvals` : "/api/dependency-approvals";
+  await postJSON(path, input);
+}
+
+export async function runSetupAction(actionID: string, projectID?: string): Promise<SetupActionResult> {
+  const path = projectID
+    ? `/api/projects/${encodeURIComponent(projectID)}/setup/actions/${encodeURIComponent(actionID)}`
+    : `/api/setup/actions/${encodeURIComponent(actionID)}`;
+  return postJSON<SetupActionResult>(path, {});
+}
+
 export async function loadTaskArtifacts(taskID: string, projectID?: string): Promise<TaskArtifact[]> {
   const path = projectID
     ? `/api/projects/${encodeURIComponent(projectID)}/tasks/${encodeURIComponent(taskID)}/artifacts`
@@ -157,7 +178,7 @@ export async function runTaskAction(taskID: string, action: "verify" | "review-a
   await postJSON(`${taskPath}${suffix}`, { notes: "Submitted from DevOS UI" });
 }
 
-async function postJSON(path: string, body: unknown): Promise<void> {
+async function postJSON<T = void>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     headers: {
@@ -171,6 +192,10 @@ async function postJSON(path: string, body: unknown): Promise<void> {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
 }
 
 function localAuthHeaders(): Record<string, string> {

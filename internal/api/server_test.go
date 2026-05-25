@@ -320,6 +320,40 @@ func TestServerExposesDashboardWorkflowResources(t *testing.T) {
 	}
 }
 
+func TestServerRequestsDependencyApproval(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/dependency-approvals", bytes.NewBufferString(`{"name":"zod","package_manager":"npm","dependency_type":"production","reason":"schema validation","risk":"medium","alternatives":"manual","files_affected":"package.json"}`))
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body storage.DependencyApprovalRequestResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.DecisionID == "" || body.InboxID == "" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestServerRunsSetupAction(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/actions/fake_workflow", nil)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body storage.SetupActionResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.ActionID != "fake_workflow" || body.Status != "manual_required" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
 func TestServerCreatesEnvBindingWithoutReturningSecret(t *testing.T) {
 	db, projectID := openAPITestDB(t)
 	if _, err := db.SQL().ExecContext(context.Background(), "UPDATE projects SET root_path = ? WHERE id = ?", t.TempDir(), projectID); err != nil {

@@ -9,6 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ota-takeru/orchestrator/internal/platform"
+	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
 
 type SetupStatus struct {
@@ -31,6 +34,13 @@ type SetupAction struct {
 	Command string `json:"command"`
 	Enabled bool   `json:"enabled"`
 	Reason  string `json:"reason,omitempty"`
+}
+
+type SetupActionResult struct {
+	ActionID string `json:"action_id"`
+	Status   string `json:"status"`
+	Message  string `json:"message"`
+	Result   any    `json:"result,omitempty"`
 }
 
 type ProjectDashboardData struct {
@@ -226,6 +236,37 @@ func setupActions(root string, status SetupStatus) []SetupAction {
 			Enabled: status.GitRepository && status.RequiredVerificationConfigured && len(status.ToolchainSetupCards) == 0,
 			Reason:  disabledReason(status.GitRepository && status.RequiredVerificationConfigured && len(status.ToolchainSetupCards) == 0, "git, required verification, and toolchains must be ready"),
 		},
+	}
+}
+
+func (db *DB) RunSetupAction(ctx context.Context, projectID string, actionID string) (SetupActionResult, error) {
+	actionID = strings.TrimSpace(actionID)
+	switch actionID {
+	case "doctor":
+		var root string
+		if err := db.sql.QueryRowContext(ctx, "SELECT root_path FROM projects WHERE id = ?", projectID).Scan(&root); err != nil {
+			return SetupActionResult{}, err
+		}
+		env := platform.DetectHostEnvironment(root)
+		report := toolchains.RunDoctor(ctx, env, toolchains.Options{IncludeCodex: true, IncludeUI: true})
+		if err := db.SaveToolchainReport(ctx, projectID, report); err != nil {
+			return SetupActionResult{}, err
+		}
+		return SetupActionResult{ActionID: actionID, Status: "succeeded", Message: "doctor report saved", Result: report}, nil
+	case "codex_readiness":
+		report, err := db.CodexRuntimeReadiness(ctx, projectID)
+		if err != nil {
+			return SetupActionResult{}, err
+		}
+		items, err := db.SaveCodexRuntimeReadiness(ctx, projectID, report)
+		if err != nil {
+			return SetupActionResult{}, err
+		}
+		return SetupActionResult{ActionID: actionID, Status: "succeeded", Message: "codex readiness saved", Result: map[string]any{"report": report, "inbox_items": items}}, nil
+	case "fake_workflow", "real_dry_run":
+		return SetupActionResult{ActionID: actionID, Status: "manual_required", Message: "run the displayed command from the project root"}, nil
+	default:
+		return SetupActionResult{}, fmt.Errorf("unknown setup action: %s", actionID)
 	}
 }
 

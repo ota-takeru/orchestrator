@@ -2453,12 +2453,79 @@ func runDependency(ctx context.Context, args []string, stdout io.Writer, stderr 
 		return exitValidation
 	}
 	switch args[0] {
+	case "approval":
+		return runDependencyApproval(ctx, args[1:], stdout, stderr)
 	case "risk":
 		return runDependencyRisk(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown dependency subcommand: %s\n", args[0])
 		return exitValidation
 	}
+}
+
+func runDependencyApproval(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing dependency approval subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "request":
+		return runDependencyApprovalRequest(ctx, args[1:], stdout)
+	default:
+		fmt.Fprintf(stderr, "unknown dependency approval subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runDependencyApprovalRequest(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("dependency approval request", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	name := fs.String("name", "", "dependency package name")
+	manager := fs.String("manager", "", "package manager")
+	dependencyType := fs.String("type", "", "production, development, or tool")
+	reason := fs.String("reason", "", "reason for adding dependency")
+	risk := fs.String("risk", "medium", "low, medium, high, or critical")
+	alternatives := fs.String("alternatives", "", "alternatives considered")
+	filesAffected := fs.String("files-affected", "", "package or lock files affected")
+	lifecycleScripts := fs.String("lifecycle-scripts", "unknown", "none_detected, detected, or unknown")
+	currentVersion := fs.String("current-version", "", "current/resolved version")
+	approvedScope := fs.String("approved-scope", "project", "project, task, one_time, or dependency_family")
+	taskID := fs.String("task", "", "introducing task id")
+	runID := fs.String("run", "", "introducing run id")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "dependency_approval_request_failed", err)
+	}
+	defer db.Close()
+	result, err := db.RequestDependencyApproval(ctx, storage.DependencyApprovalRequestInput{
+		ProjectID:        projectID,
+		Name:             *name,
+		PackageManager:   *manager,
+		DependencyType:   *dependencyType,
+		Reason:           *reason,
+		Risk:             *risk,
+		Alternatives:     *alternatives,
+		FilesAffected:    *filesAffected,
+		LifecycleScripts: *lifecycleScripts,
+		CurrentVersion:   *currentVersion,
+		ApprovedScope:    *approvedScope,
+		IntroducedTaskID: *taskID,
+		IntroducedRunID:  *runID,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "dependency_approval_request_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "Dependency approval requested: %s inbox=%s\n", result.DecisionID, result.InboxID)
+	return 0
 }
 
 func runDependencyRisk(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -2657,6 +2724,33 @@ func runUI(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 		fmt.Fprintf(stdout, "Project root: %s\n", status.ProjectRoot)
 		fmt.Fprintf(stdout, "Git clean: %t\n", status.GitClean)
 		fmt.Fprintf(stdout, "Required verification configured: %t\n", status.RequiredVerificationConfigured)
+		return 0
+	case "setup-action":
+		fs := flag.NewFlagSet("ui setup-action", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 || strings.TrimSpace(fs.Arg(0)) == "" {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", fmt.Errorf("setup action id is required"))
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "ui_setup_action_failed", err)
+		}
+		defer db.Close()
+		result, err := db.RunSetupAction(ctx, projectID, fs.Arg(0))
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "ui_setup_action_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, result, 0)
+		}
+		fmt.Fprintf(stdout, "Setup action %s: %s\n", result.ActionID, result.Status)
+		fmt.Fprintln(stdout, result.Message)
 		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown ui subcommand: %s\n", args[0])
@@ -3652,11 +3746,13 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--remember --memory-key KEY] [--json] DECISION_ID")
 	fmt.Fprintln(w, "  devos memory [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
+	fmt.Fprintln(w, "  devos dependency approval request [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT [--risk medium] [--alternatives TEXT] [--files-affected PATHS] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk add [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT --risk medium [--lockfile-changed] [--lifecycle-scripts VALUE] [--approved-scope project] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk list [--project-root PATH] [--data-root PATH] [--manager npm] [--type production] [--risk medium] [--json]")
 	fmt.Fprintln(w, "  devos ui snapshot [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
 	fmt.Fprintln(w, "  devos ui dashboard [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
 	fmt.Fprintln(w, "  devos ui setup [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos ui setup-action [--project-root PATH] [--data-root PATH] [--json] ACTION_ID")
 	fmt.Fprintln(w, "  devos serve [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765] [--ui] [--open] [--json]")
 	fmt.Fprintln(w, "  devos start [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")

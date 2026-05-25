@@ -27,10 +27,12 @@ type ProjectAuthority interface {
 	SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error)
 	TaskArtifacts(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error)
 	SetupStatus(ctx context.Context, project registry.RegisteredProject) (any, error)
+	SetupAction(ctx context.Context, project registry.RegisteredProject, actionID string) (any, error)
 	VerifyTask(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error)
 	ApproveTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
 	RejectTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
 	ApproveTaskMerge(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
+	RequestDependencyApproval(ctx context.Context, project registry.RegisteredProject, input storage.DependencyApprovalRequestInput) (any, error)
 }
 
 type Hub struct {
@@ -206,6 +208,15 @@ func (WindowsLocalAuthority) SetupStatus(ctx context.Context, project registry.R
 	return db.LoadSetupStatus(ctx, projectID)
 }
 
+func (WindowsLocalAuthority) SetupAction(ctx context.Context, project registry.RegisteredProject, actionID string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.RunSetupAction(ctx, projectID, actionID)
+}
+
 func (WindowsLocalAuthority) VerifyTask(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error) {
 	db, projectID, err := openProjectDB(ctx, project)
 	if err != nil {
@@ -240,6 +251,16 @@ func (WindowsLocalAuthority) ApproveTaskMerge(ctx context.Context, project regis
 	}
 	defer db.Close()
 	return db.ApproveTaskEvidence(ctx, storage.ApprovalInput{ProjectID: projectID, TaskID: taskID, ApprovalType: storage.ApprovalMerge, Notes: notes})
+}
+
+func (WindowsLocalAuthority) RequestDependencyApproval(ctx context.Context, project registry.RegisteredProject, input storage.DependencyApprovalRequestInput) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	input.ProjectID = projectID
+	return db.RequestDependencyApproval(ctx, input)
 }
 
 func openProjectDB(ctx context.Context, project registry.RegisteredProject) (*storage.DB, string, error) {
@@ -460,6 +481,14 @@ func (a WslAuthority) SetupStatus(ctx context.Context, project registry.Register
 	return body, nil
 }
 
+func (a WslAuthority) SetupAction(ctx context.Context, project registry.RegisteredProject, actionID string) (any, error) {
+	var body map[string]any
+	if err := a.runJSONWithTrailing(ctx, project, &body, []string{"ui", "setup-action"}, actionID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
 func (a WslAuthority) VerifyTask(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error) {
 	var body map[string]any
 	if err := a.runJSONWithTrailing(ctx, project, &body, []string{"verify"}, taskID); err != nil {
@@ -499,6 +528,43 @@ func (a WslAuthority) ApproveTaskMerge(ctx context.Context, project registry.Reg
 		args = append(args, "--notes", notes)
 	}
 	if err := a.runJSONWithTrailing(ctx, project, &body, args, taskID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) RequestDependencyApproval(ctx context.Context, project registry.RegisteredProject, input storage.DependencyApprovalRequestInput) (any, error) {
+	var body map[string]any
+	args := []string{
+		"dependency", "approval", "request",
+		"--name", input.Name,
+		"--manager", input.PackageManager,
+		"--type", input.DependencyType,
+		"--reason", input.Reason,
+		"--risk", input.Risk,
+	}
+	if input.Alternatives != "" {
+		args = append(args, "--alternatives", input.Alternatives)
+	}
+	if input.FilesAffected != "" {
+		args = append(args, "--files-affected", input.FilesAffected)
+	}
+	if input.LifecycleScripts != "" {
+		args = append(args, "--lifecycle-scripts", input.LifecycleScripts)
+	}
+	if input.CurrentVersion != "" {
+		args = append(args, "--current-version", input.CurrentVersion)
+	}
+	if input.ApprovedScope != "" {
+		args = append(args, "--approved-scope", input.ApprovedScope)
+	}
+	if input.IntroducedTaskID != "" {
+		args = append(args, "--task", input.IntroducedTaskID)
+	}
+	if input.IntroducedRunID != "" {
+		args = append(args, "--run", input.IntroducedRunID)
+	}
+	if err := a.runJSON(ctx, project, &body, args...); err != nil {
 		return nil, err
 	}
 	return body, nil

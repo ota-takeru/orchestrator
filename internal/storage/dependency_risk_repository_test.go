@@ -75,3 +75,41 @@ func TestRecordDependencyRiskValidatesLedgerEnums(t *testing.T) {
 		t.Fatal("expected invalid ledger dependency type to fail")
 	}
 }
+
+func TestDependencyApprovalRequestRecordsLedgerOnDecisionApproval(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+
+	request, err := db.RequestDependencyApproval(ctx, DependencyApprovalRequestInput{
+		ProjectID:      "PROJECT-001",
+		Name:           "zod",
+		PackageManager: "npm",
+		DependencyType: "production",
+		Reason:         "schema validation",
+		Risk:           "medium",
+		Alternatives:   "manual validation",
+		FilesAffected:  "package.json,pnpm-lock.yaml",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.DecisionID == "" || request.InboxID == "" {
+		t.Fatalf("request = %#v", request)
+	}
+	if _, err := db.ApproveDecision(ctx, DecisionApprovalInput{
+		ProjectID:  "PROJECT-001",
+		DecisionID: request.DecisionID,
+		Option:     "approve_dependency",
+		Notes:      "approved for this project",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := db.ListDependencyRisks(ctx, DependencyRiskListFilter{ProjectID: "PROJECT-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Name != "zod" || records[0].DecisionID != request.DecisionID || !records[0].LockfileChanged {
+		t.Fatalf("records = %#v", records)
+	}
+}

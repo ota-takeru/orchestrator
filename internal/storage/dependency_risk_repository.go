@@ -50,6 +50,27 @@ type DependencyRiskInput struct {
 	ExpiresAt          string
 }
 
+type DependencyApprovalRequestInput struct {
+	ProjectID        string `json:"project_id,omitempty"`
+	Name             string `json:"name"`
+	PackageManager   string `json:"package_manager"`
+	DependencyType   string `json:"dependency_type"`
+	Reason           string `json:"reason"`
+	Risk             string `json:"risk"`
+	Alternatives     string `json:"alternatives,omitempty"`
+	FilesAffected    string `json:"files_affected,omitempty"`
+	LifecycleScripts string `json:"lifecycle_scripts,omitempty"`
+	CurrentVersion   string `json:"current_version,omitempty"`
+	ApprovedScope    string `json:"approved_scope,omitempty"`
+	IntroducedTaskID string `json:"introduced_by_task_id,omitempty"`
+	IntroducedRunID  string `json:"introduced_by_run_id,omitempty"`
+}
+
+type DependencyApprovalRequestResult struct {
+	DecisionID string `json:"decision_id"`
+	InboxID    string `json:"inbox_id"`
+}
+
 type DependencyRiskListFilter struct {
 	ProjectID      string
 	PackageManager string
@@ -63,24 +84,6 @@ func (db *DB) RecordDependencyRisk(ctx context.Context, input DependencyRiskInpu
 		return DependencyRiskRecord{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	record.ID = "DEPRISK-" + stableShortHash(strings.Join([]string{
-		record.ProjectID,
-		record.PackageManager,
-		record.Name,
-		record.DependencyType,
-		record.CurrentVersion,
-		now,
-	}, "|"))
-	record.CreatedAt = now
-	record.UpdatedAt = now
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return DependencyRiskRecord{}, err
-	}
-	if err := schemas.ValidateDependencyRiskLedgerEntry(string(payload)); err != nil {
-		return DependencyRiskRecord{}, err
-	}
-
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return DependencyRiskRecord{}, err
@@ -91,18 +94,7 @@ func (db *DB) RecordDependencyRisk(ctx context.Context, input DependencyRiskInpu
 			_ = tx.Rollback()
 		}
 	}()
-	_, err = tx.ExecContext(ctx, `
-INSERT INTO dependency_risk_ledger(
-  id, project_id, name, package_manager, dependency_type, introduced_by_task_id,
-  introduced_by_run_id, decision_id, reason, approved_by, risk, lockfile_changed,
-  lifecycle_scripts, current_version, approved_scope, expires_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.ID, record.ProjectID, record.Name, record.PackageManager, record.DependencyType,
-		nullableText(record.IntroducedByTaskID), nullableText(record.IntroducedByRunID),
-		nullableText(record.DecisionID), record.Reason, nullableText(record.ApprovedBy), record.Risk,
-		boolInt(record.LockfileChanged), record.LifecycleScripts, nullableText(record.CurrentVersion),
-		record.ApprovedScope, nullableText(record.ExpiresAt), record.CreatedAt, record.UpdatedAt,
-	)
+	record, err = insertDependencyRiskInTx(ctx, tx, record, now)
 	if err != nil {
 		return DependencyRiskRecord{}, err
 	}
@@ -121,6 +113,95 @@ INSERT INTO dependency_risk_ledger(
 	}
 	committed = true
 	return record, nil
+}
+
+func (db *DB) RequestDependencyApproval(ctx context.Context, input DependencyApprovalRequestInput) (DependencyApprovalRequestResult, error) {
+	candidate, err := normalizeDependencyApprovalRequest(input)
+	if err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	decisionID := "DEC-" + stableShortHash(strings.Join([]string{
+		candidate.ProjectID,
+		"dependency_approval",
+		candidate.PackageManager,
+		candidate.Name,
+		candidate.DependencyType,
+		candidate.CurrentVersion,
+	}, "|"))
+	inboxID := "INBOX-" + stableShortHash(candidate.ProjectID+"|decision|"+decisionID)
+	options, err := json.Marshal([]DecisionOption{
+		{ID: "approve_dependency", Label: "Approve dependency", Description: "Record this dependency in the risk ledger and unblock the request."},
+		{ID: "reject_dependency", Label: "Reject dependency", Description: "Do not add this dependency."},
+		{ID: "request_alternative", Label: "Request alternative", Description: "Ask for a lower-risk approach."},
+	})
+	if err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	evidence, err := json.Marshal(map[string]any{
+		"classification": "dependency_approval",
+		"dependency":     candidate,
+		"alternatives":   strings.TrimSpace(input.Alternatives),
+		"files_affected": strings.TrimSpace(input.FilesAffected),
+	})
+	if err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	var taskID any
+	if candidate.IntroducedByTaskID != "" {
+		taskID = candidate.IntroducedByTaskID
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO decisions(
+  id, project_id, task_id, status, title, options_json, evidence_json, created_at, updated_at
+) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  status = 'open',
+  title = excluded.title,
+  options_json = excluded.options_json,
+  evidence_json = excluded.evidence_json,
+  updated_at = excluded.updated_at,
+  resolved_at = NULL`,
+		decisionID, candidate.ProjectID, taskID, "Dependency approval required: "+candidate.Name, string(options), string(evidence), now, now); err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	body := dependencyApprovalInboxBody(candidate, strings.TrimSpace(input.Alternatives), strings.TrimSpace(input.FilesAffected))
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, ?, 'human_decision', 'open', 'decision', ?, ?, 90, ?, ?, ?, ?)
+ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
+  title = excluded.title,
+  body = excluded.body,
+  updated_at = excluded.updated_at`,
+		inboxID, candidate.ProjectID, taskID, decisionID, "decision:"+decisionID,
+		"Dependency approval required: "+candidate.Name, body, now, now); err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	if err := insertWorkflowEvent(ctx, tx, candidate.ProjectID, "dependency_approval_requested", map[string]any{
+		"decision_id":     decisionID,
+		"name":            candidate.Name,
+		"package_manager": candidate.PackageManager,
+		"risk":            candidate.Risk,
+	}, now); err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return DependencyApprovalRequestResult{}, err
+	}
+	committed = true
+	return DependencyApprovalRequestResult{DecisionID: decisionID, InboxID: inboxID}, nil
 }
 
 func (db *DB) ListDependencyRisks(ctx context.Context, filter DependencyRiskListFilter) ([]DependencyRiskRecord, error) {
@@ -227,6 +308,110 @@ func normalizeDependencyRiskInput(input DependencyRiskInput) (DependencyRiskReco
 		}
 	}
 	return record, nil
+}
+
+func normalizeDependencyApprovalRequest(input DependencyApprovalRequestInput) (DependencyRiskRecord, error) {
+	return normalizeDependencyRiskInput(DependencyRiskInput{
+		ProjectID:          input.ProjectID,
+		Name:               input.Name,
+		PackageManager:     input.PackageManager,
+		DependencyType:     input.DependencyType,
+		IntroducedByTaskID: input.IntroducedTaskID,
+		IntroducedByRunID:  input.IntroducedRunID,
+		Reason:             input.Reason,
+		Risk:               input.Risk,
+		LockfileChanged:    strings.TrimSpace(input.FilesAffected) != "",
+		LifecycleScripts:   input.LifecycleScripts,
+		CurrentVersion:     input.CurrentVersion,
+		ApprovedScope:      input.ApprovedScope,
+	})
+}
+
+func insertDependencyRiskInTx(ctx context.Context, tx txLike, record DependencyRiskRecord, now string) (DependencyRiskRecord, error) {
+	if record.ID == "" {
+		record.ID = "DEPRISK-" + stableShortHash(strings.Join([]string{
+			record.ProjectID,
+			record.PackageManager,
+			record.Name,
+			record.DependencyType,
+			record.CurrentVersion,
+			now,
+		}, "|"))
+	}
+	if record.CreatedAt == "" {
+		record.CreatedAt = now
+	}
+	record.UpdatedAt = now
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return DependencyRiskRecord{}, err
+	}
+	if err := schemas.ValidateDependencyRiskLedgerEntry(string(payload)); err != nil {
+		return DependencyRiskRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO dependency_risk_ledger(
+  id, project_id, name, package_manager, dependency_type, introduced_by_task_id,
+  introduced_by_run_id, decision_id, reason, approved_by, risk, lockfile_changed,
+  lifecycle_scripts, current_version, approved_scope, expires_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID, record.ProjectID, record.Name, record.PackageManager, record.DependencyType,
+		nullableText(record.IntroducedByTaskID), nullableText(record.IntroducedByRunID),
+		nullableText(record.DecisionID), record.Reason, nullableText(record.ApprovedBy), record.Risk,
+		boolInt(record.LockfileChanged), record.LifecycleScripts, nullableText(record.CurrentVersion),
+		record.ApprovedScope, nullableText(record.ExpiresAt), record.CreatedAt, record.UpdatedAt,
+	); err != nil {
+		return DependencyRiskRecord{}, err
+	}
+	return record, nil
+}
+
+func dependencyApprovalInboxBody(record DependencyRiskRecord, alternatives string, filesAffected string) string {
+	lines := []string{
+		"Dependency: " + record.Name,
+		"Package manager: " + record.PackageManager,
+		"Type: " + record.DependencyType,
+		"Risk: " + record.Risk,
+		"Reason: " + record.Reason,
+	}
+	if alternatives != "" {
+		lines = append(lines, "Alternatives: "+alternatives)
+	}
+	if filesAffected != "" {
+		lines = append(lines, "Files affected: "+filesAffected)
+	}
+	lines = append(lines, "Recommended action: approve_dependency only if the dependency is necessary and the lockfile/package changes are understood.")
+	return strings.Join(lines, "\n")
+}
+
+func (db *DB) recordApprovedDependencyDecision(ctx context.Context, tx txLike, input DecisionApprovalInput, evidenceJSON string, option string, now string) error {
+	_ = db
+	if option != "approve_dependency" {
+		return nil
+	}
+	var evidence struct {
+		Classification string               `json:"classification"`
+		Dependency     DependencyRiskRecord `json:"dependency"`
+	}
+	if err := json.Unmarshal([]byte(evidenceJSON), &evidence); err != nil {
+		return err
+	}
+	if evidence.Classification != "dependency_approval" {
+		return nil
+	}
+	record := evidence.Dependency
+	record.ProjectID = input.ProjectID
+	record.DecisionID = input.DecisionID
+	record.ApprovedBy = "human"
+	if strings.TrimSpace(input.Notes) != "" {
+		record.Reason = strings.TrimSpace(record.Reason + " Approval notes: " + input.Notes)
+	}
+	_, err := insertDependencyRiskInTx(ctx, tx, record, now)
+	return err
+}
+
+type txLike interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
 func scanDependencyRisk(scanner interface {

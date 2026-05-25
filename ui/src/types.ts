@@ -251,6 +251,13 @@ export type SetupAction = {
   reason?: string;
 };
 
+export type SetupActionResult = {
+  action_id: string;
+  status: string;
+  message: string;
+  result?: unknown;
+};
+
 export type TaskArtifact = {
   id: string;
   run_id: string;

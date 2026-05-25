@@ -175,6 +175,48 @@ func TestWslAuthorityBuildsTaskActionCommands(t *testing.T) {
 	}
 }
 
+func TestWslAuthorityBuildsDependencyApprovalCommand(t *testing.T) {
+	exec := &capturingExecutor{stdout: []byte(`{"decision_id":"DEC-1","inbox_id":"INBOX-1"}`)}
+	authority := NewWslAuthority(exec, time.Second)
+	project := registry.RegisteredProject{
+		AuthorityRuntime: registry.AuthorityWSL,
+		WSLDistro:        "Ubuntu",
+		WSLProjectRoot:   "/home/user/app",
+	}
+	if _, err := authority.RequestDependencyApproval(context.Background(), project, storage.DependencyApprovalRequestInput{
+		Name:           "zod",
+		PackageManager: "npm",
+		DependencyType: "production",
+		Reason:         "schema validation",
+		Risk:           "medium",
+		Alternatives:   "manual validation",
+		FilesAffected:  "package.json",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-d", "Ubuntu", "--", "devos", "dependency", "approval", "request", "--name", "zod", "--manager", "npm", "--type", "production", "--reason", "schema validation", "--risk", "medium", "--alternatives", "manual validation", "--files-affected", "package.json", "--project-root", "/home/user/app", "--json"}
+	if strings.Join(exec.args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args = %#v want %#v", exec.args, want)
+	}
+}
+
+func TestWslAuthorityBuildsSetupActionCommand(t *testing.T) {
+	exec := &capturingExecutor{stdout: []byte(`{"action_id":"doctor","status":"succeeded"}`)}
+	authority := NewWslAuthority(exec, time.Second)
+	project := registry.RegisteredProject{
+		AuthorityRuntime: registry.AuthorityWSL,
+		WSLDistro:        "Ubuntu",
+		WSLProjectRoot:   "/home/user/app",
+	}
+	if _, err := authority.SetupAction(context.Background(), project, "doctor"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-d", "Ubuntu", "--", "devos", "ui", "setup-action", "--project-root", "/home/user/app", "--json", "doctor"}
+	if strings.Join(exec.args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args = %#v want %#v", exec.args, want)
+	}
+}
+
 func TestWslAuthorityRejectsUNCProjectRoot(t *testing.T) {
 	authority := NewWslAuthority(&capturingExecutor{}, time.Second)
 	_, err := authority.Snapshot(context.Background(), registry.RegisteredProject{
@@ -235,6 +277,9 @@ func (f fakeAuthority) TaskArtifacts(context.Context, registry.RegisteredProject
 func (f fakeAuthority) SetupStatus(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
+func (f fakeAuthority) SetupAction(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
 func (f fakeAuthority) VerifyTask(context.Context, registry.RegisteredProject, string) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
@@ -245,6 +290,9 @@ func (f fakeAuthority) RejectTaskReview(context.Context, registry.RegisteredProj
 	return map[string]any{"name": f.name}, nil
 }
 func (f fakeAuthority) ApproveTaskMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
+func (f fakeAuthority) RequestDependencyApproval(context.Context, registry.RegisteredProject, storage.DependencyApprovalRequestInput) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
 

@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/planning/status", s.handlePlanningStatus)
 	mux.HandleFunc("/api/change-requests", s.handleChangeRequests)
 	mux.HandleFunc("/api/dependency-risks", s.handleDependencyRisks)
+	mux.HandleFunc("/api/dependency-approvals", s.handleDependencyApprovals)
 	mux.HandleFunc("/api/env/bindings", s.handleEnvBindings)
 	mux.HandleFunc("/api/artifacts/trusted", s.handleTrustedArtifacts)
 	mux.HandleFunc("/api/platform/path-mappings", s.handlePathMappings)
@@ -59,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/merge/status", s.handleMergeStatus)
 	mux.HandleFunc("/api/check", s.handleProjectCheck)
 	mux.HandleFunc("/api/setup", s.handleSetupStatus)
+	mux.HandleFunc("/api/setup/actions/", s.handleSetupAction)
 	return s.localMiddleware(mux)
 }
 
@@ -112,7 +114,9 @@ func requiresLocalToken(r *http.Request) bool {
 		strings.Contains(r.URL.Path, "/approve") ||
 		strings.Contains(r.URL.Path, "/merge") ||
 		strings.Contains(r.URL.Path, "/review/") ||
-		strings.HasSuffix(r.URL.Path, "/verify")
+		strings.HasSuffix(r.URL.Path, "/verify") ||
+		strings.Contains(r.URL.Path, "/dependency-approvals") ||
+		strings.Contains(r.URL.Path, "/setup/actions/")
 }
 
 func requiresLocalNonce(r *http.Request) bool {
@@ -388,6 +392,21 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "dependency-approvals":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		input, ok := decodeDependencyApprovalBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.RequestDependencyApproval(r.Context(), project, input)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
 	case len(parts) == 5 && action == "env" && parts[4] == "bindings":
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
@@ -409,6 +428,17 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, err := authority.SetupStatus(r.Context(), project)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "setup" && parts[4] == "actions" && strings.TrimSpace(parts[5]) != "":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		body, err := authority.SetupAction(r.Context(), project, parts[5])
 		if err != nil {
 			writeProjectHubError(w, err)
 			return
@@ -573,6 +603,24 @@ func (s *Server) handleDependencyRisks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"risks": records})
+}
+
+func (s *Server) handleDependencyApprovals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	input, ok := decodeDependencyApprovalBody(w, r)
+	if !ok {
+		return
+	}
+	input.ProjectID = s.projectID
+	result, err := s.db.RequestDependencyApproval(r.Context(), input)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "dependency_approval_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleEnvBindings(w http.ResponseWriter, r *http.Request) {
@@ -774,6 +822,24 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, status)
 }
 
+func (s *Server) handleSetupAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "setup" || parts[2] != "actions" || strings.TrimSpace(parts[3]) == "" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown setup action route")
+		return
+	}
+	result, err := s.db.RunSetupAction(r.Context(), s.projectID, parts[3])
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "setup_action_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, result)
+}
+
 func parseInboxActionPath(path string) (string, string, bool) {
 	trimmed := strings.Trim(path, "/")
 	parts := strings.Split(trimmed, "/")
@@ -830,6 +896,15 @@ func decodeEnvBindingBody(w http.ResponseWriter, r *http.Request) (storage.EnvBi
 		ScopeID:       input.ScopeID,
 		Value:         input.Value,
 	}, true
+}
+
+func decodeDependencyApprovalBody(w http.ResponseWriter, r *http.Request) (storage.DependencyApprovalRequestInput, bool) {
+	var input storage.DependencyApprovalRequestInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return storage.DependencyApprovalRequestInput{}, false
+	}
+	return input, true
 }
 
 func writeProjectHubError(w http.ResponseWriter, err error) {

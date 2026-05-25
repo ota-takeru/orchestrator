@@ -99,6 +99,33 @@ func TestProjectsAPIRoutesToAuthorityRuntime(t *testing.T) {
 	}
 }
 
+func TestProjectsAPIRoutesSetupActionToAuthority(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+	wslProject, err := regDB.AddProject(context.Background(), registry.AddProjectInput{
+		DisplayName:      "WSL App",
+		AuthorityRuntime: registry.AuthorityWSL,
+		WSLDistro:        "Ubuntu",
+		WSLProjectRoot:   "/home/user/app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+wslProject.ID+"/setup/actions/doctor", nil)
+	NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"})).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ok"] != "wsl" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
 func TestProjectsAPIUnknownProjectReturns404(t *testing.T) {
 	db, projectID := openAPITestDB(t)
 	regDB := openAPIRegistry(t)
@@ -194,6 +221,9 @@ func (a apiFakeAuthority) TaskArtifacts(context.Context, registry.RegisteredProj
 func (a apiFakeAuthority) SetupStatus(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }
+func (a apiFakeAuthority) SetupAction(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
 func (a apiFakeAuthority) VerifyTask(context.Context, registry.RegisteredProject, string) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }
@@ -204,5 +234,8 @@ func (a apiFakeAuthority) RejectTaskReview(context.Context, registry.RegisteredP
 	return map[string]any{"ok": a.name}, nil
 }
 func (a apiFakeAuthority) ApproveTaskMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) RequestDependencyApproval(context.Context, registry.RegisteredProject, storage.DependencyApprovalRequestInput) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }

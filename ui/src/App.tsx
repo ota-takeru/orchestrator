@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, runTaskAction, saveEnvBinding } from "./api";
+import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, requestDependencyApproval, runSetupAction, runTaskAction, saveEnvBinding } from "./api";
 import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
@@ -30,9 +30,17 @@ function App() {
   const [changeText, setChangeText] = useState("");
   const [envKey, setEnvKey] = useState("");
   const [envValue, setEnvValue] = useState("");
+  const [dependencyName, setDependencyName] = useState("");
+  const [dependencyReason, setDependencyReason] = useState("");
+  const [dependencyManager, setDependencyManager] = useState("npm");
+  const [dependencyType, setDependencyType] = useState("production");
+  const [dependencyRisk, setDependencyRisk] = useState("medium");
+  const [dependencyAlternatives, setDependencyAlternatives] = useState("");
+  const [dependencyFiles, setDependencyFiles] = useState("");
   const [selectedArtifactTaskID, setSelectedArtifactTaskID] = useState("");
   const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[]>([]);
   const [taskActioning, setTaskActioning] = useState("");
+  const [setupActioning, setSetupActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
 
@@ -133,6 +141,32 @@ function App() {
     }
   };
 
+  const submitDependencyApproval = async () => {
+    if (!dependencyName.trim() || !dependencyReason.trim()) return;
+    setError("");
+    try {
+      await requestDependencyApproval(
+        {
+          name: dependencyName,
+          package_manager: dependencyManager,
+          dependency_type: dependencyType,
+          reason: dependencyReason,
+          risk: dependencyRisk,
+          alternatives: dependencyAlternatives,
+          files_affected: dependencyFiles
+        },
+        selectedProjectID || undefined
+      );
+      setDependencyName("");
+      setDependencyReason("");
+      setDependencyAlternatives("");
+      setDependencyFiles("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dependency approval request failed");
+    }
+  };
+
   const openTaskArtifacts = async (taskID: string) => {
     setSelectedArtifactTaskID(taskID);
     setError("");
@@ -156,6 +190,19 @@ function App() {
       setError(err instanceof Error ? err.message : "Task action failed");
     } finally {
       setTaskActioning("");
+    }
+  };
+
+  const submitSetupAction = async (actionID: string) => {
+    setSetupActioning(actionID);
+    setError("");
+    try {
+      await runSetupAction(actionID, selectedProjectID || undefined);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Setup action failed");
+    } finally {
+      setSetupActioning("");
     }
   };
 
@@ -202,7 +249,7 @@ function App() {
             setEnvValue={setEnvValue}
             onSubmit={submitEnvBinding}
           />
-          <SetupWizardPanel setup={data?.setupStatus} />
+          <SetupWizardPanel setup={data?.setupStatus} actioning={setupActioning} onRunAction={submitSetupAction} />
           <ArtifactViewerPanel
             taskID={selectedArtifactTaskID}
             task={data?.tasks.find((task) => task.id === selectedArtifactTaskID)}
@@ -211,7 +258,24 @@ function App() {
             onAction={submitTaskAction}
           />
           <ChangeRequestPanel requests={data?.changeRequests ?? []} text={changeText} setText={setChangeText} onSubmit={submitChangeRequest} />
-          <DependencyRiskPanel risks={data?.dependencyRisks ?? []} />
+          <DependencyRiskPanel
+            risks={data?.dependencyRisks ?? []}
+            dependencyName={dependencyName}
+            dependencyReason={dependencyReason}
+            dependencyManager={dependencyManager}
+            dependencyType={dependencyType}
+            dependencyRisk={dependencyRisk}
+            dependencyAlternatives={dependencyAlternatives}
+            dependencyFiles={dependencyFiles}
+            setDependencyName={setDependencyName}
+            setDependencyReason={setDependencyReason}
+            setDependencyManager={setDependencyManager}
+            setDependencyType={setDependencyType}
+            setDependencyRisk={setDependencyRisk}
+            setDependencyAlternatives={setDependencyAlternatives}
+            setDependencyFiles={setDependencyFiles}
+            onSubmit={submitDependencyApproval}
+          />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
           <MergeGatePanel status={data?.mergeStatus} />
           <ProjectCheckPanel violations={data?.projectViolations ?? []} />
@@ -481,7 +545,15 @@ function EnvironmentInputPanel({
   );
 }
 
-function SetupWizardPanel({ setup }: { setup?: DashboardData["setupStatus"] }) {
+function SetupWizardPanel({
+  setup,
+  actioning,
+  onRunAction
+}: {
+  setup?: DashboardData["setupStatus"];
+  actioning: string;
+  onRunAction: (actionID: string) => void;
+}) {
   const steps = setup
     ? [
         { label: "Project root", done: Boolean(setup.project_root) },
@@ -524,6 +596,9 @@ function SetupWizardPanel({ setup }: { setup?: DashboardData["setupStatus"] }) {
                 <span>{action.label}</span>
                 <small>{action.enabled ? "ready" : action.reason}</small>
                 <code className="inline-command">{action.command}</code>
+                <button className="secondary-button" type="button" onClick={() => onRunAction(action.id)} disabled={!action.enabled || actioning === action.id}>
+                  {actioning === action.id ? "Running" : "Run"}
+                </button>
               </div>
             ))}
           </StackEmpty>
@@ -629,12 +704,74 @@ function ChangeRequestPanel({
   );
 }
 
-function DependencyRiskPanel({ risks }: { risks: DashboardData["dependencyRisks"] }) {
+function DependencyRiskPanel({
+  risks,
+  dependencyName,
+  dependencyReason,
+  dependencyManager,
+  dependencyType,
+  dependencyRisk,
+  dependencyAlternatives,
+  dependencyFiles,
+  setDependencyName,
+  setDependencyReason,
+  setDependencyManager,
+  setDependencyType,
+  setDependencyRisk,
+  setDependencyAlternatives,
+  setDependencyFiles,
+  onSubmit
+}: {
+  risks: DashboardData["dependencyRisks"];
+  dependencyName: string;
+  dependencyReason: string;
+  dependencyManager: string;
+  dependencyType: string;
+  dependencyRisk: string;
+  dependencyAlternatives: string;
+  dependencyFiles: string;
+  setDependencyName: (value: string) => void;
+  setDependencyReason: (value: string) => void;
+  setDependencyManager: (value: string) => void;
+  setDependencyType: (value: string) => void;
+  setDependencyRisk: (value: string) => void;
+  setDependencyAlternatives: (value: string) => void;
+  setDependencyFiles: (value: string) => void;
+  onSubmit: () => void;
+}) {
   return (
     <section className="panel compact">
       <div className="panel-heading">
         <h2>Dependency Risk</h2>
         <ShieldAlert size={18} className="text-zinc-500" />
+      </div>
+      <div className="compact-form">
+        <input value={dependencyName} onChange={(event) => setDependencyName(event.target.value)} placeholder="package name" />
+        <select value={dependencyManager} onChange={(event) => setDependencyManager(event.target.value)}>
+          <option value="npm">npm</option>
+          <option value="pnpm">pnpm</option>
+          <option value="go">go</option>
+          <option value="yarn">yarn</option>
+          <option value="cargo">cargo</option>
+          <option value="other">other</option>
+        </select>
+        <select value={dependencyType} onChange={(event) => setDependencyType(event.target.value)}>
+          <option value="production">production</option>
+          <option value="development">development</option>
+          <option value="tool">tool</option>
+        </select>
+        <select value={dependencyRisk} onChange={(event) => setDependencyRisk(event.target.value)}>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="critical">critical</option>
+        </select>
+        <input value={dependencyReason} onChange={(event) => setDependencyReason(event.target.value)} placeholder="reason" />
+        <input value={dependencyAlternatives} onChange={(event) => setDependencyAlternatives(event.target.value)} placeholder="alternatives" />
+        <input value={dependencyFiles} onChange={(event) => setDependencyFiles(event.target.value)} placeholder="files affected" />
+        <button onClick={onSubmit} disabled={!dependencyName.trim() || !dependencyReason.trim()}>
+          Request
+        </button>
       </div>
       <StackEmpty empty={risks.length === 0} label="No dependency risks">
         {risks.slice(0, 5).map((risk) => (

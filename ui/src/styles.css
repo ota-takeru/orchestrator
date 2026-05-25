@@ -376,7 +376,8 @@ td:nth-child(5) {
   grid-template-columns: 1fr;
 }
 
-input {
+input,
+select {
   min-width: 0;
   border: 1px solid #cbd5e1;
   border-radius: 8px;

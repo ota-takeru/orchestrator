@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +15,7 @@ import (
 	"github.com/ota-takeru/orchestrator/internal/decisions"
 	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/runners"
+	"github.com/ota-takeru/orchestrator/internal/statemachine"
 	"github.com/ota-takeru/orchestrator/internal/verifier"
 )
 
@@ -47,14 +51,27 @@ func (db *DB) VerifyTask(ctx context.Context, projectID string, taskID string, i
 	if err != nil {
 		return VerifyTaskResult{}, err
 	}
+	verifiedWorktree := env.ProjectRoot
+	verifiedCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
+	if impl, ok, err := db.latestImplementationVerificationTarget(ctx, projectID, taskID); err != nil {
+		return VerifyTaskResult{}, err
+	} else if ok {
+		env.ProjectRoot = impl.WorktreeRoot
+		verifiedWorktree = impl.WorktreeRoot
+		verifiedCommit = impl.HeadCommit
+	}
 	runID := "RUN-" + stableShortHash(taskID+"|verification|"+adapter+"|"+time.Now().UTC().Format(time.RFC3339Nano))
 	attemptNo, err := db.nextRunAttempt(ctx, projectID, taskID, "verification")
 	if err != nil {
 		return VerifyTaskResult{}, err
 	}
-	baseCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
+	baseCommit := verifiedCommit
 	commands, registry, err := db.verificationPlan(ctx, projectID, taskID, adapter, env)
 	if err != nil {
+		return VerifyTaskResult{}, err
+	}
+	planHash := verificationPlanHash(commands)
+	if err := db.requireVerificationPlan(ctx, projectID, taskID, commands, runID); err != nil {
 		return VerifyTaskResult{}, err
 	}
 	report, err := verifier.Run(ctx, runID, registry, commands)
@@ -62,14 +79,17 @@ func (db *DB) VerifyTask(ctx context.Context, projectID string, taskID string, i
 		return VerifyTaskResult{}, err
 	}
 	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
-		ProjectID:  projectID,
-		TaskID:     &taskID,
-		RunID:      runID,
-		RunType:    "verification",
-		AttemptNo:  attemptNo,
-		BaseCommit: baseCommit,
-		Commands:   commands,
-		Report:     report,
+		ProjectID:            projectID,
+		TaskID:               &taskID,
+		RunID:                runID,
+		RunType:              "verification",
+		AttemptNo:            attemptNo,
+		BaseCommit:           baseCommit,
+		VerifiedWorktree:     verifiedWorktree,
+		VerifiedCommit:       verifiedCommit,
+		VerificationPlanHash: planHash,
+		Commands:             commands,
+		Report:               report,
 	}); err != nil {
 		return VerifyTaskResult{}, err
 	}
@@ -108,6 +128,31 @@ func (db *DB) VerifyTask(ctx context.Context, projectID string, taskID string, i
 		Gates:           gates,
 		Report:          report,
 	}, nil
+}
+
+type implementationVerificationTarget struct {
+	WorktreeRoot string
+	HeadCommit   string
+}
+
+func (db *DB) latestImplementationVerificationTarget(ctx context.Context, projectID string, taskID string) (implementationVerificationTarget, bool, error) {
+	var target implementationVerificationTarget
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT ce.cwd, COALESCE(r.head_commit, '')
+FROM runs r
+JOIN command_events ce ON ce.project_id = r.project_id AND ce.run_id = r.id AND ce.command_kind = 'codex'
+WHERE r.project_id = ? AND r.task_id = ? AND r.run_type = 'implementation' AND r.status = 'succeeded'
+ORDER BY r.created_at DESC
+LIMIT 1`, projectID, taskID).Scan(&target.WorktreeRoot, &target.HeadCommit); err != nil {
+		if err == sql.ErrNoRows {
+			return implementationVerificationTarget{}, false, nil
+		}
+		return implementationVerificationTarget{}, false, err
+	}
+	if strings.TrimSpace(target.WorktreeRoot) == "" {
+		return implementationVerificationTarget{}, false, nil
+	}
+	return target, true, nil
 }
 
 func (db *DB) verificationEnvironment(ctx context.Context, projectID string, environmentID string) (platform.ExecutionEnvironment, error) {
@@ -154,6 +199,99 @@ func (db *DB) verificationPlan(ctx context.Context, projectID string, taskID str
 	default:
 		return nil, nil, fmt.Errorf("unsupported verification adapter: %s", adapter)
 	}
+}
+
+func verificationPlanHash(commands []verifier.Command) string {
+	raw, err := json.Marshal(commands)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func (db *DB) requireVerificationPlan(ctx context.Context, projectID string, taskID string, commands []verifier.Command, runID string) error {
+	required := 0
+	for _, command := range commands {
+		if command.RequiredForMerge {
+			required++
+		}
+	}
+	if len(commands) > 0 && required > 0 {
+		return nil
+	}
+	reason := "this project has no required verification command configured"
+	if len(commands) > 0 {
+		reason = "verification plan has no required-for-merge command"
+	}
+	if err := db.openVerificationRequiredDecision(ctx, projectID, taskID, runID, reason); err != nil {
+		return err
+	}
+	return fmt.Errorf("verification_required: %s", reason)
+}
+
+func (db *DB) openVerificationRequiredDecision(ctx context.Context, projectID string, taskID string, runID string, reason string) error {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	decisionID := "DEC-" + stableShortHash(projectID+"|"+taskID+"|verification-required")
+	options, err := json.Marshal([]map[string]string{
+		{"id": "add_required_verification", "label": "Add required verification"},
+		{"id": "approve_no_verification_exception", "label": "Approve no-verification exception"},
+		{"id": "cancel", "label": "Cancel this task"},
+	})
+	if err != nil {
+		return err
+	}
+	evidence, err := json.Marshal(map[string]any{"run_id": runID, "classification": "verification_required", "reason": reason})
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO decisions(
+  id, project_id, task_id, status, title, options_json, evidence_json, created_at, updated_at
+) VALUES (?, ?, ?, 'open', 'Required verification is missing', ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET status = 'open', evidence_json = excluded.evidence_json, updated_at = excluded.updated_at`,
+		decisionID, projectID, taskID, string(options), string(evidence), now, now); err != nil {
+		return err
+	}
+	inboxID := "INBOX-" + stableShortHash(projectID+"|decision|"+decisionID)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, ?, 'human_decision', 'open', 'decision', ?, ?, 85, ?, ?, ?, ?)
+ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
+		inboxID, projectID, taskID, decisionID, "decision:"+decisionID,
+		"Required verification is missing", reason, now, now); err != nil {
+		return err
+	}
+	if err := statemachine.Task.ValidateTransition("verifying", "needs_decision"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'needs_decision', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'verifying'", now, projectID, taskID); err != nil {
+		return err
+	}
+	if err := insertWorkflowEvent(ctx, tx, projectID, "verification_required", map[string]any{
+		"task_id": taskID,
+		"run_id":  runID,
+		"reason":  reason,
+	}, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (db *DB) taskVerificationCommands(ctx context.Context, projectID string, taskID string) ([]TaskVerificationCommand, error) {

@@ -6,7 +6,7 @@
       "kind": "codex_final_message",
       "version": "1",
       "file": "codex-final-message.v1.schema.json",
-      "sha256": "47c6f4976f3f6ffafed309db8274a13e9d8220cd044fa17c0aee8bfbb70d8f64",
+      "sha256": "c65c11cde0444ecd418da45aad43753dc1f4621f4068388d57804bdce1c4ebec",
       "owned_by": "orchestrator",
       "trust_level": "trusted_after_validation",
       "writable_by_ai": false

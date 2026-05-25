@@ -12,7 +12,6 @@ import (
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
 	"github.com/ota-takeru/orchestrator/internal/platform"
-	"github.com/ota-takeru/orchestrator/internal/runners"
 	"github.com/ota-takeru/orchestrator/internal/verifier"
 )
 
@@ -172,22 +171,42 @@ func (db *DB) reverifyRealMergeCandidate(ctx context.Context, projectID string, 
 	if err != nil {
 		return "", nil, err
 	}
-	commands := defaultLocalVerificationCommands(ctx, verifyEnv)
-	report, err := verifier.Run(ctx, runID, verifier.StaticRunnerRegistry{verifyEnv.ID: runners.NewLocalRunner(verifyEnv)}, commands)
+	commands, registry, err := db.verificationPlan(ctx, projectID, entry.TaskID, "local", verifyEnv)
+	if err != nil {
+		return "", nil, err
+	}
+	planHash := verificationPlanHash(commands)
+	if len(commands) == 0 {
+		return runID, []string{"verification_required: this project has no required verification command configured"}, nil
+	}
+	required := false
+	for _, command := range commands {
+		if command.RequiredForMerge {
+			required = true
+			break
+		}
+	}
+	if !required {
+		return runID, []string{"verification_required: verification plan has no required-for-merge command"}, nil
+	}
+	report, err := verifier.Run(ctx, runID, registry, commands)
 	if err != nil {
 		return "", nil, err
 	}
 	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
-		ProjectID:           projectID,
-		TaskID:              &entry.TaskID,
-		RunID:               runID,
-		RunType:             "reverify",
-		AttemptNo:           attemptNo,
-		BaseCommit:          preMain,
-		ReverifyContextType: "merge_queue_entry",
-		ReverifyContextID:   entry.ID,
-		Commands:            commands,
-		Report:              report,
+		ProjectID:            projectID,
+		TaskID:               &entry.TaskID,
+		RunID:                runID,
+		RunType:              "reverify",
+		AttemptNo:            attemptNo,
+		BaseCommit:           preMain,
+		VerifiedWorktree:     tempRoot,
+		VerifiedCommit:       candidate,
+		VerificationPlanHash: planHash,
+		ReverifyContextType:  "merge_queue_entry",
+		ReverifyContextID:    entry.ID,
+		Commands:             commands,
+		Report:               report,
 	}); err != nil {
 		return "", nil, err
 	}

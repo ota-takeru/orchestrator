@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,9 +15,10 @@ import (
 )
 
 type Server struct {
-	db        *storage.DB
-	projectID string
-	hub       *projecthub.Hub
+	db         *storage.DB
+	projectID  string
+	hub        *projecthub.Hub
+	localToken string
 }
 
 func NewServer(db *storage.DB, projectID string) *Server {
@@ -25,6 +27,11 @@ func NewServer(db *storage.DB, projectID string) *Server {
 
 func NewServerWithHub(db *storage.DB, projectID string, hub *projecthub.Hub) *Server {
 	return &Server{db: db, projectID: projectID, hub: hub}
+}
+
+func (s *Server) WithLocalToken(token string) *Server {
+	s.localToken = strings.TrimSpace(token)
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -50,7 +57,62 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/platform/toolchain-setup", s.handleToolchainSetup)
 	mux.HandleFunc("/api/merge/status", s.handleMergeStatus)
 	mux.HandleFunc("/api/check", s.handleProjectCheck)
-	return mux
+	return s.localMiddleware(mux)
+}
+
+func (s *Server) localMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" && isLocalhostOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-DevOS-Token, X-DevOS-Nonce")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		}
+		if r.Method == http.MethodOptions {
+			if origin := r.Header.Get("Origin"); origin != "" && !isLocalhostOrigin(origin) {
+				writeAPIError(w, http.StatusForbidden, "cors_forbidden", "only localhost origins are allowed")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if s.localToken != "" && requiresLocalToken(r) && r.Header.Get("X-DevOS-Token") != s.localToken {
+			writeAPIError(w, http.StatusUnauthorized, "local_token_required", "X-DevOS-Token is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isLocalhostOrigin(origin string) bool {
+	u, err := urlParse(origin)
+	if err != nil {
+		return false
+	}
+	host := u
+	if parsedHost, _, err := net.SplitHostPort(u); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func requiresLocalToken(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodOptions {
+		return false
+	}
+	return r.URL.Path == "/api/env/bindings" || strings.Contains(r.URL.Path, "/approve") || strings.Contains(r.URL.Path, "/merge")
+}
+
+func urlParse(origin string) (string, error) {
+	withoutScheme := origin
+	if idx := strings.Index(withoutScheme, "://"); idx >= 0 {
+		withoutScheme = withoutScheme[idx+3:]
+	}
+	if withoutScheme == "" || strings.Contains(withoutScheme, "/") {
+		return "", errors.New("invalid origin")
+	}
+	return withoutScheme, nil
 }
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {

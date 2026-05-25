@@ -94,8 +94,19 @@ func TestValidateInstalledDetectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestRepositorySchemaRegistryMatchesEmbeddedDefinitions(t *testing.T) {
+	root, err := testRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation := ValidateInstalled(root)
+	if !validation.Valid {
+		t.Fatalf("repository schema registry drifted from embedded definitions: %#v", validation.Findings)
+	}
+}
+
 func TestValidateCodexFinalMessage(t *testing.T) {
-	if err := ValidateCodexFinalMessage(`{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed"}]}`); err != nil {
+	if err := ValidateCodexFinalMessage(`{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`); err != nil {
 		t.Fatal(err)
 	}
 	if err := ValidateCodexFinalMessage(`{"status":"ok","summary":"done"}`); err == nil {
@@ -103,6 +114,23 @@ func TestValidateCodexFinalMessage(t *testing.T) {
 	}
 	if err := ValidateCodexFinalMessage(`not json`); err == nil {
 		t.Fatal("expected non-json final message to fail")
+	}
+}
+
+func testRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			return "", os.ErrNotExist
+		}
+		dir = next
 	}
 }
 

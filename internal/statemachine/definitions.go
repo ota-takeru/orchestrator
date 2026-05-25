@@ -4,7 +4,7 @@ var Task = New("task", map[string][]string{
 	"proposed":               {"ready", "needs_decision", "cancelled"},
 	"ready":                  {"implementing", "needs_input", "needs_decision", "cancelled"},
 	"implementing":           {"verifying", "repairing", "needs_input", "needs_decision", "blocked_on_policy", "failed"},
-	"verifying":              {"reviewing", "diagnosing", "blocked_on_environment", "failed"},
+	"verifying":              {"reviewing", "diagnosing", "blocked_on_environment", "needs_decision", "failed"},
 	"diagnosing":             {"repairing", "ready", "proposed", "blocked_on_environment", "needs_decision", "failed"},
 	"repairing":              {"verifying", "diagnosing", "needs_decision", "blocked_on_policy"},
 	"reviewing":              {"ready_for_human_review", "repairing", "proposed", "needs_input", "needs_decision", "blocked_on_policy"},

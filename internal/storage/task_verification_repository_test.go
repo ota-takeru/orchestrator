@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
@@ -103,25 +104,30 @@ func TestVerifyTaskLocalWithoutKnownCommandsNeedsDecision(t *testing.T) {
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", t.TempDir())
 	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
 
-	result, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "local"})
-	if err != nil {
+	_, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "local"})
+	if err == nil || !strings.Contains(err.Error(), "verification_required") {
+		t.Fatalf("err = %v", err)
+	}
+	var taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
 		t.Fatal(err)
 	}
-	if result.TaskStatus != "needs_decision" {
-		t.Fatalf("task status = %s", result.TaskStatus)
-	}
-	if len(result.Commands) != 0 {
-		t.Fatalf("commands = %#v", result.Commands)
-	}
-	if len(result.Gates) != 1 || result.Gates[0].Detector != "verification_missing" {
-		t.Fatalf("gates = %#v", result.Gates)
+	if taskStatus != "needs_decision" {
+		t.Fatalf("task status = %s", taskStatus)
 	}
 	var inboxCount int
-	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE item_type = 'human_decision' AND source_type = 'gate_result'").Scan(&inboxCount); err != nil {
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox_items WHERE item_type = 'human_decision' AND source_type = 'decision' AND status = 'open'").Scan(&inboxCount); err != nil {
 		t.Fatal(err)
 	}
 	if inboxCount != 1 {
 		t.Fatalf("human decision inbox count = %d", inboxCount)
+	}
+	var decisionCount int
+	if err := db.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM decisions WHERE title = 'Required verification is missing' AND status = 'open'").Scan(&decisionCount); err != nil {
+		t.Fatal(err)
+	}
+	if decisionCount != 1 {
+		t.Fatalf("decision count = %d", decisionCount)
 	}
 }
 

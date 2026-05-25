@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -56,6 +60,12 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runArtifacts(ctx, args[1:], stdout, stderr)
 	case "tasks":
 		return runTasks(ctx, args[1:], stdout, stderr)
+	case "task":
+		return runTask(ctx, args[1:], stdout, stderr)
+	case "status":
+		return runStatusCommand(ctx, args[1:], stdout)
+	case "doctor":
+		return runPlatform(ctx, append([]string{"doctor", "--include-codex", "--include-ui"}, args[1:]...), stdout, stderr)
 	case "request":
 		return runRequest(ctx, args[1:], stdout)
 	case "requests":
@@ -90,6 +100,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runUI(ctx, args[1:], stdout, stderr)
 	case "serve":
 		return runServe(ctx, args[1:], stdout)
+	case "start":
+		return runServe(ctx, append([]string{"--ui", "--open"}, args[1:]...), stdout)
 	case "env":
 		return runEnv(ctx, args[1:], stdout, stderr)
 	case "review":
@@ -423,6 +435,88 @@ func runTasks(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	for _, task := range tasks {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", task.ID, task.Status, task.Title)
 	}
+	return 0
+}
+
+func runTask(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "missing task subcommand")
+		return exitValidation
+	}
+	switch args[0] {
+	case "show":
+		return runTaskShow(ctx, args[1:], stdout)
+	default:
+		fmt.Fprintf(stderr, "unknown task subcommand: %s\n", args[0])
+		return exitValidation
+	}
+}
+
+func runTaskShow(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("task show", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("TASK_ID is required"))
+	}
+	taskID := fs.Arg(0)
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "task_show_failed", err)
+	}
+	defer db.Close()
+	detail, err := taskDetail(ctx, db, projectID, taskID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "task_show_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, detail, 0)
+	}
+	fmt.Fprintf(stdout, "Task: %s\n", detail["id"])
+	fmt.Fprintf(stdout, "Title: %s\n", detail["title"])
+	fmt.Fprintf(stdout, "Status: %s\n", detail["status"])
+	fmt.Fprintf(stdout, "Latest run: %s\n", detail["latest_run_id"])
+	fmt.Fprintf(stdout, "Worktree: %s\n", detail["worktree_path"])
+	fmt.Fprintf(stdout, "Candidate commit: %s\n", detail["candidate_commit"])
+	fmt.Fprintf(stdout, "Diff hash: %s\n", detail["diff_hash"])
+	fmt.Fprintf(stdout, "Verification: %s\n", detail["verification_status"])
+	fmt.Fprintf(stdout, "Merge queue: %s\n", detail["merge_queue_status"])
+	return 0
+}
+
+func runStatusCommand(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "status_failed", err)
+	}
+	defer db.Close()
+	status, err := projectStatusSummary(ctx, db, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "status_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, status, 0)
+	}
+	fmt.Fprintf(stdout, "Project: %s\n", status["project"])
+	fmt.Fprintf(stdout, "Open tasks: %v\n", status["open_tasks"])
+	fmt.Fprintf(stdout, "Blocked tasks: %v\n", status["blocked_tasks"])
+	fmt.Fprintf(stdout, "Inbox: %v\n", status["open_inbox"])
+	fmt.Fprintf(stdout, "Merge queue: %v\n", status["merge_queue"])
+	fmt.Fprintf(stdout, "Last run: %s\n", status["last_run"])
+	fmt.Fprintf(stdout, "Next action: %s\n", status["next_action"])
 	return 0
 }
 
@@ -2400,9 +2494,17 @@ func runServe(ctx context.Context, args []string, stdout io.Writer) int {
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
 	registryPath := fs.String("registry", "", "global registry DB path")
 	addr := fs.String("addr", "127.0.0.1:8765", "listen address")
+	allowLAN := fs.Bool("allow-lan", false, "allow non-localhost bind with warning")
+	localToken := fs.String("local-token", os.Getenv("DEVOS_LOCAL_TOKEN"), "local API token required for sensitive POST routes")
+	serveUI := fs.Bool("ui", false, "serve built React UI from ui/dist")
+	uiDir := fs.String("ui-dir", "ui/dist", "built UI directory")
+	openBrowserFlag := fs.Bool("open", false, "open the UI in the default browser")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout before serving")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if !*allowLAN && isLANBindAddress(*addr) {
+		return writeError(stdout, *jsonOut, exitValidation, "unsafe_bind_address", fmt.Errorf("refusing to bind %s without --allow-lan", *addr))
 	}
 	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
 	if err != nil {
@@ -2414,19 +2516,205 @@ func runServe(ctx context.Context, args []string, stdout io.Writer) int {
 		return writeError(stdout, *jsonOut, errCode, "serve_failed", err)
 	}
 	defer regDB.Close()
+	apiHandler := api.NewServerWithHub(db, projectID, projecthub.NewDefaultHub(regDB)).WithLocalToken(*localToken).Handler()
+	handler := apiHandler
+	if *serveUI {
+		if _, err := os.Stat(filepath.Join(*uiDir, "index.html")); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "ui_dist_missing", fmt.Errorf("UI dist is not available at %s; run corepack pnpm --dir ui build", *uiDir))
+		}
+		handler = uiStaticHandler(apiHandler, *uiDir)
+	}
 	server := &http.Server{
 		Addr:    *addr,
-		Handler: api.NewServerWithHub(db, projectID, projecthub.NewDefaultHub(regDB)).Handler(),
+		Handler: handler,
 	}
 	if *jsonOut {
-		_ = writeJSON(stdout, map[string]any{"addr": *addr, "project_id": projectID}, 0)
+		_ = writeJSON(stdout, map[string]any{"addr": *addr, "project_id": projectID, "ui": *serveUI, "local_token_required": strings.TrimSpace(*localToken) != ""}, 0)
 	} else {
-		fmt.Fprintf(stdout, "DevOS API serving on http://%s\n", *addr)
+		label := "API"
+		if *serveUI {
+			label = "UI/API"
+		}
+		fmt.Fprintf(stdout, "DevOS %s serving on http://%s\n", label, *addr)
+		if *allowLAN && isLANBindAddress(*addr) {
+			fmt.Fprintf(stdout, "Warning: LAN bind enabled for %s. Use --local-token or DEVOS_LOCAL_TOKEN for sensitive routes.\n", *addr)
+		}
+	}
+	if *openBrowserFlag {
+		openBrowser("http://" + *addr)
 	}
 	if err := server.ListenAndServe(); err != nil {
 		return writeError(stdout, *jsonOut, exitInternal, "serve_failed", err)
 	}
 	return 0
+}
+
+func isLANBindAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	return host == "" || host == "0.0.0.0" || host == "::"
+}
+
+func projectStatusSummary(ctx context.Context, db *storage.DB, projectID string) (map[string]any, error) {
+	var projectName string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT name FROM projects WHERE id = ?", projectID).Scan(&projectName); err != nil {
+		return nil, err
+	}
+	count := func(query string, args ...any) (int, error) {
+		var value int
+		err := db.SQL().QueryRowContext(ctx, query, args...).Scan(&value)
+		return value, err
+	}
+	openTasks, err := count("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status NOT IN ('merged', 'applied', 'cancelled', 'failed')", projectID)
+	if err != nil {
+		return nil, err
+	}
+	blockedTasks, err := count("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status IN ('needs_input', 'needs_decision', 'blocked_on_environment', 'blocked_on_policy', 'merge_conflict', 'failed')", projectID)
+	if err != nil {
+		return nil, err
+	}
+	openInbox, err := count("SELECT COUNT(*) FROM inbox_items WHERE project_id = ? AND status = 'open'", projectID)
+	if err != nil {
+		return nil, err
+	}
+	mergeQueue, err := count("SELECT COUNT(*) FROM merge_queue_entries WHERE project_id = ? AND status IN ('queued', 'rebasing', 'reverifying', 'merge_conflict')", projectID)
+	if err != nil {
+		return nil, err
+	}
+	lastRun := "none"
+	var runID, runType, runStatus, taskID sql.NullString
+	err = db.SQL().QueryRowContext(ctx, "SELECT id, run_type, status, task_id FROM runs WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1", projectID).Scan(&runID, &runType, &runStatus, &taskID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if runID.Valid {
+		lastRun = strings.TrimSpace(taskID.String + " " + runID.String + " " + runType.String + " " + runStatus.String)
+	}
+	nextAction := "no action"
+	switch {
+	case openInbox > 0:
+		nextAction = "review open Human Inbox items"
+	case blockedTasks > 0:
+		nextAction = "inspect blocked task with devos task show"
+	case mergeQueue > 0:
+		nextAction = "process or review merge queue"
+	case openTasks > 0:
+		nextAction = "continue queued or ready tasks"
+	}
+	return map[string]any{
+		"project":       projectName,
+		"project_id":    projectID,
+		"open_tasks":    openTasks,
+		"blocked_tasks": blockedTasks,
+		"open_inbox":    openInbox,
+		"merge_queue":   mergeQueue,
+		"last_run":      lastRun,
+		"next_action":   nextAction,
+	}, nil
+}
+
+func taskDetail(ctx context.Context, db *storage.DB, projectID string, taskID string) (map[string]any, error) {
+	var title, status, baseBranch sql.NullString
+	if err := db.SQL().QueryRowContext(ctx, "SELECT title, status, base_branch FROM tasks WHERE project_id = ? AND id = ?", projectID, taskID).Scan(&title, &status, &baseBranch); err != nil {
+		return nil, err
+	}
+	detail := map[string]any{
+		"id":                  taskID,
+		"title":               title.String,
+		"status":              status.String,
+		"base_branch":         baseBranch.String,
+		"latest_run_id":       "",
+		"worktree_path":       "",
+		"candidate_commit":    "",
+		"diff_hash":           "",
+		"verification_status": "",
+		"merge_queue_status":  "",
+		"artifacts":           []map[string]string{},
+	}
+	var latestRunID, runStatus, headCommit, diffHash sql.NullString
+	err := db.SQL().QueryRowContext(ctx, `
+SELECT id, status, COALESCE(head_commit, ''), COALESCE(diff_hash, '')
+FROM runs
+WHERE project_id = ? AND task_id = ?
+ORDER BY updated_at DESC
+LIMIT 1`, projectID, taskID).Scan(&latestRunID, &runStatus, &headCommit, &diffHash)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if latestRunID.Valid {
+		detail["latest_run_id"] = latestRunID.String
+		detail["candidate_commit"] = headCommit.String
+		detail["diff_hash"] = diffHash.String
+		var cwd sql.NullString
+		if err := db.SQL().QueryRowContext(ctx, "SELECT cwd FROM command_events WHERE project_id = ? AND run_id = ? ORDER BY created_at LIMIT 1", projectID, latestRunID.String).Scan(&cwd); err == nil {
+			detail["worktree_path"] = cwd.String
+		}
+	}
+	var verificationStatus sql.NullString
+	err = db.SQL().QueryRowContext(ctx, "SELECT status FROM runs WHERE project_id = ? AND task_id = ? AND run_type IN ('verification', 'reverify') ORDER BY updated_at DESC LIMIT 1", projectID, taskID).Scan(&verificationStatus)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if verificationStatus.Valid {
+		detail["verification_status"] = verificationStatus.String
+	}
+	var mergeStatus sql.NullString
+	err = db.SQL().QueryRowContext(ctx, "SELECT status FROM merge_queue_entries WHERE project_id = ? AND task_id = ? ORDER BY updated_at DESC LIMIT 1", projectID, taskID).Scan(&mergeStatus)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if mergeStatus.Valid {
+		detail["merge_queue_status"] = mergeStatus.String
+	}
+	if latestRunID.Valid {
+		rows, err := db.SQL().QueryContext(ctx, "SELECT artifact_type, artifact_key, path FROM run_artifacts WHERE project_id = ? AND run_id = ? ORDER BY artifact_type, artifact_key", projectID, latestRunID.String)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var artifacts []map[string]string
+		for rows.Next() {
+			var artifactType, artifactKey, path string
+			if err := rows.Scan(&artifactType, &artifactKey, &path); err != nil {
+				return nil, err
+			}
+			artifacts = append(artifacts, map[string]string{"type": artifactType, "key": artifactKey, "path": path})
+		}
+		detail["artifacts"] = artifacts
+	}
+	return detail, nil
+}
+
+func uiStaticHandler(apiHandler http.Handler, uiDir string) http.Handler {
+	fileServer := http.FileServer(http.Dir(uiDir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			apiHandler.ServeHTTP(w, r)
+			return
+		}
+		path := filepath.Join(uiDir, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(uiDir, "index.html"))
+	})
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	_ = cmd.Start()
 }
 
 func runEnv(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -3140,6 +3428,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos task show [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos status [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos doctor [--project-root PATH] [--data-root PATH] [--env ENV_ID] [--save] [--json]")
 	fmt.Fprintln(w, "  devos request [--project-root PATH] [--data-root PATH] [--json] TEXT")
 	fmt.Fprintln(w, "  devos requests [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos project add --name NAME --authority windows --project-root PATH [--data-root PATH] [--registry PATH] [--json]")
@@ -3166,7 +3457,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos dependency risk add [--project-root PATH] [--data-root PATH] --name NAME --manager npm --type production --reason TEXT --risk medium [--lockfile-changed] [--lifecycle-scripts VALUE] [--approved-scope project] [--json]")
 	fmt.Fprintln(w, "  devos dependency risk list [--project-root PATH] [--data-root PATH] [--manager npm] [--type production] [--risk medium] [--json]")
 	fmt.Fprintln(w, "  devos ui snapshot [--project-root PATH] [--data-root PATH] [--limit N] [--json]")
-	fmt.Fprintln(w, "  devos serve [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765] [--json]")
+	fmt.Fprintln(w, "  devos serve [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765] [--ui] [--open] [--json]")
+	fmt.Fprintln(w, "  devos start [--project-root PATH] [--data-root PATH] [--registry PATH] [--addr 127.0.0.1:8765]")
 	fmt.Fprintln(w, "  devos env status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos env set [--project-root PATH] [--data-root PATH] [--scope project] [--scope-id ID] [--env ENV_ID] --value-stdin [--json] KEY")
 	fmt.Fprintln(w, "  devos review [--project-root PATH] [--data-root PATH] [--json] TASK_ID")

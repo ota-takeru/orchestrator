@@ -344,6 +344,48 @@ func TestServerCreatesEnvBindingWithoutReturningSecret(t *testing.T) {
 	}
 }
 
+func TestServerRequiresLocalTokenForSensitivePostWhenConfigured(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	if _, err := db.SQL().ExecContext(context.Background(), "UPDATE projects SET root_path = ? WHERE id = ?", t.TempDir(), projectID); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"key":"OPENAI_API_KEY","scope":"project","value":"secret-value"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/env/bindings", body)
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).WithLocalToken("local-test-token").Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"key":"OPENAI_API_KEY","scope":"project","value":"secret-value"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/env/bindings", body)
+	req.Header.Set("X-DevOS-Token", "local-test-token")
+	rec = httptest.NewRecorder()
+	NewServer(db, projectID).WithLocalToken("local-test-token").Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServerRestrictsCORSOriginsToLocalhost(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodOptions, "/api/health", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	rec = httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
+		t.Fatalf("status = %d allow-origin = %s", rec.Code, rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
 func hasAPIViolation(violations []storage.InvariantViolation, code string) bool {
 	for _, violation := range violations {
 		if violation.Code == code {

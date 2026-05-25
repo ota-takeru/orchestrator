@@ -13,16 +13,19 @@ import (
 )
 
 type SaveVerificationInput struct {
-	ProjectID           string
-	TaskID              *string
-	RunID               string
-	RunType             string
-	AttemptNo           int
-	BaseCommit          string
-	ReverifyContextType string
-	ReverifyContextID   string
-	Commands            []verifier.Command
-	Report              verifier.Report
+	ProjectID            string
+	TaskID               *string
+	RunID                string
+	RunType              string
+	AttemptNo            int
+	BaseCommit           string
+	VerifiedWorktree     string
+	VerifiedCommit       string
+	VerificationPlanHash string
+	ReverifyContextType  string
+	ReverifyContextID    string
+	Commands             []verifier.Command
+	Report               verifier.Report
 }
 
 func (db *DB) SaveVerificationReport(ctx context.Context, input SaveVerificationInput) error {
@@ -81,7 +84,7 @@ func (db *DB) SaveVerificationReport(ctx context.Context, input SaveVerification
 		if err := insertCommandEvent(ctx, tx, input.ProjectID, input.RunID, commandEventID, "verification", command, result.CommandResult, stdoutArtifactID, stderrArtifactID, now); err != nil {
 			return err
 		}
-		if err := insertVerificationResult(ctx, tx, input.ProjectID, input.RunID, commandEventID, result, now); err != nil {
+		if err := insertVerificationResult(ctx, tx, input, commandEventID, result, now); err != nil {
 			return err
 		}
 	}
@@ -195,24 +198,27 @@ INSERT INTO command_events(
 	return err
 }
 
-func insertVerificationResult(ctx context.Context, tx *sql.Tx, projectID string, runID string, commandEventID string, result verifier.Result, now string) error {
+func insertVerificationResult(ctx context.Context, tx *sql.Tx, input SaveVerificationInput, commandEventID string, result verifier.Result, now string) error {
 	var failureClass any
 	if result.FailureClass != nil {
 		failureClass = string(*result.FailureClass)
 	}
 	evidence, err := json.Marshal(map[string]any{
-		"message": result.Message,
+		"message":                result.Message,
+		"verified_worktree":      input.VerifiedWorktree,
+		"verified_commit":        input.VerifiedCommit,
+		"verification_plan_hash": input.VerificationPlanHash,
 	})
 	if err != nil {
 		return err
 	}
-	resultID := verificationResultID(runID, result.CommandID, result.EnvironmentID)
+	resultID := verificationResultID(input.RunID, result.CommandID, result.EnvironmentID)
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO verification_results(
   id, project_id, run_id, environment_id, command_event_id, command_id,
   required_for_merge, status, failure_class, evidence_json, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		resultID, projectID, runID, result.EnvironmentID, commandEventID, result.CommandID,
+		resultID, input.ProjectID, input.RunID, result.EnvironmentID, commandEventID, result.CommandID,
 		boolInt(result.RequiredForMerge), result.Status, failureClass, string(evidence), now,
 	)
 	return err

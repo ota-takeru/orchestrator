@@ -6,7 +6,7 @@
 
 ## Summary
 
-最終更新: 2026-05-24
+最終更新: 2026-05-25
 
 | Area | Progress | Status |
 | --- | ---: | --- |
@@ -16,6 +16,18 @@
 | Initial Complete Scope end-to-end workflow | 99% | 進行中 |
 
 ## Latest Implementation Update
+
+2026-05-25:
+
+- Real Codex実行後のtask worktree差分をOrchestrator側で検査し、protected path / secret scanを通したうえで `devos: implement TASK-...` commitを作成し、そのcommit hashをimplementation runの `head_commit` として保存するようにしました。差分なし、protected path、secret疑い、final message blocker、test failed/not_run は成功扱いにせず `needs_decision` / `failed` へ分類します。
+- implementation verificationは最新のsuccessful implementation runのtask worktree/head commitを対象にし、`verification_results.evidence_json` へ `verified_worktree`、`verified_commit`、`verification_plan_hash` を保存するようにしました。merge reverifyもtask/project由来のverification planを再利用し、required commandが空ならHuman Inboxへ `verification_required` Decisionを出してblockします。
+- Codex final message schemaをembedded定義と `.devagent/schemas/` で同期し、repository schema registryがembedded定義からdriftしていないことをテストで検出するようにしました。
+- Local APIはlocalhost CORSのみを許可し、`DEVOS_LOCAL_TOKEN` / `--local-token` 設定時はenv bindingなどsensitive POSTに `X-DevOS-Token` を必須化しました。`devos serve` は `0.0.0.0` / `::` bindをデフォルト拒否し、`--allow-lan` 明示時のみ警告付きで許可します。
+- `devos serve --ui` と `devos start` を追加し、build済み `ui/dist` を同一originで配信できるようにしました。日常確認用に `devos status`、`devos task show TASK_ID`、`devos doctor` aliasも追加しました。
+- env bindingは `.env.local` がGit trackedなら保存拒否し、同一keyはappendではなくreplaceします。fingerprintはsecret値のSHA-256直ではなくproject/key salt付きHMACに変更しました。
+- WSL実機の一時projectで、新しいReal Codex safety E2Eを実行しました。`TASK-REAL-E2E` はtask worktree `.devagent-worktrees/TASK-REAL-E2E` 上で marker fileを作成し、Orchestrator commit `9348ba7525e9ceb8e8a0433fe66f21e71059c831` を保存、local verification evidenceに同commit/worktree/plan hashを記録して `ready_for_human_review` へ到達しました。
+- Windows実機の一時projectでは、Windows native Codex 0.133.0 がworkspace-write指定とwritable root明示後も「filesystem write access unavailable」とstructured final messageでblockを返すことを確認しました。Orchestratorはこれを成功扱いせず `needs_decision` / `blocked` として保存します。Windows native Codexのwrite sandbox成立条件は継続調査対象です。
+- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`。
 
 2026-05-24:
 

@@ -2,9 +2,13 @@ package storage
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,7 +61,7 @@ func (db *DB) SaveEnvBinding(ctx context.Context, input EnvBindingInput) (EnvBin
 	environmentID := strings.TrimSpace(input.EnvironmentID)
 	scopeID := strings.TrimSpace(input.ScopeID)
 	bindingID := "ENV-BIND-" + stableShortHash(input.ProjectID+"|"+environmentID+"|"+key+"|"+scope+"|"+scopeID)
-	fingerprint := sha256Hex([]byte(input.Value))
+	fingerprint := envBindingFingerprint(input.ProjectID, key, input.Value)
 	root, err := db.projectRootForEnvBinding(ctx, input.ProjectID)
 	if err != nil {
 		return EnvBindingRecord{}, err
@@ -141,18 +145,56 @@ func (db *DB) projectRootForEnvBinding(ctx context.Context, projectID string) (s
 
 func appendEnvLocalBinding(projectRoot string, key string, value string) error {
 	path := filepath.Join(projectRoot, ".env.local")
+	if envLocalTracked(projectRoot) {
+		return fmt.Errorf(".env.local is tracked by git; refusing to write secret material")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	defer file.Close()
-	if _, err := fmt.Fprintf(file, "%s=%s\n", key, quoteEnvValue(value)); err != nil {
+	lines := replaceEnvLine(string(existing), key, key+"="+quoteEnvValue(value))
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
 		return err
 	}
-	return file.Chmod(0o600)
+	return os.Chmod(path, 0o600)
+}
+
+func envBindingFingerprint(projectID string, key string, value string) string {
+	mac := hmac.New(sha256.New, []byte("devos-env-binding-v1:"+projectID+":"+key))
+	_, _ = mac.Write([]byte(value))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func envLocalTracked(projectRoot string) bool {
+	cmd := exec.Command("git", "ls-files", "--error-unmatch", "--", ".env.local")
+	cmd.Dir = projectRoot
+	return cmd.Run() == nil
+}
+
+func replaceEnvLine(content string, key string, replacement string) string {
+	prefix := key + "="
+	var lines []string
+	replaced := false
+	for _, line := range strings.Split(content, "\n") {
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, prefix) {
+			if !replaced {
+				lines = append(lines, replacement)
+				replaced = true
+			}
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if !replaced {
+		lines = append(lines, replacement)
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func quoteEnvValue(value string) string {

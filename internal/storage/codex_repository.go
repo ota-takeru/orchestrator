@@ -47,6 +47,7 @@ type RealCodexRunResult struct {
 	ImplementationRun string   `json:"implementation_run_id"`
 	Classification    string   `json:"classification"`
 	WorktreeRoot      string   `json:"worktree_root,omitempty"`
+	HeadCommit        string   `json:"head_commit,omitempty"`
 	Blockers          []string `json:"blockers,omitempty"`
 }
 
@@ -155,6 +156,7 @@ func codexExecArgv(projectRoot string, finalPath string, schemaPath string) []st
 		"--color", "never",
 		"-c", `approval_policy="never"`,
 		"-c", "sandbox_workspace_write.network_access=false",
+		"-c", fmt.Sprintf("sandbox_workspace_write.writable_roots=[%q]", projectRoot),
 		"--cd", projectRoot,
 		"-o", finalPath,
 		"--output-schema", schemaPath,
@@ -217,16 +219,14 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 			execResult.Stderr = strings.TrimSpace(execResult.Stderr + "\n" + "schema validation failed: " + err.Error())
 		}
 	}
-	headCommit := gitOutputOrUnknown(ctx, workspaceRoot, "rev-parse", "HEAD")
-	diff := gitOutputOrEmpty(ctx, workspaceRoot, "diff", "--binary")
-	diffHash := sha256Hex([]byte(diff))
-	classification, blockers = classifyCodexExecResult(execResult)
-	runStatus := "succeeded"
-	taskTo := "verifying"
-	if len(blockers) > 0 {
-		runStatus = "blocked"
-		taskTo = "needs_decision"
+	commitResult := finalizeCodexWorktree(ctx, workspaceRoot, taskID, execResult)
+	headCommit := commitResult.HeadCommit
+	if strings.TrimSpace(headCommit) == "" {
+		headCommit = gitOutputOrUnknown(ctx, workspaceRoot, "rev-parse", "HEAD")
 	}
+	diff := commitResult.Diff
+	diffHash := sha256Hex([]byte(diff))
+	classification, blockers, runStatus, taskTo := classifyCodexOutcome(execResult, commitResult)
 	runID := "RUN-" + stableShortHash(taskID+"|real-codex|"+time.Now().UTC().Format(time.RFC3339Nano))
 	if err := db.saveCodexRun(ctx, projectID, taskID, env, workspaceRoot, runID, attemptNo, baseCommit, headCommit, diffHash, diff, prompt, execResult, runStatus, classification, blockers); err != nil {
 		return RealCodexRunResult{}, err
@@ -244,7 +244,7 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	}); err != nil {
 		return RealCodexRunResult{}, err
 	}
-	return RealCodexRunResult{TaskID: taskID, TaskStatus: taskTo, ImplementationRun: runID, Classification: classification, WorktreeRoot: workspaceRoot, Blockers: blockers}, nil
+	return RealCodexRunResult{TaskID: taskID, TaskStatus: taskTo, ImplementationRun: runID, Classification: classification, WorktreeRoot: workspaceRoot, HeadCommit: headCommit, Blockers: blockers}, nil
 }
 
 func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID string) (RealCodexPreviewResult, error) {
@@ -574,10 +574,98 @@ func buildRealCodexPrompt(taskID string, trustedArtifacts []TrustedArtifactConte
 	lines = append(lines,
 		"",
 		"Do not request interactive approvals.",
-		"Do not use network access.",
-		"Stop if dependency installation, outside-workspace writes, destructive git commands, or permission escalation are required.",
+		"Network policy: read-only documentation lookup is allowed only when the run profile permits it; dependency installation, authenticated APIs, secret-bearing requests, deployment, and destructive operations require stopping and reporting a blocker.",
+		"Do not send secrets to any network service.",
+		"Do not install dependencies unless explicitly approved.",
+		"Stop if dependency installation, outside-workspace writes, destructive git commands, deployment, or permission escalation are required.",
 	)
 	return strings.Join(lines, "\n")
+}
+
+type codexCommitResult struct {
+	InGit      bool
+	Changed    bool
+	Diff       string
+	HeadCommit string
+	Blockers   []string
+	HardBlock  bool
+}
+
+func finalizeCodexWorktree(ctx context.Context, workspaceRoot string, taskID string, execResult CodexExecResult) codexCommitResult {
+	if strings.TrimSpace(gitOutputOrEmpty(ctx, workspaceRoot, "rev-parse", "--is-inside-work-tree")) != "true" {
+		return codexCommitResult{InGit: false}
+	}
+	if execResult.ExitCode != 0 {
+		return codexCommitResult{InGit: true, Diff: gitOutputOrEmpty(ctx, workspaceRoot, "diff", "--binary")}
+	}
+	status := strings.TrimSpace(gitOutputOrEmpty(ctx, workspaceRoot, "status", "--porcelain=v1", "--untracked-files=all"))
+	if status == "" {
+		return codexCommitResult{InGit: true, Blockers: []string{"no file changes produced by Codex"}}
+	}
+	changedFiles := parseGitPorcelainFiles(status)
+	if blockers := protectedPathBlockers(changedFiles); len(blockers) > 0 {
+		return codexCommitResult{InGit: true, Changed: true, Blockers: blockers}
+	}
+	if blockers := secretScanBlockers(workspaceRoot, changedFiles); len(blockers) > 0 {
+		return codexCommitResult{InGit: true, Changed: true, Blockers: blockers, HardBlock: true}
+	}
+	if err := runGit(ctx, workspaceRoot, "add", "--all", "--", "."); err != nil {
+		return codexCommitResult{InGit: true, Changed: true, Blockers: []string{"git add failed: " + err.Error()}}
+	}
+	diff := gitOutputOrEmpty(ctx, workspaceRoot, "diff", "--cached", "--binary")
+	if strings.TrimSpace(diff) == "" {
+		return codexCommitResult{InGit: true, Changed: true, Blockers: []string{"staged diff is empty"}}
+	}
+	if err := runGit(ctx, workspaceRoot,
+		"-c", "user.name=DevOS",
+		"-c", "user.email=devos@example.local",
+		"commit", "-m", "devos: implement "+taskID); err != nil {
+		return codexCommitResult{InGit: true, Changed: true, Diff: diff, Blockers: []string{"git commit failed: " + err.Error()}}
+	}
+	return codexCommitResult{
+		InGit:      true,
+		Changed:    true,
+		Diff:       diff,
+		HeadCommit: gitOutputOrUnknown(ctx, workspaceRoot, "rev-parse", "HEAD"),
+	}
+}
+
+func classifyCodexOutcome(result CodexExecResult, commit codexCommitResult) (string, []string, string, string) {
+	final, finalErr := schemas.ParseCodexFinalMessage(result.FinalMessage)
+	if result.ExitCode != 0 {
+		classification, blockers := classifyCodexExecResult(result)
+		return classification, blockers, "blocked", "needs_decision"
+	}
+	if finalErr != nil {
+		return "schema_validation_failed", []string{"schema_validation_failed"}, "blocked", "needs_decision"
+	}
+	if len(final.Blockers) > 0 {
+		return "blocked", append([]string(nil), final.Blockers...), "blocked", "needs_decision"
+	}
+	for _, test := range final.Tests {
+		switch test.Status {
+		case "failed":
+			return "tests_failed", []string{"required tests failed: " + test.Command}, "failed", "failed"
+		case "not_run":
+			return "tests_not_run", []string{"required tests not run: " + test.Command}, "blocked", "needs_decision"
+		}
+	}
+	switch final.Status {
+	case "blocked":
+		return "blocked", []string{"codex final status blocked"}, "blocked", "needs_decision"
+	case "failed":
+		return "codex_failed", []string{"codex final status failed"}, "failed", "failed"
+	}
+	if len(commit.Blockers) > 0 {
+		classification := "policy_blocked"
+		if commit.HardBlock {
+			classification = "hard_block"
+		} else if !commit.Changed {
+			classification = "no_change"
+		}
+		return classification, commit.Blockers, "blocked", "needs_decision"
+	}
+	return "succeeded", nil, "succeeded", "verifying"
 }
 
 func classifyCodexExecResult(result CodexExecResult) (string, []string) {
@@ -601,6 +689,56 @@ func classifyCodexExecResult(result CodexExecResult) (string, []string) {
 		classification = "schema_validation_failed"
 	}
 	return classification, []string{classification}
+}
+
+func parseGitPorcelainFiles(status string) []string {
+	var files []string
+	for _, line := range strings.Split(status, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if strings.Contains(path, " -> ") {
+			parts := strings.Split(path, " -> ")
+			path = parts[len(parts)-1]
+		}
+		files = append(files, strings.Trim(path, `"`))
+	}
+	return files
+}
+
+func protectedPathBlockers(files []string) []string {
+	var blockers []string
+	for _, file := range files {
+		slash := filepath.ToSlash(strings.TrimSpace(file))
+		switch {
+		case slash == ".env" || slash == ".env.local" || strings.HasPrefix(slash, ".env."):
+			blockers = append(blockers, "protected path touched: "+slash)
+		case strings.HasPrefix(slash, "orchestrator-data/"):
+			blockers = append(blockers, "protected path touched: "+slash)
+		}
+	}
+	return blockers
+}
+
+func secretScanBlockers(root string, files []string) []string {
+	var blockers []string
+	for _, file := range files {
+		slash := filepath.ToSlash(strings.TrimSpace(file))
+		if slash == "" || strings.HasPrefix(slash, ".git/") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(slash)))
+		if err != nil || len(raw) > 1<<20 {
+			continue
+		}
+		text := string(raw)
+		if strings.Contains(text, "BEGIN PRIVATE KEY") || strings.Contains(text, "OPENAI_API_KEY=sk-") || strings.Contains(text, "sk-") {
+			blockers = append(blockers, "possible secret detected in "+slash)
+		}
+	}
+	return blockers
 }
 
 func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, workspaceRoot string, runID string, attemptNo int, baseCommit string, headCommit string, diffHash string, diff string, prompt string, execResult CodexExecResult, runStatus string, classification string, blockers []string) error {

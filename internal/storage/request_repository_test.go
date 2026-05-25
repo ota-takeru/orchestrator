@@ -544,6 +544,9 @@ func TestSaveEnvBindingStoresOnlyRedactedMetadata(t *testing.T) {
 	if record.Status != "configured" || record.ValueFingerprint == "" || record.Storage != "env_file" || strings.Contains(record.StorageRef, "secret-value") {
 		t.Fatalf("binding = %#v", record)
 	}
+	if record.ValueFingerprint == sha256Hex([]byte("secret-value")) {
+		t.Fatal("fingerprint must not be raw sha256 of the secret value")
+	}
 	envLocal, err := os.ReadFile(filepath.Join(root, ".env.local"))
 	if err != nil {
 		t.Fatal(err)
@@ -557,5 +560,52 @@ func TestSaveEnvBindingStoresOnlyRedactedMetadata(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("audit count = %d", count)
+	}
+
+	replaced, err := db.SaveEnvBinding(ctx, EnvBindingInput{
+		ProjectID: "PROJECT-001",
+		Key:       "OPENAI_API_KEY",
+		Scope:     "project",
+		Value:     "new-secret-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced.ID != record.ID {
+		t.Fatalf("expected duplicate key to replace same binding: %s != %s", replaced.ID, record.ID)
+	}
+	envLocal, err = os.ReadFile(filepath.Join(root, ".env.local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(envLocal)
+	if strings.Contains(content, "OPENAI_API_KEY=secret-value\n") || strings.Count(content, "OPENAI_API_KEY=") != 1 || !strings.Contains(content, "OPENAI_API_KEY=new-secret-value\n") {
+		t.Fatalf(".env.local duplicate replacement failed: %q", content)
+	}
+}
+
+func TestSaveEnvBindingRefusesTrackedEnvLocal(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	root := t.TempDir()
+	if err := runGit(ctx, root, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".env.local"), []byte("EXISTING=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(ctx, root, "add", "--", ".env.local"); err != nil {
+		t.Fatal(err)
+	}
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+
+	_, err := db.SaveEnvBinding(ctx, EnvBindingInput{
+		ProjectID: "PROJECT-001",
+		Key:       "OPENAI_API_KEY",
+		Scope:     "project",
+		Value:     "secret-value",
+	})
+	if err == nil || !strings.Contains(err.Error(), "tracked by git") {
+		t.Fatalf("err = %v", err)
 	}
 }

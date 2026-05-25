@@ -19,6 +19,9 @@ type fakeCodexExecutor struct {
 
 func (f fakeCodexExecutor) ExecCodex(ctx context.Context, request CodexExecRequest) (CodexExecResult, error) {
 	_ = ctx
+	if f.result.ExitCode == 0 {
+		_ = os.WriteFile(filepath.Join(request.ProjectRoot, "codex-output.txt"), []byte("implemented\n"), 0o644)
+	}
 	if f.result.StartedAt.IsZero() {
 		f.result.StartedAt = time.Now().UTC()
 	}
@@ -36,6 +39,25 @@ type captureCodexExecutor struct {
 func (f *captureCodexExecutor) ExecCodex(ctx context.Context, request CodexExecRequest) (CodexExecResult, error) {
 	_ = ctx
 	f.request = request
+	if f.result.ExitCode == 0 {
+		_ = os.WriteFile(filepath.Join(request.ProjectRoot, "codex-output.txt"), []byte("implemented\n"), 0o644)
+	}
+	if f.result.StartedAt.IsZero() {
+		f.result.StartedAt = time.Now().UTC()
+	}
+	if f.result.CompletedAt.IsZero() {
+		f.result.CompletedAt = f.result.StartedAt.Add(time.Second)
+	}
+	return f.result, nil
+}
+
+type noChangeCodexExecutor struct {
+	result CodexExecResult
+}
+
+func (f noChangeCodexExecutor) ExecCodex(ctx context.Context, request CodexExecRequest) (CodexExecResult, error) {
+	_ = ctx
+	_ = request
 	if f.result.StartedAt.IsZero() {
 		f.result.StartedAt = time.Now().UTC()
 	}
@@ -56,7 +78,7 @@ func TestRunRealCodexTaskRecordsImplementationEvidence(t *testing.T) {
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +134,7 @@ func TestRunRealCodexTaskUsesTaskWorktreeWhenGitRepo(t *testing.T) {
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
 	executor := &captureCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	}
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", executor)
@@ -133,6 +155,39 @@ func TestRunRealCodexTaskUsesTaskWorktreeWhenGitRepo(t *testing.T) {
 	if cwd != expectedWorktree {
 		t.Fatalf("command cwd = %s", cwd)
 	}
+	if strings.TrimSpace(result.HeadCommit) == "" || result.HeadCommit == "UNKNOWN" {
+		t.Fatalf("head commit was not recorded: %#v", result)
+	}
+	if strings.TrimSpace(gitOutput(t, expectedWorktree, "diff", "--name-only", "HEAD^", "HEAD")) != "codex-output.txt" {
+		t.Fatalf("expected committed Codex change in task worktree")
+	}
+	var headCommit string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT head_commit FROM runs WHERE id = ?", result.ImplementationRun).Scan(&headCommit); err != nil {
+		t.Fatal(err)
+	}
+	if headCommit != result.HeadCommit {
+		t.Fatalf("stored head commit = %s result = %s", headCommit, result.HeadCommit)
+	}
+}
+
+func TestRunRealCodexTaskNoChangeBlocks(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := initStorageGitRepo(t)
+	setRealCodexDoctorDetectedForTest(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+
+	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", noChangeCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskStatus != "needs_decision" || result.Classification != "no_change" {
+		t.Fatalf("result = %#v", result)
+	}
 }
 
 func TestRunRealCodexTaskDirtyCanonicalWorktreeOpensDecision(t *testing.T) {
@@ -148,7 +203,7 @@ func TestRunRealCodexTaskDirtyCanonicalWorktreeOpensDecision(t *testing.T) {
 	}
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +253,7 @@ func TestRunRealCodexTaskIncludesTrustedArtifactContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	executor := &captureCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	}
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", executor)
@@ -239,7 +294,7 @@ func TestCodexPromptStdinUsesPromptContentNotPath(t *testing.T) {
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
 	executor := &captureCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	}
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", executor)
@@ -257,7 +312,7 @@ func TestCodexPromptStdinUsesPromptContentNotPath(t *testing.T) {
 	if strings.Contains(joinedArgv, "--ask-for-approval") {
 		t.Fatalf("codex argv uses removed approval flag: %#v", argv)
 	}
-	if !strings.Contains(joinedArgv, `approval_policy="never"`) || !strings.Contains(joinedArgv, "sandbox_workspace_write.network_access=false") {
+	if !strings.Contains(joinedArgv, `approval_policy="never"`) || !strings.Contains(joinedArgv, "sandbox_workspace_write.network_access=false") || !strings.Contains(joinedArgv, "sandbox_workspace_write.writable_roots=") {
 		t.Fatalf("codex argv missing non-interactive config overrides: %#v", argv)
 	}
 	for _, arg := range argv {
@@ -319,7 +374,7 @@ func TestRunRealCodexTaskThenVerificationReachesReview(t *testing.T) {
 	setRealCodexDoctorDetectedForTest(t)
 
 	runResult, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -333,6 +388,47 @@ func TestRunRealCodexTaskThenVerificationReachesReview(t *testing.T) {
 	}
 	if verifyResult.TaskStatus != "ready_for_human_review" {
 		t.Fatalf("verify result = %#v", verifyResult)
+	}
+}
+
+func TestVerificationRunsAgainstRealCodexTaskWorktree(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	projectRoot := initStorageGitRepo(t)
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	setRealCodexDoctorDetectedForTest(t)
+
+	runResult, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE tasks
+SET verification_commands_json = ?
+WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"codex-output-check","environment":"primary","runner":"auto","required_for_merge":true,"working_dir":"task_worktree","command":{"argv":["sh","-c","test -f codex-output.txt"]},"network":false}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	verifyResult, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifyResult.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("verify result = %#v", verifyResult)
+	}
+	if verifyResult.Commands[0].WorkingDir != runResult.WorktreeRoot {
+		t.Fatalf("verification working dir = %s, want %s", verifyResult.Commands[0].WorkingDir, runResult.WorktreeRoot)
+	}
+	var evidenceRaw string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT evidence_json FROM verification_results WHERE run_id = ?", verifyResult.VerificationRun).Scan(&evidenceRaw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(evidenceRaw, runResult.WorktreeRoot) || !strings.Contains(evidenceRaw, runResult.HeadCommit) || !strings.Contains(evidenceRaw, "verification_plan_hash") {
+		t.Fatalf("verification evidence = %s", evidenceRaw)
 	}
 }
 
@@ -393,6 +489,73 @@ func TestRunRealCodexTaskInvalidFinalMessageOpensDecision(t *testing.T) {
 	}
 }
 
+func TestRunRealCodexTaskFinalMessageClassifiesRunStatus(t *testing.T) {
+	cases := []struct {
+		name               string
+		final              string
+		wantTaskStatus     string
+		wantRunStatus      string
+		wantClassification string
+	}{
+		{
+			name:               "blocked",
+			final:              `{"status":"blocked","summary":"needs input","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":["needs product decision"]}`,
+			wantTaskStatus:     "needs_decision",
+			wantRunStatus:      "blocked",
+			wantClassification: "blocked",
+		},
+		{
+			name:               "failed",
+			final:              `{"status":"failed","summary":"implementation failed","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`,
+			wantTaskStatus:     "failed",
+			wantRunStatus:      "failed",
+			wantClassification: "codex_failed",
+		},
+		{
+			name:               "tests failed",
+			final:              `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"failed","notes":"compile error"}],"blockers":[]}`,
+			wantTaskStatus:     "failed",
+			wantRunStatus:      "failed",
+			wantClassification: "tests_failed",
+		},
+		{
+			name:               "tests not run",
+			final:              `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"not_run","notes":"not available"}],"blockers":[]}`,
+			wantTaskStatus:     "needs_decision",
+			wantRunStatus:      "blocked",
+			wantClassification: "tests_not_run",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openMigratedTestDB(t)
+			ctx := context.Background()
+			projectRoot := initStorageGitRepo(t)
+			insertProject(t, db.SQL(), "PROJECT-001")
+			insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+			insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+			setRealCodexDoctorDetectedForTest(t)
+
+			result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
+				result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: tc.final, ExitCode: 0},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.TaskStatus != tc.wantTaskStatus || result.Classification != tc.wantClassification {
+				t.Fatalf("result = %#v", result)
+			}
+			var runStatus string
+			if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM runs WHERE id = ?", result.ImplementationRun).Scan(&runStatus); err != nil {
+				t.Fatal(err)
+			}
+			if runStatus != tc.wantRunStatus {
+				t.Fatalf("run status = %s", runStatus)
+			}
+		})
+	}
+}
+
 func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -415,7 +578,7 @@ func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 	defer restore()
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -456,7 +619,7 @@ func TestRunRealCodexTaskUsesRunProfileImplementationEnvironment(t *testing.T) {
 	defer restore()
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -491,7 +654,7 @@ func TestRunRealCodexTaskSupportsWindowsWhenRuntimeIsWindows(t *testing.T) {
 	defer restore()
 
 	result, err := db.RunRealCodexTask(ctx, "PROJECT-001", "TASK-001", fakeCodexExecutor{
-		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done"}`, ExitCode: 0},
+		result: CodexExecResult{Stdout: "{\"type\":\"done\"}\n", FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`, ExitCode: 0},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -141,29 +141,43 @@ func CodexFinalMessageSchema() []byte {
 }
 
 func ValidateCodexFinalMessage(raw string) error {
+	_, err := ParseCodexFinalMessage(raw)
+	return err
+}
+
+func ParseCodexFinalMessage(raw string) (CodexFinalMessage, error) {
 	var message CodexFinalMessage
 	if err := json.Unmarshal([]byte(raw), &message); err != nil {
-		return fmt.Errorf("codex final message must be JSON: %w", err)
+		return CodexFinalMessage{}, fmt.Errorf("codex final message must be JSON: %w", err)
 	}
 	switch message.Status {
 	case "succeeded", "blocked", "failed":
 	default:
-		return fmt.Errorf("codex final message has invalid status: %s", message.Status)
+		return CodexFinalMessage{}, fmt.Errorf("codex final message has invalid status: %s", message.Status)
 	}
 	if strings.TrimSpace(message.Summary) == "" {
-		return fmt.Errorf("codex final message requires summary")
+		return CodexFinalMessage{}, fmt.Errorf("codex final message requires summary")
+	}
+	if message.Tests == nil {
+		return CodexFinalMessage{}, fmt.Errorf("codex final message requires tests")
+	}
+	if message.Blockers == nil {
+		return CodexFinalMessage{}, fmt.Errorf("codex final message requires blockers")
 	}
 	for i, test := range message.Tests {
 		if strings.TrimSpace(test.Command) == "" {
-			return fmt.Errorf("codex final message test %d requires command", i)
+			return CodexFinalMessage{}, fmt.Errorf("codex final message test %d requires command", i)
 		}
 		switch test.Status {
 		case "passed", "failed", "not_run":
 		default:
-			return fmt.Errorf("codex final message test %d has invalid status: %s", i, test.Status)
+			return CodexFinalMessage{}, fmt.Errorf("codex final message test %d has invalid status: %s", i, test.Status)
+		}
+		if strings.TrimSpace(test.Notes) == "" {
+			return CodexFinalMessage{}, fmt.Errorf("codex final message test %d requires notes", i)
 		}
 	}
-	return nil
+	return message, nil
 }
 
 type SemanticBehaviorDiffItem struct {

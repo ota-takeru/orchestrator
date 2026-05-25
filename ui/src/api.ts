@@ -110,7 +110,8 @@ export async function approveInboxItem(id: string, notes: string, option?: strin
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Accept: "application/json"
+      Accept: "application/json",
+      ...localAuthHeaders()
     },
     body: JSON.stringify({ notes, option })
   });
@@ -143,12 +144,26 @@ export async function loadTaskArtifacts(taskID: string, projectID?: string): Pro
   return body.artifacts;
 }
 
+export async function runTaskAction(taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve", projectID?: string): Promise<void> {
+  const taskPath = projectID ? `/api/projects/${encodeURIComponent(projectID)}/tasks/${encodeURIComponent(taskID)}` : `/api/tasks/${encodeURIComponent(taskID)}`;
+  const suffix =
+    action === "verify"
+      ? "/verify"
+      : action === "review-approve"
+        ? "/review/approve"
+        : action === "review-reject"
+          ? "/review/reject"
+          : "/merge/approve";
+  await postJSON(`${taskPath}${suffix}`, { notes: "Submitted from DevOS UI" });
+}
+
 async function postJSON(path: string, body: unknown): Promise<void> {
   const response = await fetch(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Accept: "application/json"
+      Accept: "application/json",
+      ...localAuthHeaders()
     },
     body: JSON.stringify(body)
   });
@@ -156,6 +171,22 @@ async function postJSON(path: string, body: unknown): Promise<void> {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
+}
+
+function localAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = globalThis.localStorage?.getItem("devos.localToken")?.trim();
+  if (token) {
+    headers["X-DevOS-Token"] = token;
+    headers["X-DevOS-Nonce"] = randomNonce();
+  }
+  return headers;
+}
+
+function randomNonce() {
+  const array = new Uint32Array(2);
+  globalThis.crypto?.getRandomValues(array);
+  return `${Date.now().toString(36)}-${array[0].toString(36)}${array[1].toString(36)}`;
 }
 
 function emptyWorkStatus(): WorkStatus {

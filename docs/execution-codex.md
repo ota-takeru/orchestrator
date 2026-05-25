@@ -16,7 +16,7 @@ codex_execution_profiles:
     sandbox_profile: windows-native
     path_style: windows
     working_directory_source: execution_environment.project_root
-    network_access: false
+    network_access: read_only
     protected_paths:
       - .env
       - .env.local
@@ -30,7 +30,7 @@ codex_execution_profiles:
     sandbox_profile: linux-bubblewrap
     path_style: posix
     working_directory_source: execution_environment.project_root
-    network_access: false
+    network_access: read_only
     protected_paths:
       - .env
       - .env.local
@@ -41,13 +41,13 @@ codex_execution_profiles:
 
 共通設定:
 
-- sandbox: `workspace-write`
+- sandbox: Linux/WSLは `workspace-write`。Windows nativeでCodex CLI 0.133.0 のworkspace-writeが実機で書き込み不能な場合は、DevOSが作る隔離task worktree、protected path check、secret scan、Orchestrator commit gateを前提に `danger-full-access` fallbackを使う。
 - approval_policy: `never`
 - ignore_user_config: true
 - ignore_rules: true
 - ephemeral: true
 - color: never
-- network_access: false
+- network_access: read-only documentation lookup allowed
 - prompt_input: stdin
 - capture: stdout_jsonl、stderr、final_message、exit_code、diff_before_after、command_events
 
@@ -70,7 +70,8 @@ codex exec `
   --output-schema C:\dev\app\.devagent\schemas\run-result.schema.json `
   -o C:\devos-data\projects\PROJECT-001\runs\RUN-001\final.json `
   -c 'approval_policy="never"' `
-  -c 'sandbox_workspace_write.network_access=false' `
+  -c 'sandbox_workspace_write.network_access=true' `
+  --add-dir C:\dev\app\.devagent-worktrees\TASK-003 `
   -C C:\dev\app\.devagent-worktrees\TASK-003 `
   -
 ```
@@ -88,7 +89,8 @@ codex exec \
   --output-schema /home/user/app/.devagent/schemas/run-result.schema.json \
   -o /home/user/devos-data/projects/PROJECT-001/runs/RUN-001/final.json \
   -c 'approval_policy="never"' \
-  -c 'sandbox_workspace_write.network_access=false' \
+  -c 'sandbox_workspace_write.network_access=true' \
+  --add-dir /home/user/app/.devagent-worktrees/TASK-003 \
   -C /home/user/app/.devagent-worktrees/TASK-003 \
   -
 ```
@@ -149,7 +151,7 @@ Auto-reviewは権限境界を広げる仕組みではありません。filesyste
 
 | Lane | Executor | Sandbox / Network | Approval |
 | --- | --- | --- | --- |
-| implementation | Codex | `workspace-write`, network off | v1 real-codexは`never`で非対話・fail-closed。approval-like failureはDevOSがrunを`blocked`にし、Human Inboxへprojection |
+| implementation | Codex | `workspace-write`またはWindows native fallback、read-only network | v1 real-codexは`never`で非対話・fail-closed。approval-like failureはDevOSがrunを`blocked`にし、Human Inboxへprojection。依存追加、secret-bearing request、deploy、破壊的操作はpolicy block |
 | repair | Codex | implementationと同じ | `untrusted`。budget内のみ |
 | review | Codex | read-only相当。可能なら`read-only` | `on-request`または`never`。write要求はHARD_BLOCK |
 | verification | Orchestrator process runner | project policyに従う。Codexには実行させない | Codex approvalなし |
@@ -178,6 +180,10 @@ runtime不一致、adapter不一致、path style不一致、remote runner未設�
 - `remote_runner_required`
 
 Windows native CodexはWindows上で動くDevOS runtimeからだけ実行できます。Linux/WSL上のDevOS processがWindows pathへ直接 `codex.exe` を起動する設計にはしません。Windows/WSLはそれぞれ別の `CODEX_HOME`、sandbox、auth境界を持つものとして扱い、共有を仮定しません。
+
+Windows nativeの `windows-native` sandbox profileでは、Codex CLI 0.133.0 の `workspace-write` が実機でfile write不可になることを確認済みです。このprofileだけは `danger-full-access` をCodex process sandbox modeとして使います。ただし許可されるwrite先はDevOSが事前に作るtask worktreeであり、実行後にOrchestratorがprotected path check、secret scan、diff保存、git commit作成、final message分類、verification gateを通すまで成功扱いにしません。canonical project root、WSL worktree、project DBをWindows UIやWindows backendが直接mutateしてはいけません。
+
+run profileのnetwork policyは、デフォルトでread-only network on、secret-bearing network off、dependency install approval requiredです。Codex promptへこの制約を明示し、stdout JSONL / diffからnetwork evidenceを保存します。依存追加command、dependency file変更、secret-bearing request疑い、deploy/destructive commandはimplementation succeededではなくHuman Inbox/Decisionへ投影します。
 
 環境policyを通過した後、Codex process起動前にPlatform Doctorを `include-codex=true` で実行します。`codex`、`codex-auth`、required shell、WSL2などのrequired requirementが `missing`、`invalid`、`setup_required`、`unsupported` の場合、Codex processは起動せず `toolchain_required` としてblocked runを保存し、Toolchain Setup Cardも同期します。
 

@@ -25,6 +25,8 @@ type CodexExecRequest struct {
 	Prompt                string
 	OutputLastMessagePath string
 	OutputSchemaPath      string
+	NetworkPolicy         platform.NetworkPolicy
+	SandboxMode           string
 }
 
 type CodexExecResult struct {
@@ -116,7 +118,7 @@ func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecReques
 		schemaPath = request.OutputSchemaPath
 	}
 
-	args := codexExecArgv(request.ProjectRoot, finalPath, schemaPath)
+	args := codexExecArgv(request.ProjectRoot, finalPath, schemaPath, normalizeRunNetworkPolicy(request.NetworkPolicy), request.SandboxMode)
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Dir = request.ProjectRoot
 	cmd.Stdin = strings.NewReader(request.Prompt)
@@ -146,23 +148,33 @@ func (LocalCodexExecutor) ExecCodex(ctx context.Context, request CodexExecReques
 	}, nil
 }
 
-func codexExecArgv(projectRoot string, finalPath string, schemaPath string) []string {
-	return []string{
+func codexExecArgv(projectRoot string, finalPath string, schemaPath string, policy platform.NetworkPolicy, sandboxMode string) []string {
+	networkAccess := "false"
+	if normalizeRunNetworkPolicy(policy).Mode == platform.NetworkModeReadOnly {
+		networkAccess = "true"
+	}
+	if strings.TrimSpace(sandboxMode) == "" {
+		sandboxMode = "workspace-write"
+	}
+	args := []string{
 		"exec",
 		"--json",
 		"--ephemeral",
 		"--ignore-user-config",
 		"--ignore-rules",
-		"--sandbox", "workspace-write",
+		"--sandbox", sandboxMode,
 		"--color", "never",
 		"-c", `approval_policy="never"`,
-		"-c", "sandbox_workspace_write.network_access=false",
-		"-c", fmt.Sprintf("sandbox_workspace_write.writable_roots=[%q]", projectRoot),
-		"--cd", projectRoot,
-		"-o", finalPath,
-		"--output-schema", schemaPath,
-		"-",
+		"-c", "sandbox_workspace_write.network_access=" + networkAccess,
 	}
+	if sandboxMode == "workspace-write" {
+		args = append(args,
+			"-c", fmt.Sprintf("sandbox_workspace_write.writable_roots=[%q]", projectRoot),
+			"--add-dir", projectRoot,
+		)
+	}
+	args = append(args, "--cd", projectRoot, "-o", finalPath, "--output-schema", schemaPath, "-")
+	return args
 }
 
 func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID string, executor CodexExecutor) (RealCodexRunResult, error) {
@@ -184,6 +196,7 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	if len(blockers) > 0 {
 		return db.recordRealCodexAdapterBlocked(ctx, projectID, taskID, env, classification, blockers)
 	}
+	runPolicy := db.activeRunProfileNetworkPolicy(ctx, projectID)
 	doctorReport := runRealCodexDoctor(ctx, env, toolchains.Options{IncludeCodex: true})
 	if err := db.SaveToolchainReport(ctx, projectID, doctorReport); err != nil {
 		return RealCodexRunResult{}, err
@@ -210,7 +223,8 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
-	execResult, err := executor.ExecCodex(ctx, CodexExecRequest{ProjectRoot: workspaceRoot, Prompt: prompt})
+	sandboxMode := codexSandboxMode(env)
+	execResult, err := executor.ExecCodex(ctx, CodexExecRequest{ProjectRoot: workspaceRoot, Prompt: prompt, NetworkPolicy: runPolicy, SandboxMode: sandboxMode})
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
@@ -227,10 +241,10 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	}
 	diff := commitResult.Diff
 	diffHash := sha256Hex([]byte(diff))
-	policyEvidence := classifyCodexPolicyEvidence(execResult.Stdout, diff)
+	policyEvidence := classifyCodexPolicyEvidence(execResult.Stdout, diff, runPolicy)
 	classification, blockers, runStatus, taskTo := classifyCodexOutcome(execResult, commitResult, policyEvidence)
 	runID := "RUN-" + stableShortHash(taskID+"|real-codex|"+time.Now().UTC().Format(time.RFC3339Nano))
-	if err := db.saveCodexRun(ctx, projectID, taskID, env, workspaceRoot, runID, attemptNo, baseCommit, headCommit, diffHash, diff, prompt, execResult, runStatus, classification, blockers, policyEvidence); err != nil {
+	if err := db.saveCodexRun(ctx, projectID, taskID, env, workspaceRoot, runID, attemptNo, baseCommit, headCommit, diffHash, diff, prompt, execResult, runStatus, classification, blockers, policyEvidence, runPolicy, sandboxMode); err != nil {
 		return RealCodexRunResult{}, err
 	}
 	if taskTo == "needs_decision" {
@@ -270,6 +284,7 @@ func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID
 			classification = "toolchain_required"
 		}
 	}
+	runPolicy := db.activeRunProfileNetworkPolicy(ctx, projectID)
 	return RealCodexPreviewResult{
 		TaskID:         taskID,
 		TaskStatus:     status,
@@ -277,11 +292,11 @@ func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID
 		ProjectRoot:    env.ProjectRoot,
 		CodexAdapter:   string(env.CodexAdapter),
 		SandboxProfile: string(env.SandboxProfile),
-		NetworkAccess:  false,
+		NetworkAccess:  normalizeRunNetworkPolicy(runPolicy).Mode == platform.NetworkModeReadOnly,
 		ApprovalPolicy: "never",
 		Classification: classification,
 		Blockers:       blockers,
-		Argv:           codexExecArgv(env.ProjectRoot, "<final-message-path>", "<output-schema-path>"),
+		Argv:           codexExecArgv(env.ProjectRoot, "<final-message-path>", "<output-schema-path>", runPolicy, codexSandboxMode(env)),
 	}, nil
 }
 
@@ -312,7 +327,7 @@ func (db *DB) CodexRuntimeReadiness(ctx context.Context, projectID string) (Code
 			Blockers:             blockers,
 		}
 		if item.CurrentRuntimeUsable {
-			item.Argv = codexExecArgv(env.ProjectRoot, "<final-message-path>", "<output-schema-path>")
+			item.Argv = codexExecArgv(env.ProjectRoot, "<final-message-path>", "<output-schema-path>", platform.DefaultNetworkPolicy(), codexSandboxMode(env))
 		}
 		report.Items = append(report.Items, item)
 	}
@@ -460,6 +475,13 @@ func expectedCodexHostRuntime(env platform.ExecutionEnvironment) string {
 	}
 }
 
+func codexSandboxMode(env platform.ExecutionEnvironment) string {
+	if env.OSFamily == platform.OSFamilyWindows && env.SandboxProfile == platform.SandboxWindowsNative {
+		return "danger-full-access"
+	}
+	return "workspace-write"
+}
+
 func realCodexToolchainBlockers(report toolchains.Report) []string {
 	var blockers []string
 	for _, req := range report.Requirements {
@@ -512,7 +534,8 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 		StartedAt:    now,
 		CompletedAt:  now,
 	}
-	if err := db.saveCodexRun(ctx, projectID, taskID, env, env.ProjectRoot, runID, attemptNo, baseCommit, headCommit, sha256Hex(nil), "", prompt, execResult, "blocked", classification, blockers, codexPolicyEvidence{NetworkMode: "read_only"}); err != nil {
+	runPolicy := db.activeRunProfileNetworkPolicy(ctx, projectID)
+	if err := db.saveCodexRun(ctx, projectID, taskID, env, env.ProjectRoot, runID, attemptNo, baseCommit, headCommit, sha256Hex(nil), "", prompt, execResult, "blocked", classification, blockers, codexPolicyEvidence{NetworkMode: string(normalizeRunNetworkPolicy(runPolicy).Mode)}, runPolicy, codexSandboxMode(env)); err != nil {
 		return RealCodexRunResult{}, err
 	}
 	if err := db.openCodexBlockedDecision(ctx, projectID, taskID, runID, classification, blockers); err != nil {
@@ -576,7 +599,7 @@ func buildRealCodexPrompt(taskID string, trustedArtifacts []TrustedArtifactConte
 	lines = append(lines,
 		"",
 		"Do not request interactive approvals.",
-		"Network policy: read-only documentation lookup is allowed only when the run profile permits it; dependency installation, authenticated APIs, secret-bearing requests, deployment, and destructive operations require stopping and reporting a blocker.",
+		"Network policy: read-only documentation lookup is allowed by default; dependency installation, authenticated APIs, secret-bearing requests, deployment, and destructive operations require stopping and reporting a blocker.",
 		"Do not send secrets to any network service.",
 		"Do not install dependencies unless explicitly approved.",
 		"Stop if dependency installation, outside-workspace writes, destructive git commands, deployment, or permission escalation are required.",
@@ -683,8 +706,9 @@ func classifyCodexOutcome(result CodexExecResult, commit codexCommitResult, poli
 	return "succeeded", nil, "succeeded", "verifying"
 }
 
-func classifyCodexPolicyEvidence(stdout string, diff string) codexPolicyEvidence {
-	evidence := codexPolicyEvidence{NetworkMode: "read_only", SecretsExposed: false}
+func classifyCodexPolicyEvidence(stdout string, diff string, policy platform.NetworkPolicy) codexPolicyEvidence {
+	normalized := normalizeRunNetworkPolicy(policy)
+	evidence := codexPolicyEvidence{NetworkMode: string(normalized.Mode), SecretsExposed: false}
 	domains := map[string]struct{}{}
 	for _, command := range codexExecutedCommands(stdout) {
 		evidence.Commands = append(evidence.Commands, command)
@@ -692,30 +716,50 @@ func classifyCodexPolicyEvidence(stdout string, diff string) codexPolicyEvidence
 		switch {
 		case strings.Contains(lower, "pnpm add") || strings.Contains(lower, "npm install") || strings.Contains(lower, "npm i ") || strings.Contains(lower, "go get") || strings.Contains(lower, "pip install"):
 			evidence.DependencyChanges = true
-			evidence.PolicyViolations = append(evidence.PolicyViolations, "dependency installation requires approval: "+command)
+			if normalized.DependencyInstall == platform.DependencyInstallApprovalRequired || normalized.DependencyInstall == platform.DependencyInstallBlocked {
+				evidence.PolicyViolations = append(evidence.PolicyViolations, "dependency installation requires approval: "+command)
+			}
 		case strings.Contains(lower, "terraform apply") || strings.Contains(lower, "docker push") || strings.Contains(lower, " gh repo delete") || strings.Contains(lower, "deploy"):
 			evidence.PolicyViolations = append(evidence.PolicyViolations, "dangerous command requires manual execution: "+command)
 		}
 		if strings.Contains(lower, "curl ") || strings.Contains(lower, "wget ") || strings.Contains(lower, "npm view") || strings.Contains(lower, "git ls-remote") {
 			evidence.NetworkUsed = true
+			if normalized.Mode == platform.NetworkModeOff {
+				evidence.PolicyViolations = append(evidence.PolicyViolations, "network use is disabled for this run profile: "+command)
+			}
 			for _, domain := range domainsFromCommand(command) {
 				domains[domain] = struct{}{}
 			}
 		}
 		if strings.Contains(lower, "$openai_api_key") || strings.Contains(lower, "%openai_api_key%") || strings.Contains(lower, "authorization: bearer") {
 			evidence.SecretsExposed = true
-			evidence.PolicyViolations = append(evidence.PolicyViolations, "possible secret-bearing network command: "+command)
+			if !normalized.AllowSecrets {
+				evidence.PolicyViolations = append(evidence.PolicyViolations, "possible secret-bearing network command: "+command)
+			}
 		}
 	}
 	if diffTouchesDependencyFiles(diff) {
 		evidence.DependencyChanges = true
-		evidence.PolicyViolations = append(evidence.PolicyViolations, "dependency file changed without dependency approval")
+		if normalized.DependencyInstall == platform.DependencyInstallApprovalRequired || normalized.DependencyInstall == platform.DependencyInstallBlocked {
+			evidence.PolicyViolations = append(evidence.PolicyViolations, "dependency file changed without dependency approval")
+		}
 	}
 	for domain := range domains {
 		evidence.Domains = append(evidence.Domains, domain)
 	}
 	sort.Strings(evidence.Domains)
 	return evidence
+}
+
+func normalizeRunNetworkPolicy(policy platform.NetworkPolicy) platform.NetworkPolicy {
+	defaultPolicy := platform.DefaultNetworkPolicy()
+	if policy.Mode == "" {
+		policy.Mode = defaultPolicy.Mode
+	}
+	if policy.DependencyInstall == "" {
+		policy.DependencyInstall = defaultPolicy.DependencyInstall
+	}
+	return policy
 }
 
 func codexExecutedCommands(stdout string) []string {
@@ -850,7 +894,7 @@ func secretScanBlockers(root string, files []string) []string {
 	return blockers
 }
 
-func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, workspaceRoot string, runID string, attemptNo int, baseCommit string, headCommit string, diffHash string, diff string, prompt string, execResult CodexExecResult, runStatus string, classification string, blockers []string, policyEvidence codexPolicyEvidence) error {
+func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, workspaceRoot string, runID string, attemptNo int, baseCommit string, headCommit string, diffHash string, diff string, prompt string, execResult CodexExecResult, runStatus string, classification string, blockers []string, policyEvidence codexPolicyEvidence, runPolicy platform.NetworkPolicy, sandboxMode string) error {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -880,8 +924,8 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 		EnvironmentID: env.ID,
 		Runner:        "direct",
 		WorkingDir:    workspaceRoot,
-		Argv:          codexExecArgv(workspaceRoot, "<final-message-path>", "<output-schema-path>"),
-		NetworkPolicy: runners.NetworkOff,
+		Argv:          codexExecArgv(workspaceRoot, "<final-message-path>", "<output-schema-path>", runPolicy, sandboxMode),
+		NetworkPolicy: commandNetworkPolicyFromRunProfile(runPolicy),
 	}
 	commandStatus := runners.CommandSucceeded
 	if execResult.ExitCode != 0 {
@@ -917,19 +961,21 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 	}
 	artifacts = append(artifacts, RunArtifactInput{ProjectID: projectID, RunID: runID, ArtifactType: "summary", ArtifactKey: "network-evidence.json", Content: networkEvidence})
 	summary, err := json.MarshalIndent(map[string]any{
-		"task_id":           taskID,
-		"run_id":            runID,
-		"status":            runStatus,
-		"classification":    classification,
-		"blockers":          blockers,
-		"exit_code":         execResult.ExitCode,
-		"environment_id":    env.ID,
-		"project_root":      env.ProjectRoot,
-		"worktree_root":     workspaceRoot,
-		"codex_adapter":     env.CodexAdapter,
-		"sandbox_profile":   env.SandboxProfile,
-		"codex_home_source": codexHomeSourceForEnvironment(env, os.LookupEnv),
-		"network_evidence":  policyEvidence,
+		"task_id":                    taskID,
+		"run_id":                     runID,
+		"status":                     runStatus,
+		"classification":             classification,
+		"blockers":                   blockers,
+		"exit_code":                  execResult.ExitCode,
+		"environment_id":             env.ID,
+		"project_root":               env.ProjectRoot,
+		"worktree_root":              workspaceRoot,
+		"codex_adapter":              env.CodexAdapter,
+		"codex_sandbox_mode":         sandboxMode,
+		"sandbox_profile":            env.SandboxProfile,
+		"codex_home_source":          codexHomeSourceForEnvironment(env, os.LookupEnv),
+		"run_profile_network_policy": normalizeRunNetworkPolicy(runPolicy),
+		"network_evidence":           policyEvidence,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -954,6 +1000,15 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 	}
 	committed = true
 	return nil
+}
+
+func commandNetworkPolicyFromRunProfile(policy platform.NetworkPolicy) runners.NetworkPolicy {
+	switch normalizeRunNetworkPolicy(policy).Mode {
+	case platform.NetworkModeReadOnly:
+		return runners.NetworkAllowlisted
+	default:
+		return runners.NetworkOff
+	}
 }
 
 func codexHomeSourceForEnvironment(env platform.ExecutionEnvironment, lookupEnv func(string) (string, bool)) string {

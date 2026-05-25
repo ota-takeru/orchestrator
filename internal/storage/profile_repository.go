@@ -11,16 +11,17 @@ import (
 )
 
 type RunProfileRecord struct {
-	ID                               string                `json:"id"`
-	Name                             string                `json:"name"`
-	Mode                             platform.PlatformMode `json:"mode"`
-	Status                           string                `json:"status"`
-	PrimaryEnvironmentID             string                `json:"primary_environment_id"`
-	ImplementationEnvironmentID      string                `json:"implementation_environment_id"`
-	GitEnvironmentID                 string                `json:"git_environment_id"`
-	MergeEnvironmentID               string                `json:"merge_environment_id"`
-	RequiredVerificationEnvironments []string              `json:"required_verification_environment_ids"`
-	OptionalVerificationEnvironments []string              `json:"optional_verification_environment_ids"`
+	ID                               string                 `json:"id"`
+	Name                             string                 `json:"name"`
+	Mode                             platform.PlatformMode  `json:"mode"`
+	Status                           string                 `json:"status"`
+	PrimaryEnvironmentID             string                 `json:"primary_environment_id"`
+	ImplementationEnvironmentID      string                 `json:"implementation_environment_id"`
+	GitEnvironmentID                 string                 `json:"git_environment_id"`
+	MergeEnvironmentID               string                 `json:"merge_environment_id"`
+	RequiredVerificationEnvironments []string               `json:"required_verification_environment_ids"`
+	OptionalVerificationEnvironments []string               `json:"optional_verification_environment_ids"`
+	NetworkPolicy                    platform.NetworkPolicy `json:"network_policy"`
 }
 
 func (db *DB) ConfigureFakeRunProfile(ctx context.Context, projectID string, mode platform.PlatformMode, projectRoot string) (RunProfileRecord, error) {
@@ -68,6 +69,7 @@ func (db *DB) ConfigureFakeRunProfile(ctx context.Context, projectID string, mod
 			"optional": profile.OptionalVerificationEnvironments,
 		},
 		"artifact_write": "core",
+		"network_policy": profile.NetworkPolicy,
 	})
 	if err != nil {
 		return RunProfileRecord{}, err
@@ -116,7 +118,8 @@ func (db *DB) ListRunProfiles(ctx context.Context, projectID string) ([]RunProfi
 SELECT id, name, mode, status, primary_environment_id, implementation_environment_id,
        git_environment_id, merge_environment_id,
        required_verification_environment_ids_json,
-       optional_verification_environment_ids_json
+       optional_verification_environment_ids_json,
+       canonical_operations_json
 FROM project_run_profiles
 WHERE project_id = ?
 ORDER BY name`, projectID)
@@ -127,11 +130,11 @@ ORDER BY name`, projectID)
 	var profiles []RunProfileRecord
 	for rows.Next() {
 		var profile RunProfileRecord
-		var requiredJSON, optionalJSON string
+		var requiredJSON, optionalJSON, opsJSON string
 		if err := rows.Scan(&profile.ID, &profile.Name, &profile.Mode, &profile.Status,
 			&profile.PrimaryEnvironmentID, &profile.ImplementationEnvironmentID,
 			&profile.GitEnvironmentID, &profile.MergeEnvironmentID,
-			&requiredJSON, &optionalJSON); err != nil {
+			&requiredJSON, &optionalJSON, &opsJSON); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(requiredJSON), &profile.RequiredVerificationEnvironments); err != nil {
@@ -140,9 +143,44 @@ ORDER BY name`, projectID)
 		if err := json.Unmarshal([]byte(optionalJSON), &profile.OptionalVerificationEnvironments); err != nil {
 			return nil, err
 		}
+		profile.NetworkPolicy = networkPolicyFromCanonicalOperations(opsJSON)
 		profiles = append(profiles, profile)
 	}
 	return profiles, rows.Err()
+}
+
+func (db *DB) activeRunProfileNetworkPolicy(ctx context.Context, projectID string) platform.NetworkPolicy {
+	var raw string
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT canonical_operations_json
+FROM project_run_profiles
+WHERE project_id = ? AND status = 'active'
+ORDER BY updated_at DESC
+LIMIT 1`, projectID).Scan(&raw); err != nil {
+		return platform.DefaultNetworkPolicy()
+	}
+	return networkPolicyFromCanonicalOperations(raw)
+}
+
+func networkPolicyFromCanonicalOperations(raw string) platform.NetworkPolicy {
+	policy := platform.DefaultNetworkPolicy()
+	if strings.TrimSpace(raw) == "" {
+		return policy
+	}
+	var ops struct {
+		NetworkPolicy platform.NetworkPolicy `json:"network_policy"`
+	}
+	if err := json.Unmarshal([]byte(raw), &ops); err != nil {
+		return policy
+	}
+	if ops.NetworkPolicy.Mode != "" {
+		policy.Mode = ops.NetworkPolicy.Mode
+	}
+	if ops.NetworkPolicy.DependencyInstall != "" {
+		policy.DependencyInstall = ops.NetworkPolicy.DependencyInstall
+	}
+	policy.AllowSecrets = ops.NetworkPolicy.AllowSecrets
+	return policy
 }
 
 func fakeProfileDefinition(projectID string, mode platform.PlatformMode, projectRoot string) (RunProfileRecord, []platform.ExecutionEnvironment, error) {
@@ -180,6 +218,7 @@ func fakeProfile(projectID string, name string, mode platform.PlatformMode, prim
 		MergeEnvironmentID:               primaryEnvID,
 		RequiredVerificationEnvironments: required,
 		OptionalVerificationEnvironments: optional,
+		NetworkPolicy:                    platform.DefaultNetworkPolicy(),
 	}
 }
 

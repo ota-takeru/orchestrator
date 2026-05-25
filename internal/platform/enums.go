@@ -72,6 +72,20 @@ const (
 	PlatformModeHybrid            PlatformMode = "hybrid"
 )
 
+type NetworkMode string
+
+const (
+	NetworkModeOff      NetworkMode = "off"
+	NetworkModeReadOnly NetworkMode = "read_only"
+)
+
+type DependencyInstallPolicy string
+
+const (
+	DependencyInstallBlocked          DependencyInstallPolicy = "blocked"
+	DependencyInstallApprovalRequired DependencyInstallPolicy = "approval_required"
+)
+
 type MappingMode string
 
 const (
@@ -95,12 +109,27 @@ type ExecutionEnvironment struct {
 }
 
 type RunProfile struct {
-	Mode                             PlatformMode `json:"mode"`
-	PrimaryEnvironmentID             string       `json:"primary_environment_id"`
-	ImplementationEnvironmentID      string       `json:"implementation_environment_id"`
-	MergeEnvironmentID               string       `json:"merge_environment_id"`
-	RequiredVerificationEnvironments []string     `json:"required_verification_environment_ids"`
-	OptionalVerificationEnvironments []string     `json:"optional_verification_environment_ids"`
+	Mode                             PlatformMode  `json:"mode"`
+	PrimaryEnvironmentID             string        `json:"primary_environment_id"`
+	ImplementationEnvironmentID      string        `json:"implementation_environment_id"`
+	MergeEnvironmentID               string        `json:"merge_environment_id"`
+	RequiredVerificationEnvironments []string      `json:"required_verification_environment_ids"`
+	OptionalVerificationEnvironments []string      `json:"optional_verification_environment_ids"`
+	NetworkPolicy                    NetworkPolicy `json:"network_policy"`
+}
+
+type NetworkPolicy struct {
+	Mode              NetworkMode             `json:"mode"`
+	AllowSecrets      bool                    `json:"allow_secrets"`
+	DependencyInstall DependencyInstallPolicy `json:"dependency_install"`
+}
+
+func DefaultNetworkPolicy() NetworkPolicy {
+	return NetworkPolicy{
+		Mode:              NetworkModeReadOnly,
+		AllowSecrets:      false,
+		DependencyInstall: DependencyInstallApprovalRequired,
+	}
 }
 
 func ValidOSFamily(v OSFamily) bool {

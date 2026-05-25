@@ -107,7 +107,12 @@ func requiresLocalToken(r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodOptions {
 		return false
 	}
-	return r.URL.Path == "/api/env/bindings" || strings.HasSuffix(r.URL.Path, "/env/bindings") || strings.Contains(r.URL.Path, "/approve") || strings.Contains(r.URL.Path, "/merge")
+	return r.URL.Path == "/api/env/bindings" ||
+		strings.HasSuffix(r.URL.Path, "/env/bindings") ||
+		strings.Contains(r.URL.Path, "/approve") ||
+		strings.Contains(r.URL.Path, "/merge") ||
+		strings.Contains(r.URL.Path, "/review/") ||
+		strings.HasSuffix(r.URL.Path, "/verify")
 }
 
 func requiresLocalNonce(r *http.Request) bool {
@@ -143,20 +148,68 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) != 4 || parts[0] != "api" || parts[1] != "tasks" || parts[3] != "artifacts" {
+	if len(parts) < 4 || parts[0] != "api" || parts[1] != "tasks" || strings.TrimSpace(parts[2]) == "" {
 		writeAPIError(w, http.StatusNotFound, "not_found", "unknown task route")
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+	taskID := parts[2]
+	switch {
+	case len(parts) == 4 && parts[3] == "artifacts":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		artifacts, err := s.db.ListTaskRunArtifacts(r.Context(), s.projectID, taskID, true)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "task_artifacts_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
+	case len(parts) == 4 && parts[3] == "verify":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		result, err := s.db.VerifyTask(r.Context(), s.projectID, taskID, storage.VerifyTaskInput{Adapter: "local"})
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "task_verify_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, result)
+	case len(parts) == 5 && parts[3] == "review" && parts[4] == "approve":
+		s.handleTaskApproval(w, r, taskID, storage.ApprovalFinalReview, false)
+	case len(parts) == 5 && parts[3] == "review" && parts[4] == "reject":
+		s.handleTaskApproval(w, r, taskID, storage.ApprovalFinalReview, true)
+	case len(parts) == 5 && parts[3] == "merge" && parts[4] == "approve":
+		s.handleTaskApproval(w, r, taskID, storage.ApprovalMerge, false)
+	default:
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown task route")
+	}
+}
+
+func (s *Server) handleTaskApproval(w http.ResponseWriter, r *http.Request, taskID string, approvalType storage.ApprovalType, reject bool) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
 		return
 	}
-	artifacts, err := s.db.ListTaskRunArtifacts(r.Context(), s.projectID, parts[2], true)
+	notes, ok := decodeNotesBody(w, r)
+	if !ok {
+		return
+	}
+	var (
+		result storage.ApprovalRecord
+		err    error
+	)
+	if reject {
+		result, err = s.db.RejectTaskFinalReview(r.Context(), storage.ApprovalInput{ProjectID: s.projectID, TaskID: taskID, Notes: notes})
+	} else {
+		result, err = s.db.ApproveTaskEvidence(r.Context(), storage.ApprovalInput{ProjectID: s.projectID, TaskID: taskID, ApprovalType: approvalType, Notes: notes})
+	}
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "task_artifacts_failed", err.Error())
+		writeAPIError(w, http.StatusBadRequest, "task_approval_failed", err.Error())
 		return
 	}
-	writeAPIJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
+	writeAPIJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +286,62 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, err := authority.TaskArtifacts(r.Context(), project, parts[4])
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "tasks" && parts[4] != "" && parts[5] == "verify":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		body, err := authority.VerifyTask(r.Context(), project, parts[4])
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 7 && action == "tasks" && parts[4] != "" && parts[5] == "review" && parts[6] == "approve":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		notes, ok := decodeNotesBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.ApproveTaskReview(r.Context(), project, parts[4], notes)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 7 && action == "tasks" && parts[4] != "" && parts[5] == "review" && parts[6] == "reject":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		notes, ok := decodeNotesBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.RejectTaskReview(r.Context(), project, parts[4], notes)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 7 && action == "tasks" && parts[4] != "" && parts[5] == "merge" && parts[6] == "approve":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		notes, ok := decodeNotesBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.ApproveTaskMerge(r.Context(), project, parts[4], notes)
 		if err != nil {
 			writeProjectHubError(w, err)
 			return
@@ -686,6 +795,20 @@ func decodeTextBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return input.Text, true
+}
+
+func decodeNotesBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if r.Body == nil {
+		return "", true
+	}
+	var input struct {
+		Notes string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return "", false
+	}
+	return input.Notes, true
 }
 
 func decodeEnvBindingBody(w http.ResponseWriter, r *http.Request) (storage.EnvBindingInput, bool) {

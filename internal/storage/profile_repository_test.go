@@ -70,4 +70,7 @@ func TestListRunProfiles(t *testing.T) {
 	if len(profiles) != 1 || profiles[0].Mode != platform.PlatformModeWSLPrimary {
 		t.Fatalf("unexpected profiles: %#v", profiles)
 	}
+	if profiles[0].NetworkPolicy.Mode != platform.NetworkModeReadOnly || profiles[0].NetworkPolicy.DependencyInstall != platform.DependencyInstallApprovalRequired || profiles[0].NetworkPolicy.AllowSecrets {
+		t.Fatalf("network policy = %#v", profiles[0].NetworkPolicy)
+	}
 }

@@ -446,6 +446,20 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.artifact-actions span {
+  flex-basis: 100%;
+  color: #52525b;
+  font-size: 12px;
+}
+
 .error-banner {
   display: flex;
   align-items: flex-start;

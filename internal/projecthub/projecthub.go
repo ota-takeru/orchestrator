@@ -27,6 +27,10 @@ type ProjectAuthority interface {
 	SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error)
 	TaskArtifacts(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error)
 	SetupStatus(ctx context.Context, project registry.RegisteredProject) (any, error)
+	VerifyTask(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error)
+	ApproveTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
+	RejectTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
+	ApproveTaskMerge(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
 }
 
 type Hub struct {
@@ -200,6 +204,42 @@ func (WindowsLocalAuthority) SetupStatus(ctx context.Context, project registry.R
 	}
 	defer db.Close()
 	return db.LoadSetupStatus(ctx, projectID)
+}
+
+func (WindowsLocalAuthority) VerifyTask(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.VerifyTask(ctx, projectID, taskID, storage.VerifyTaskInput{Adapter: "local"})
+}
+
+func (WindowsLocalAuthority) ApproveTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.ApproveTaskEvidence(ctx, storage.ApprovalInput{ProjectID: projectID, TaskID: taskID, ApprovalType: storage.ApprovalFinalReview, Notes: notes})
+}
+
+func (WindowsLocalAuthority) RejectTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.RejectTaskFinalReview(ctx, storage.ApprovalInput{ProjectID: projectID, TaskID: taskID, Notes: notes})
+}
+
+func (WindowsLocalAuthority) ApproveTaskMerge(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.ApproveTaskEvidence(ctx, storage.ApprovalInput{ProjectID: projectID, TaskID: taskID, ApprovalType: storage.ApprovalMerge, Notes: notes})
 }
 
 func openProjectDB(ctx context.Context, project registry.RegisteredProject) (*storage.DB, string, error) {
@@ -415,6 +455,50 @@ func (a WslAuthority) TaskArtifacts(ctx context.Context, project registry.Regist
 func (a WslAuthority) SetupStatus(ctx context.Context, project registry.RegisteredProject) (any, error) {
 	var body map[string]any
 	if err := a.runJSON(ctx, project, &body, "ui", "setup"); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) VerifyTask(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error) {
+	var body map[string]any
+	if err := a.runJSONWithTrailing(ctx, project, &body, []string{"verify"}, taskID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) ApproveTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error) {
+	var body map[string]any
+	args := []string{"review", "approve"}
+	if notes != "" {
+		args = append(args, "--notes", notes)
+	}
+	if err := a.runJSONWithTrailing(ctx, project, &body, args, taskID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) RejectTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error) {
+	var body map[string]any
+	args := []string{"review", "reject"}
+	if notes != "" {
+		args = append(args, "--notes", notes)
+	}
+	if err := a.runJSONWithTrailing(ctx, project, &body, args, taskID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) ApproveTaskMerge(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error) {
+	var body map[string]any
+	args := []string{"merge", "approve"}
+	if notes != "" {
+		args = append(args, "--notes", notes)
+	}
+	if err := a.runJSONWithTrailing(ctx, project, &body, args, taskID); err != nil {
 		return nil, err
 	}
 	return body, nil

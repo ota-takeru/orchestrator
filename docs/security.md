@@ -4,7 +4,7 @@
 
 - デフォルトはread-only
 - 実装時だけworkspace-write
-- `danger-full-access` はDockerやCI runnerなど外部隔離済み環境でのみ使う
+- `danger-full-access` はDockerやCI runnerなど外部隔離済み環境、またはWindows native Codex 0.133.0でworkspace-writeが実機不成立な場合の隔離task worktree fallbackでのみ使う
 - ホームディレクトリ全体を読ませない
 - `.env`、`.env.local`、`.env.example` 以外の `.env.*` はCodexからdeny-read
 - UIから人間が入力した環境変数はOrchestrator APIだけが反映する
@@ -38,7 +38,8 @@ codex exec \
   --color never \
   --output-schema /absolute/path/to/.devagent/schemas/run-result.schema.json \
   -c 'approval_policy="never"' \
-  -c 'sandbox_workspace_write.network_access=false' \
+  -c 'sandbox_workspace_write.network_access=true' \
+  --add-dir /absolute/path/to/.devagent-worktrees/TASK-003 \
   -C /absolute/path/to/.devagent-worktrees/TASK-003 \
   -
 ```
@@ -63,7 +64,7 @@ codex exec \
 
 - `.env` 本体の読み取りまたは変更の試行
 - 秘密情報がdiff、prompt、summary、ログへ混入した疑い
-- `danger-full-access` の通常run利用
+- 外部隔離またはWindows native task worktree fallbackを伴わない `danger-full-access` の通常run利用
 - `curl | sh` など未検証スクリプト実行
 - protected pathへのアクセス試行
 - `.devagent/schemas/*` の変更
@@ -227,13 +228,15 @@ dependency_install_lane:
 
 ## Network Lanes
 
-初期状態ではimplementation laneのnetworkはoffです。調査や依存追加は別laneとして扱います。
+初期状態ではimplementation laneのnetworkはread-onlyです。ドキュメント参照などの読み取りは許可しますが、依存追加、secret-bearing request、認証API、deploy、破壊的操作は別laneまたはHuman Inbox承認へ分離します。
 
 ```yaml
 lanes:
   implementation:
-    network: false
+    network: read_only
     write: workspace
+    allow_secrets: false
+    dependency_install: approval_required
 
   research:
     network: allowlisted
@@ -256,7 +259,7 @@ lanes:
     requires: toolchain_setup_card
 ```
 
-implementation laneでは `sandbox_workspace_write.network_access=false` をrunごとに明示します。ネットワークが必要な調査、依存取得、外部API確認はimplementation runへ混ぜず、Human Inboxまたはpolicyで承認された別laneへ分離します。
+implementation laneでは `sandbox_workspace_write.network_access=true` をrunごとに明示し、Codex promptとrun profile evidenceにもread-only policyを残します。依存取得、外部API確認、secretを伴う通信はimplementation runへ混ぜず、Human Inboxまたはpolicyで承認された別laneへ分離します。run後はstdout JSONLとdiffからnetwork evidence、domain、dependency file変更、dangerous command疑いをartifactとして保存します。
 Windows toolchain setup lane、WSL toolchain setup laneはimplementation laneと分けます。install commandの自動実行は初期スコープではしません。
 
 ## Verification Gate

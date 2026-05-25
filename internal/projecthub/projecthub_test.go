@@ -118,6 +118,63 @@ func TestWslAuthorityEnvBindingUsesStdin(t *testing.T) {
 	}
 }
 
+func TestWslAuthorityBuildsTaskActionCommands(t *testing.T) {
+	project := registry.RegisteredProject{
+		AuthorityRuntime: registry.AuthorityWSL,
+		WSLDistro:        "Ubuntu",
+		WSLProjectRoot:   "/home/user/app",
+	}
+	tests := []struct {
+		name string
+		call func(WslAuthority) error
+		want []string
+	}{
+		{
+			name: "verify",
+			call: func(authority WslAuthority) error {
+				_, err := authority.VerifyTask(context.Background(), project, "TASK-001")
+				return err
+			},
+			want: []string{"-d", "Ubuntu", "--", "devos", "verify", "--project-root", "/home/user/app", "--json", "TASK-001"},
+		},
+		{
+			name: "review approve",
+			call: func(authority WslAuthority) error {
+				_, err := authority.ApproveTaskReview(context.Background(), project, "TASK-001", "ok")
+				return err
+			},
+			want: []string{"-d", "Ubuntu", "--", "devos", "review", "approve", "--notes", "ok", "--project-root", "/home/user/app", "--json", "TASK-001"},
+		},
+		{
+			name: "review reject",
+			call: func(authority WslAuthority) error {
+				_, err := authority.RejectTaskReview(context.Background(), project, "TASK-001", "needs changes")
+				return err
+			},
+			want: []string{"-d", "Ubuntu", "--", "devos", "review", "reject", "--notes", "needs changes", "--project-root", "/home/user/app", "--json", "TASK-001"},
+		},
+		{
+			name: "merge approve",
+			call: func(authority WslAuthority) error {
+				_, err := authority.ApproveTaskMerge(context.Background(), project, "TASK-001", "merge ok")
+				return err
+			},
+			want: []string{"-d", "Ubuntu", "--", "devos", "merge", "approve", "--notes", "merge ok", "--project-root", "/home/user/app", "--json", "TASK-001"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &capturingExecutor{stdout: []byte(`{"ok":true}`)}
+			if err := tt.call(NewWslAuthority(exec, time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(exec.args, "\x00") != strings.Join(tt.want, "\x00") {
+				t.Fatalf("args = %#v want %#v", exec.args, tt.want)
+			}
+		})
+	}
+}
+
 func TestWslAuthorityRejectsUNCProjectRoot(t *testing.T) {
 	authority := NewWslAuthority(&capturingExecutor{}, time.Second)
 	_, err := authority.Snapshot(context.Background(), registry.RegisteredProject{
@@ -176,6 +233,18 @@ func (f fakeAuthority) TaskArtifacts(context.Context, registry.RegisteredProject
 	return map[string]any{"name": f.name}, nil
 }
 func (f fakeAuthority) SetupStatus(context.Context, registry.RegisteredProject) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
+func (f fakeAuthority) VerifyTask(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
+func (f fakeAuthority) ApproveTaskReview(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
+func (f fakeAuthority) RejectTaskReview(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
+func (f fakeAuthority) ApproveTaskMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
 

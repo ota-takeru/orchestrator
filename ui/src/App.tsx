@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, saveEnvBinding } from "./api";
+import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, runTaskAction, saveEnvBinding } from "./api";
 import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
@@ -32,6 +32,7 @@ function App() {
   const [envValue, setEnvValue] = useState("");
   const [selectedArtifactTaskID, setSelectedArtifactTaskID] = useState("");
   const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[]>([]);
+  const [taskActioning, setTaskActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
 
@@ -142,6 +143,22 @@ function App() {
     }
   };
 
+  const submitTaskAction = async (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => {
+    setTaskActioning(`${taskID}:${action}`);
+    setError("");
+    try {
+      await runTaskAction(taskID, action, selectedProjectID || undefined);
+      await refresh();
+      if (selectedArtifactTaskID === taskID) {
+        setTaskArtifacts(await loadTaskArtifacts(taskID, selectedProjectID || undefined));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Task action failed");
+    } finally {
+      setTaskActioning("");
+    }
+  };
+
   return (
     <main className="min-h-screen bg-zinc-50 text-zinc-950">
       <header className="border-b border-zinc-200 bg-white">
@@ -186,7 +203,13 @@ function App() {
             onSubmit={submitEnvBinding}
           />
           <SetupWizardPanel setup={data?.setupStatus} />
-          <ArtifactViewerPanel taskID={selectedArtifactTaskID} artifacts={taskArtifacts} />
+          <ArtifactViewerPanel
+            taskID={selectedArtifactTaskID}
+            task={data?.tasks.find((task) => task.id === selectedArtifactTaskID)}
+            artifacts={taskArtifacts}
+            actioning={taskActioning}
+            onAction={submitTaskAction}
+          />
           <ChangeRequestPanel requests={data?.changeRequests ?? []} text={changeText} setText={setChangeText} onSubmit={submitChangeRequest} />
           <DependencyRiskPanel risks={data?.dependencyRisks ?? []} />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
@@ -495,19 +518,64 @@ function SetupWizardPanel({ setup }: { setup?: DashboardData["setupStatus"] }) {
               </div>
             ))}
           </StackEmpty>
+          <StackEmpty empty={(setup.actions ?? []).length === 0} label="No setup actions">
+            {(setup.actions ?? []).map((action) => (
+              <div className="stack-row" key={action.id}>
+                <span>{action.label}</span>
+                <small>{action.enabled ? "ready" : action.reason}</small>
+                <code className="inline-command">{action.command}</code>
+              </div>
+            ))}
+          </StackEmpty>
         </div>
       )}
     </section>
   );
 }
 
-function ArtifactViewerPanel({ taskID, artifacts }: { taskID: string; artifacts: TaskArtifact[] }) {
+function ArtifactViewerPanel({
+  taskID,
+  task,
+  artifacts,
+  actioning,
+  onAction
+}: {
+  taskID: string;
+  task?: DashboardData["tasks"][number];
+  artifacts: TaskArtifact[];
+  actioning: string;
+  onAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
+}) {
   return (
     <section className="panel compact">
       <div className="panel-heading">
         <h2>Diff & Artifacts</h2>
         <FileCheck2 size={18} className="text-zinc-500" />
       </div>
+      {task ? (
+        <div className="artifact-actions">
+          <span>
+            {task.id} / {task.status}
+          </span>
+          <button className="secondary-button" type="button" onClick={() => onAction(task.id, "verify")} disabled={task.status !== "verifying" || actioning === `${task.id}:verify`}>
+            Re-run verify
+          </button>
+          <button className="secondary-button" type="button" onClick={() => onAction(task.id, "review-approve")} disabled={task.status !== "ready_for_human_review" || actioning === `${task.id}:review-approve`}>
+            Approve
+          </button>
+          <button className="secondary-button" type="button" onClick={() => onAction(task.id, "review-reject")} disabled={task.status !== "ready_for_human_review" || actioning === `${task.id}:review-reject`}>
+            Request changes
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onAction(task.id, "merge-approve")}
+            disabled={(task.status !== "ready_for_human_review" && task.status !== "approved_for_merge") || actioning === `${task.id}:merge-approve`}
+          >
+            Merge approve
+          </button>
+        </div>
+      ) : null}
       <StackEmpty empty={!taskID || artifacts.length === 0} label={taskID ? "No artifacts for selected task" : "Select a task"}>
         {artifacts.slice(0, 12).map((artifact) => (
           <div className="stack-row" key={artifact.id}>

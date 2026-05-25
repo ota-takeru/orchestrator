@@ -194,3 +194,15 @@ func (a apiFakeAuthority) TaskArtifacts(context.Context, registry.RegisteredProj
 func (a apiFakeAuthority) SetupStatus(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }
+func (a apiFakeAuthority) VerifyTask(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) ApproveTaskReview(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) RejectTaskReview(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) ApproveTaskMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}

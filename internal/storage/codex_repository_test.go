@@ -304,7 +304,7 @@ func TestCodexPromptStdinUsesPromptContentNotPath(t *testing.T) {
 	if !strings.Contains(executor.request.Prompt, "Task ID: TASK-001") {
 		t.Fatalf("executor did not receive prompt content: %q", executor.request.Prompt)
 	}
-	argv := codexExecArgv(projectRoot, "<final-message-path>", "<output-schema-path>")
+	argv := codexExecArgv(projectRoot, "<final-message-path>", "<output-schema-path>", platform.DefaultNetworkPolicy(), "workspace-write")
 	if len(argv) == 0 || argv[len(argv)-1] != "-" {
 		t.Fatalf("codex argv should read prompt from stdin: %#v", argv)
 	}
@@ -312,7 +312,7 @@ func TestCodexPromptStdinUsesPromptContentNotPath(t *testing.T) {
 	if strings.Contains(joinedArgv, "--ask-for-approval") {
 		t.Fatalf("codex argv uses removed approval flag: %#v", argv)
 	}
-	if !strings.Contains(joinedArgv, `approval_policy="never"`) || !strings.Contains(joinedArgv, "sandbox_workspace_write.network_access=false") || !strings.Contains(joinedArgv, "sandbox_workspace_write.writable_roots=") {
+	if !strings.Contains(joinedArgv, `approval_policy="never"`) || !strings.Contains(joinedArgv, "sandbox_workspace_write.network_access=true") || !strings.Contains(joinedArgv, "sandbox_workspace_write.writable_roots=") {
 		t.Fatalf("codex argv missing non-interactive config overrides: %#v", argv)
 	}
 	for _, arg := range argv {
@@ -342,7 +342,7 @@ func TestPreviewRealCodexTaskDoesNotMutateTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Classification != "ready" || result.NetworkAccess || result.ApprovalPolicy != "never" {
+	if result.Classification != "ready" || !result.NetworkAccess || result.ApprovalPolicy != "never" {
 		t.Fatalf("preview = %#v", result)
 	}
 	if len(result.Argv) == 0 || !containsString(result.Argv, "--ephemeral") || !containsString(result.Argv, "--ignore-user-config") {
@@ -700,6 +700,20 @@ func TestRunRealCodexTaskSupportsWindowsWhenRuntimeIsWindows(t *testing.T) {
 	}
 	if environmentID != "windows-main" {
 		t.Fatalf("implementation environment = %s", environmentID)
+	}
+}
+
+func TestWindowsNativeCodexUsesDangerFullAccessSandbox(t *testing.T) {
+	env := platform.ExecutionEnvironment{
+		OSFamily:       platform.OSFamilyWindows,
+		SandboxProfile: platform.SandboxWindowsNative,
+	}
+	if got := codexSandboxMode(env); got != "danger-full-access" {
+		t.Fatalf("sandbox mode = %s", got)
+	}
+	argv := codexExecArgv(`C:\dev\project`, "<final>", "<schema>", platform.DefaultNetworkPolicy(), codexSandboxMode(env))
+	if !containsString(argv, "danger-full-access") || containsString(argv, "--add-dir") {
+		t.Fatalf("windows argv = %#v", argv)
 	}
 }
 

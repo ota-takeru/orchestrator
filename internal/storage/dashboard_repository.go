@@ -21,7 +21,16 @@ type SetupStatus struct {
 	ProtectedPaths                 []string                     `json:"protected_paths"`
 	EnvironmentBindings            []EnvBindingRecord           `json:"environment_bindings"`
 	ToolchainSetupCards            []ToolchainSetupInstructions `json:"toolchain_setup_cards"`
+	Actions                        []SetupAction                `json:"actions"`
 	Blockers                       []string                     `json:"blockers,omitempty"`
+}
+
+type SetupAction struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Command string `json:"command"`
+	Enabled bool   `json:"enabled"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type ProjectDashboardData struct {
@@ -183,7 +192,52 @@ func (db *DB) LoadSetupStatus(ctx context.Context, projectID string) (SetupStatu
 		return SetupStatus{}, err
 	}
 	status.ToolchainSetupCards = cards
+	status.Actions = setupActions(root, status)
 	return status, nil
+}
+
+func setupActions(root string, status SetupStatus) []SetupAction {
+	quotedRoot := shellQuote(root)
+	return []SetupAction{
+		{
+			ID:      "doctor",
+			Label:   "Run doctor",
+			Command: "devos doctor --project-root " + quotedRoot + " --json",
+			Enabled: true,
+		},
+		{
+			ID:      "codex_readiness",
+			Label:   "Check Codex runtime",
+			Command: "devos platform codex-readiness --project-root " + quotedRoot + " --save --json",
+			Enabled: status.GitRepository,
+			Reason:  disabledReason(status.GitRepository, "git repository is required"),
+		},
+		{
+			ID:      "fake_workflow",
+			Label:   "Run fake workflow",
+			Command: "devos bootstrap --adapter fake --project-root " + quotedRoot + " --json \"Fake setup workflow\"",
+			Enabled: status.GitRepository && status.GitignoreEnvLocal,
+			Reason:  disabledReason(status.GitRepository && status.GitignoreEnvLocal, "git repo and .env.local ignore rule are required"),
+		},
+		{
+			ID:      "real_dry_run",
+			Label:   "Preview real Codex",
+			Command: "devos run --real-codex --dry-run --project-root " + quotedRoot + " --json TASK-ID",
+			Enabled: status.GitRepository && status.RequiredVerificationConfigured && len(status.ToolchainSetupCards) == 0,
+			Reason:  disabledReason(status.GitRepository && status.RequiredVerificationConfigured && len(status.ToolchainSetupCards) == 0, "git, required verification, and toolchains must be ready"),
+		},
+	}
+}
+
+func disabledReason(enabled bool, reason string) string {
+	if enabled {
+		return ""
+	}
+	return reason
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func (db *DB) ListTaskRunArtifacts(ctx context.Context, projectID string, taskID string, includeContent bool) ([]TaskRunArtifact, error) {

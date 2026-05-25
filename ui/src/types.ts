@@ -239,7 +239,16 @@ export type SetupStatus = {
   protected_paths: string[];
   environment_bindings: EnvBinding[];
   toolchain_setup_cards: ToolchainSetupCard[];
+  actions: SetupAction[];
   blockers?: string[];
+};
+
+export type SetupAction = {
+  id: string;
+  label: string;
+  command: string;
+  enabled: boolean;
+  reason?: string;
 };
 
 export type TaskArtifact = {

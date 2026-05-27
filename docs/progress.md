@@ -19,6 +19,7 @@
 
 2026-05-27:
 
+- Worker実行後のdashboard状態表示を改善しました。完了済みwork queue itemをactive queueとして数えないようにし、実装完了後はReady cardを `Ready for review` に切り替えて `Open artifacts` からDiff & Artifacts確認へ進める導線にしました。
 - Worker起動ボタンの反応が分かりにくい問題を改善しました。Ready to run cardに実行中status / spinnerを表示し、実行queueが空の場合はRun workerボタンをdisabledにします。worker実行結果が0件の場合は「ready execution workがなかった」ことをnoticeで明示し、Work And Planningでは最新worker runを上に表示するようにしました。
 - Materialize後のdashboard導線を改善しました。承認済みartifactからtaskをmaterializeした後は、Artifacts詳細を自動的にcompact summaryへ畳み、画面上部に `Ready to run` cardを表示して `Run Codex worker` / `Run fake worker` へ誘導します。materialize後の中央カラムはWork And Planning、Tasks、Artifacts summaryの順に並び、必要な場合だけ `View artifacts` からartifact本文確認へ戻れるようにしました。
 - Artifact review UIの修正依頼導線を整理しました。通常操作を `Approve latest` と `Request revision` に絞り、修正指示を開いた後に `Revise with Codex` を実行する形へ変更しました。旧 `Request changes` 相当は通常導線から外して `Mark as rejected` としてMoreメニューへ退避し、手動編集はartifact本文右上の鉛筆アイコンから開くようにしました。Codex改稿中は対象artifactカード全体にローディングoverlayを出し、本文previewをblurして処理中であることを明示します。

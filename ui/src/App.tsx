@@ -702,7 +702,7 @@ function SelectedProjectDashboard({
       {selectedProject ? <ProjectStatusPanel project={selectedProject} /> : null}
       {hasMaterializedTasks ? (
         <>
-          <ReadyToRunPanel tasks={data.tasks} queueItems={data.queueItems} actioning={workActioning} onStartWork={onStartWork} />
+          <ReadyToRunPanel tasks={data.tasks} queueItems={data.queueItems} actioning={workActioning} onStartWork={onStartWork} onOpenTaskArtifacts={onOpenTaskArtifacts} />
           <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} showActions={false} />
           <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
           {artifactsPanel}
@@ -855,12 +855,15 @@ function RequestQueuePanel({
   setFeatureText: (value: string) => void;
   onSubmitFeature: () => void;
 }) {
+  const activeQueueItems = activeWorkQueueItems(queueItems);
   return (
     <section className="panel">
       <div className="panel-heading">
         <div>
           <h2>Request Queue</h2>
-          <p>{requests.length} feature requests</p>
+          <p>
+            {requests.length} feature requests / {activeQueueItems.length} active work items
+          </p>
         </div>
         <ListChecks size={20} className="text-zinc-500" />
       </div>
@@ -881,8 +884,8 @@ function RequestQueuePanel({
             </div>
           ))}
         </StackEmpty>
-        <StackEmpty empty={queueItems.length === 0} label="No queued work">
-          {queueItems.slice(0, 6).map((item) => (
+        <StackEmpty empty={activeQueueItems.length === 0} label="No active queued work">
+          {activeQueueItems.slice(0, 6).map((item) => (
             <div className="stack-row" key={item.id}>
               <span>{item.item_type}</span>
               <small>
@@ -900,28 +903,36 @@ function ReadyToRunPanel({
   tasks,
   queueItems,
   actioning,
-  onStartWork
+  onStartWork,
+  onOpenTaskArtifacts
 }: {
   tasks: DashboardData["tasks"];
   queueItems: WorkQueueItem[];
   actioning: string;
   onStartWork: (adapter: "fake" | "real-codex") => void;
+  onOpenTaskArtifacts: (taskID: string) => void;
 }) {
   const implementationQueueCount = queueItems.filter((item) => item.item_type === "task_implementation" && item.status === "queued").length;
+  const reviewTask = tasks.find((task) => task.status === "ready_for_human_review");
+  const mergeTask = tasks.find((task) => task.status === "approved_for_merge" || task.status === "queued_for_merge");
   const taskLabel = tasks.length === 1 ? tasks[0]?.id : `${tasks.length} tasks`;
   const isRunning = actioning !== "";
   const canRun = implementationQueueCount > 0 && !isRunning;
+  const title = reviewTask ? "Ready for review" : mergeTask ? "Ready for merge" : "Ready to run";
+  const body = isRunning
+    ? "Worker is running. This can take a moment."
+    : reviewTask
+      ? `${reviewTask.id} finished implementation. Open artifacts, then approve or request changes.`
+      : mergeTask
+        ? `${mergeTask.id} passed review. Open artifacts to continue merge approval.`
+        : implementationQueueCount > 0
+          ? `${taskLabel || "Task"} materialized. ${implementationQueueCount} implementation item(s) are queued.`
+          : "No implementation work is currently queued. Check Tasks for the next review or approval step.";
   return (
     <section className={`ready-run-panel ${isRunning ? "is-busy" : ""}`} aria-busy={isRunning}>
       <div>
-        <h2>Ready to run</h2>
-        <p>
-          {isRunning
-            ? "Worker is running. This can take a moment."
-            : implementationQueueCount > 0
-              ? `${taskLabel || "Task"} materialized. ${implementationQueueCount} implementation item(s) are queued.`
-              : "No implementation work is currently queued. Check Tasks for the next review or approval step."}
-        </p>
+        <h2>{title}</h2>
+        <p>{body}</p>
       </div>
       {isRunning ? (
         <div className="ready-run-status" role="status" aria-live="polite">
@@ -930,12 +941,20 @@ function ReadyToRunPanel({
         </div>
       ) : null}
       <div className="ready-run-actions">
-        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("real-codex")} disabled={!canRun}>
-          {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
-        </button>
-        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={!canRun}>
-          {actioning === "fake" ? "Running fake" : "Run fake worker"}
-        </button>
+        {reviewTask || mergeTask ? (
+          <button className="secondary-button no-margin" type="button" onClick={() => onOpenTaskArtifacts((reviewTask ?? mergeTask)?.id ?? "")}>
+            Open artifacts
+          </button>
+        ) : (
+          <>
+            <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("real-codex")} disabled={!canRun}>
+              {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
+            </button>
+            <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={!canRun}>
+              {actioning === "fake" ? "Running fake" : "Run fake worker"}
+            </button>
+          </>
+        )}
       </div>
     </section>
   );
@@ -1417,6 +1436,7 @@ function CommandPanel({ command }: { command: string }) {
 }
 
 function ProjectActivityPanel({ project, data }: { project?: RegisteredProject | CurrentProject; data: DashboardData | null }) {
+  const activeQueueCount = data ? activeWorkQueueItems(data.queueItems).length : 0;
   return (
     <section className="panel compact">
       <div className="panel-heading">
@@ -1446,8 +1466,8 @@ function ProjectActivityPanel({ project, data }: { project?: RegisteredProject |
               <small>Tasks</small>
             </div>
             <div>
-              <span>{data?.queueItems.length ?? 0}</span>
-              <small>Queue</small>
+              <span>{activeQueueCount}</span>
+              <small>Active Queue</small>
             </div>
             <div>
               <span>{data?.workStatus.worker_runs.length ?? 0}</span>
@@ -1464,6 +1484,10 @@ function ProjectActivityPanel({ project, data }: { project?: RegisteredProject |
 
 function latestWorkerRuns(workerRuns: DashboardData["workStatus"]["worker_runs"]) {
   return [...workerRuns].sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+}
+
+function activeWorkQueueItems(items: WorkQueueItem[]) {
+  return items.filter((item) => item.status !== "completed" && item.status !== "cancelled" && item.status !== "failed");
 }
 
 function DecisionPanel({ decisions }: { decisions: DashboardData["decisions"] }) {

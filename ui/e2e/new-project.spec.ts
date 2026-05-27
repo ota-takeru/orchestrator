@@ -134,7 +134,9 @@ test("project setup actions execute from the UI after creation", async ({ page }
   await workResponse;
   await expect(page.getByText("Fake worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("TASK-001 / ready_for_human_review")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Run fake worker" })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Ready for review" })).toBeVisible();
+  await page.getByRole("button", { name: "Open artifacts" }).click();
+  await expect(page.getByRole("heading", { name: "Diff & Artifacts" })).toBeVisible();
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 

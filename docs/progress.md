@@ -26,6 +26,7 @@
 - Change Request承認後にChange Request由来のFeature Requestとplanning queue itemを作成し、通常のbounded planning laneへ合流できるようにしました。
 - Environment Input保存後、対応するenvironment requirement / Inbox itemを解決し、`needs_input` / `blocked_on_environment` taskをreadyへ戻してexecution queueへ再投入する復帰処理を追加しました。secret値は引き続きSQLite/API応答へ返しません。
 - Local APIとmulti-project authority bridgeに `/api/work/start` / `/api/projects/{id}/work/start` を追加し、UIのWork And Planning panelからfake worker / Codex workerを起動できるようにしました。WSL authorityでは `wsl.exe -d <distro> -- devos work start ... --json` 経由に閉じ込めています。
+- `real-codex` sequential workerが `task_repair` queue itemも処理できるようにし、repair runを `run_type='repair'` として保存した後、Orchestrator local verificationへ戻す経路を追加しました。repair後の検証targetは最新のsuccessful implementation / repair runのworktreeとcommitを参照します。
 - 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`、`git diff --check`。
 - 残る実機検証: この環境ではWindows native targetを直接実行できないため、real verification commandを持つWindows targetでの追加E2Eは継続確認として残ります。
 

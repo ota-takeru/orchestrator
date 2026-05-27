@@ -229,12 +229,15 @@ func (db *DB) ProcessExecutionQueueRealCodex(ctx context.Context, projectID stri
 		if err != nil {
 			return nil, err
 		}
-		if item.ItemType != "task_implementation" {
-			err := fmt.Errorf("real Codex worker does not support execution item type yet: %s", item.ItemType)
-			_ = db.markWorkQueueItemFailed(ctx, projectID, item.ID, err)
-			return nil, err
+		var run RealCodexRunResult
+		switch item.ItemType {
+		case "task_implementation":
+			run, err = db.RunRealCodexTask(ctx, projectID, item.ItemID, executor)
+		case "task_repair":
+			run, err = db.RunRealCodexRepairTask(ctx, projectID, item.ItemID, executor)
+		default:
+			err = fmt.Errorf("unsupported execution queue item type: %s", item.ItemType)
 		}
-		run, err := db.RunRealCodexTask(ctx, projectID, item.ItemID, executor)
 		if err != nil {
 			_ = db.markWorkQueueItemFailed(ctx, projectID, item.ID, err)
 			return nil, err

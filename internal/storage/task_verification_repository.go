@@ -144,7 +144,7 @@ func (db *DB) latestImplementationVerificationTarget(ctx context.Context, projec
 SELECT ce.cwd, COALESCE(r.head_commit, '')
 FROM runs r
 JOIN command_events ce ON ce.project_id = r.project_id AND ce.run_id = r.id AND ce.command_kind = 'codex'
-WHERE r.project_id = ? AND r.task_id = ? AND r.run_type = 'implementation' AND r.status = 'succeeded'
+WHERE r.project_id = ? AND r.task_id = ? AND r.run_type IN ('implementation', 'repair') AND r.status = 'succeeded'
 ORDER BY r.created_at DESC
 LIMIT 1`, projectID, taskID).Scan(&target.WorktreeRoot, &target.HeadCommit); err != nil {
 		if err == sql.ErrNoRows {

@@ -204,6 +204,28 @@ INSERT INTO workflow_events(
 	return err
 }
 
+func (db *DB) insertWorkflowEventNow(ctx context.Context, projectID string, eventType string, evidence any) error {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := insertWorkflowEvent(ctx, tx, projectID, eventType, evidence, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 func workflowEventID(projectID string, eventType string, payload []byte, now string) string {
 	sum := sha1.Sum(append([]byte(projectID+"|"+eventType+"|"+now+"|"), payload...))
 	return "WFEVT-" + strings.ToUpper(hex.EncodeToString(sum[:])[:16])

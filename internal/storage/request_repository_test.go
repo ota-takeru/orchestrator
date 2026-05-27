@@ -461,6 +461,55 @@ INSERT INTO work_queue_items(
 	}
 }
 
+func TestStartWorkProcessesRepairQueueWithRealCodexAdapter(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/devos-repair\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "worker.go"), []byte("package worker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", "/tmp/devos-codex-home")
+	setRealCodexDoctorDetectedForTest(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", root)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "repairing")
+	if _, err := db.EnqueueTaskRepair(ctx, "PROJECT-001", "TASK-001", "RUN-FAILED"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.StartWork(ctx, WorkStartInput{
+		ProjectID:                 "PROJECT-001",
+		Mode:                      "sequential",
+		ImplementationAdapter:     "real-codex",
+		PlanningConcurrency:       1,
+		ImplementationConcurrency: 1,
+		CodexExecutor: fakeCodexExecutor{result: CodexExecResult{
+			Stdout:       "{\"type\":\"done\"}\n",
+			FinalMessage: `{"status":"succeeded","summary":"repair done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`,
+			ExitCode:     0,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Execution) != 1 || result.Execution[0].RealRun == nil || result.Execution[0].RealRun.RepairRun == "" || result.Execution[0].Verification == nil {
+		t.Fatalf("execution = %#v", result.Execution)
+	}
+	if result.Execution[0].TaskStatus != "ready_for_human_review" {
+		t.Fatalf("task status = %s", result.Execution[0].TaskStatus)
+	}
+	var runType string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT run_type FROM runs WHERE id = ?", result.Execution[0].RealRun.RepairRun).Scan(&runType); err != nil {
+		t.Fatal(err)
+	}
+	if runType != "repair" {
+		t.Fatalf("run type = %s", runType)
+	}
+}
+
 func TestStartWorkCompletesStaleExecutionQueueItems(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

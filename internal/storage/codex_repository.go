@@ -48,6 +48,7 @@ type RealCodexRunResult struct {
 	TaskID            string   `json:"task_id"`
 	TaskStatus        string   `json:"task_status"`
 	ImplementationRun string   `json:"implementation_run_id"`
+	RepairRun         string   `json:"repair_run_id,omitempty"`
 	Classification    string   `json:"classification"`
 	WorktreeRoot      string   `json:"worktree_root,omitempty"`
 	HeadCommit        string   `json:"head_commit,omitempty"`
@@ -178,6 +179,14 @@ func codexExecArgv(projectRoot string, finalPath string, schemaPath string, poli
 }
 
 func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID string, executor CodexExecutor) (RealCodexRunResult, error) {
+	return db.runRealCodexTask(ctx, projectID, taskID, "implementation", executor)
+}
+
+func (db *DB) RunRealCodexRepairTask(ctx context.Context, projectID string, taskID string, executor CodexExecutor) (RealCodexRunResult, error) {
+	return db.runRealCodexTask(ctx, projectID, taskID, "repair", executor)
+}
+
+func (db *DB) runRealCodexTask(ctx context.Context, projectID string, taskID string, runType string, executor CodexExecutor) (RealCodexRunResult, error) {
 	if executor == nil {
 		executor = LocalCodexExecutor{}
 	}
@@ -185,8 +194,18 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
-	if status != "ready" {
-		return RealCodexRunResult{}, fmt.Errorf("task %s is not ready: %s", taskID, status)
+	expectedStatus := "ready"
+	activeStatus := "implementing"
+	startEvent := "real_codex_implementation_started"
+	completedEvent := "real_codex_implementation_completed"
+	if runType == "repair" {
+		expectedStatus = "repairing"
+		activeStatus = "repairing"
+		startEvent = "real_codex_repair_started"
+		completedEvent = "real_codex_repair_completed"
+	}
+	if status != expectedStatus {
+		return RealCodexRunResult{}, fmt.Errorf("task %s is not %s: %s", taskID, expectedStatus, status)
 	}
 	env, err := db.ResolveImplementationEnvironment(ctx, projectID)
 	if err != nil {
@@ -194,7 +213,7 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	}
 	classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
 	if len(blockers) > 0 {
-		return db.recordRealCodexAdapterBlocked(ctx, projectID, taskID, env, classification, blockers)
+		return db.recordRealCodexAdapterBlockedForRunType(ctx, projectID, taskID, env, runType, classification, blockers)
 	}
 	runPolicy := db.activeRunProfileNetworkPolicy(ctx, projectID)
 	doctorReport := runRealCodexDoctor(ctx, env, toolchains.Options{IncludeCodex: true})
@@ -202,13 +221,17 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 		return RealCodexRunResult{}, err
 	}
 	if blockers := realCodexToolchainBlockers(doctorReport); len(blockers) > 0 {
-		return db.recordRealCodexAdapterBlocked(ctx, projectID, taskID, env, "toolchain_required", blockers)
+		return db.recordRealCodexAdapterBlockedForRunType(ctx, projectID, taskID, env, runType, "toolchain_required", blockers)
 	}
-	if err := db.transitionTask(ctx, projectID, taskID, "ready", "implementing", "real_codex_implementation_started", map[string]any{"task_id": taskID, "environment_id": env.ID}); err != nil {
+	if runType == "implementation" {
+		if err := db.transitionTask(ctx, projectID, taskID, expectedStatus, activeStatus, startEvent, map[string]any{"task_id": taskID, "environment_id": env.ID}); err != nil {
+			return RealCodexRunResult{}, err
+		}
+	} else if err := db.insertWorkflowEventNow(ctx, projectID, startEvent, map[string]any{"task_id": taskID, "environment_id": env.ID}); err != nil {
 		return RealCodexRunResult{}, err
 	}
 
-	attemptNo, err := db.nextRunAttempt(ctx, projectID, taskID, "implementation")
+	attemptNo, err := db.nextRunAttempt(ctx, projectID, taskID, runType)
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
@@ -217,9 +240,9 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 		return RealCodexRunResult{}, err
 	}
 	if len(worktreeBlockers) > 0 {
-		return db.recordRealCodexAdapterBlocked(ctx, projectID, taskID, env, "worktree_required", worktreeBlockers)
+		return db.recordRealCodexAdapterBlockedForRunType(ctx, projectID, taskID, env, runType, "worktree_required", worktreeBlockers)
 	}
-	prompt, err := db.realCodexPrompt(ctx, projectID, taskID)
+	prompt, err := db.realCodexPrompt(ctx, projectID, taskID, runType)
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
@@ -234,7 +257,7 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 			execResult.Stderr = strings.TrimSpace(execResult.Stderr + "\n" + "schema validation failed: " + err.Error())
 		}
 	}
-	commitResult := finalizeCodexWorktree(ctx, workspaceRoot, taskID, execResult)
+	commitResult := finalizeCodexWorktree(ctx, workspaceRoot, taskID, runType, execResult)
 	headCommit := commitResult.HeadCommit
 	if strings.TrimSpace(headCommit) == "" {
 		headCommit = gitOutputOrUnknown(ctx, workspaceRoot, "rev-parse", "HEAD")
@@ -243,8 +266,11 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	diffHash := sha256Hex([]byte(diff))
 	policyEvidence := classifyCodexPolicyEvidence(execResult.Stdout, diff, runPolicy)
 	classification, blockers, runStatus, taskTo := classifyCodexOutcome(execResult, commitResult, policyEvidence)
-	runID := "RUN-" + stableShortHash(taskID+"|real-codex|"+time.Now().UTC().Format(time.RFC3339Nano))
-	if err := db.saveCodexRun(ctx, projectID, taskID, env, workspaceRoot, runID, attemptNo, baseCommit, headCommit, diffHash, diff, prompt, execResult, runStatus, classification, blockers, policyEvidence, runPolicy, sandboxMode); err != nil {
+	if runType == "repair" && taskTo == "failed" {
+		taskTo = "needs_decision"
+	}
+	runID := "RUN-" + stableShortHash(taskID+"|real-codex|"+runType+"|"+time.Now().UTC().Format(time.RFC3339Nano))
+	if err := db.saveCodexRun(ctx, projectID, taskID, env, workspaceRoot, runID, runType, attemptNo, baseCommit, headCommit, diffHash, diff, prompt, execResult, runStatus, classification, blockers, policyEvidence, runPolicy, sandboxMode); err != nil {
 		return RealCodexRunResult{}, err
 	}
 	if taskTo == "needs_decision" {
@@ -252,7 +278,7 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 			return RealCodexRunResult{}, err
 		}
 	}
-	if err := db.transitionTask(ctx, projectID, taskID, "implementing", taskTo, "real_codex_implementation_completed", map[string]any{
+	if err := db.transitionTask(ctx, projectID, taskID, activeStatus, taskTo, completedEvent, map[string]any{
 		"task_id":  taskID,
 		"run_id":   runID,
 		"status":   runStatus,
@@ -260,7 +286,13 @@ func (db *DB) RunRealCodexTask(ctx context.Context, projectID string, taskID str
 	}); err != nil {
 		return RealCodexRunResult{}, err
 	}
-	return RealCodexRunResult{TaskID: taskID, TaskStatus: taskTo, ImplementationRun: runID, Classification: classification, WorktreeRoot: workspaceRoot, HeadCommit: headCommit, Blockers: blockers}, nil
+	result := RealCodexRunResult{TaskID: taskID, TaskStatus: taskTo, Classification: classification, WorktreeRoot: workspaceRoot, HeadCommit: headCommit, Blockers: blockers}
+	if runType == "repair" {
+		result.RepairRun = runID
+	} else {
+		result.ImplementationRun = runID
+	}
+	return result, nil
 }
 
 func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID string) (RealCodexPreviewResult, error) {
@@ -513,15 +545,19 @@ func isWindowsRoot(path string) bool {
 }
 
 func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, classification string, blockers []string) (RealCodexRunResult, error) {
-	attemptNo, err := db.nextRunAttempt(ctx, projectID, taskID, "implementation")
+	return db.recordRealCodexAdapterBlockedForRunType(ctx, projectID, taskID, env, "implementation", classification, blockers)
+}
+
+func (db *DB) recordRealCodexAdapterBlockedForRunType(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, runType string, classification string, blockers []string) (RealCodexRunResult, error) {
+	attemptNo, err := db.nextRunAttempt(ctx, projectID, taskID, runType)
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
 	now := time.Now().UTC()
-	runID := "RUN-" + stableShortHash(taskID+"|real-codex-adapter-blocked|"+now.Format(time.RFC3339Nano))
+	runID := "RUN-" + stableShortHash(taskID+"|real-codex-adapter-blocked|"+runType+"|"+now.Format(time.RFC3339Nano))
 	baseCommit := gitOutputOrUnknown(ctx, env.ProjectRoot, "rev-parse", "HEAD")
 	headCommit := baseCommit
-	prompt, err := db.realCodexPrompt(ctx, projectID, taskID)
+	prompt, err := db.realCodexPrompt(ctx, projectID, taskID, runType)
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
@@ -535,7 +571,7 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 		CompletedAt:  now,
 	}
 	runPolicy := db.activeRunProfileNetworkPolicy(ctx, projectID)
-	if err := db.saveCodexRun(ctx, projectID, taskID, env, env.ProjectRoot, runID, attemptNo, baseCommit, headCommit, sha256Hex(nil), "", prompt, execResult, "blocked", classification, blockers, codexPolicyEvidence{NetworkMode: string(normalizeRunNetworkPolicy(runPolicy).Mode)}, runPolicy, codexSandboxMode(env)); err != nil {
+	if err := db.saveCodexRun(ctx, projectID, taskID, env, env.ProjectRoot, runID, runType, attemptNo, baseCommit, headCommit, sha256Hex(nil), "", prompt, execResult, "blocked", classification, blockers, codexPolicyEvidence{NetworkMode: string(normalizeRunNetworkPolicy(runPolicy).Mode)}, runPolicy, codexSandboxMode(env)); err != nil {
 		return RealCodexRunResult{}, err
 	}
 	if err := db.openCodexBlockedDecision(ctx, projectID, taskID, runID, classification, blockers); err != nil {
@@ -556,21 +592,32 @@ func (db *DB) recordRealCodexAdapterBlocked(ctx context.Context, projectID strin
 			return RealCodexRunResult{}, err
 		}
 	}
-	return RealCodexRunResult{TaskID: taskID, TaskStatus: "needs_decision", ImplementationRun: runID, Classification: classification, WorktreeRoot: env.ProjectRoot, Blockers: blockers}, nil
+	result := RealCodexRunResult{TaskID: taskID, TaskStatus: "needs_decision", Classification: classification, WorktreeRoot: env.ProjectRoot, Blockers: blockers}
+	if runType == "repair" {
+		result.RepairRun = runID
+	} else {
+		result.ImplementationRun = runID
+	}
+	return result, nil
 }
 
-func (db *DB) realCodexPrompt(ctx context.Context, projectID string, taskID string) (string, error) {
+func (db *DB) realCodexPrompt(ctx context.Context, projectID string, taskID string, runType string) (string, error) {
 	trustedArtifacts, err := db.TrustedArtifactContentBundle(ctx, projectID)
 	if err != nil {
 		return "", err
 	}
-	return buildRealCodexPrompt(taskID, trustedArtifacts), nil
+	return buildRealCodexPrompt(taskID, runType, trustedArtifacts), nil
 }
 
-func buildRealCodexPrompt(taskID string, trustedArtifacts []TrustedArtifactContentRecord) string {
+func buildRealCodexPrompt(taskID string, runType string, trustedArtifacts []TrustedArtifactContentRecord) string {
+	action := "Implement the assigned DevOS task in this repository."
+	if runType == "repair" {
+		action = "Repair the assigned DevOS task after Orchestrator verification failed. Make the smallest change needed to satisfy the required verification commands."
+	}
 	lines := []string{
-		"Implement the assigned DevOS task in this repository.",
+		action,
 		"Task ID: " + taskID,
+		"Run type: " + runType,
 		"Follow AGENTS.md and project documentation.",
 		"",
 		"Trusted artifact context:",
@@ -626,7 +673,7 @@ type codexPolicyEvidence struct {
 	PolicyViolations  []string `json:"policy_violations,omitempty"`
 }
 
-func finalizeCodexWorktree(ctx context.Context, workspaceRoot string, taskID string, execResult CodexExecResult) codexCommitResult {
+func finalizeCodexWorktree(ctx context.Context, workspaceRoot string, taskID string, runType string, execResult CodexExecResult) codexCommitResult {
 	if strings.TrimSpace(gitOutputOrEmpty(ctx, workspaceRoot, "rev-parse", "--is-inside-work-tree")) != "true" {
 		return codexCommitResult{InGit: false}
 	}
@@ -651,10 +698,14 @@ func finalizeCodexWorktree(ctx context.Context, workspaceRoot string, taskID str
 	if strings.TrimSpace(diff) == "" {
 		return codexCommitResult{InGit: true, Changed: true, Blockers: []string{"staged diff is empty"}}
 	}
+	verb := "implement"
+	if runType == "repair" {
+		verb = "repair"
+	}
 	if err := runGit(ctx, workspaceRoot,
 		"-c", "user.name=DevOS",
 		"-c", "user.email=devos@example.local",
-		"commit", "-m", "devos: implement "+taskID); err != nil {
+		"commit", "-m", "devos: "+verb+" "+taskID); err != nil {
 		return codexCommitResult{InGit: true, Changed: true, Diff: diff, Blockers: []string{"git commit failed: " + err.Error()}}
 	}
 	return codexCommitResult{
@@ -894,7 +945,7 @@ func secretScanBlockers(root string, files []string) []string {
 	return blockers
 }
 
-func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, workspaceRoot string, runID string, attemptNo int, baseCommit string, headCommit string, diffHash string, diff string, prompt string, execResult CodexExecResult, runStatus string, classification string, blockers []string, policyEvidence codexPolicyEvidence, runPolicy platform.NetworkPolicy, sandboxMode string) error {
+func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string, env platform.ExecutionEnvironment, workspaceRoot string, runID string, runType string, attemptNo int, baseCommit string, headCommit string, diffHash string, diff string, prompt string, execResult CodexExecResult, runStatus string, classification string, blockers []string, policyEvidence codexPolicyEvidence, runPolicy platform.NetworkPolicy, sandboxMode string) error {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -910,7 +961,7 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 		ProjectID:  projectID,
 		TaskID:     &taskID,
 		RunID:      runID,
-		RunType:    "implementation",
+		RunType:    runType,
 		AttemptNo:  attemptNo,
 		BaseCommit: baseCommit,
 	}, runStatus, now); err != nil {
@@ -963,6 +1014,7 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 	summary, err := json.MarshalIndent(map[string]any{
 		"task_id":                    taskID,
 		"run_id":                     runID,
+		"run_type":                   runType,
 		"status":                     runStatus,
 		"classification":             classification,
 		"blockers":                   blockers,
@@ -989,6 +1041,7 @@ func (db *DB) saveCodexRun(ctx context.Context, projectID string, taskID string,
 	if err := insertWorkflowEvent(ctx, tx, projectID, "real_codex_run_recorded", map[string]any{
 		"task_id":        taskID,
 		"run_id":         runID,
+		"run_type":       runType,
 		"status":         runStatus,
 		"classification": classification,
 		"blockers":       blockers,

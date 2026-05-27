@@ -19,6 +19,7 @@
 
 2026-05-27:
 
+- 登録projectが0件の状態で `/api/projects` が `null` 配列を返し、単一project dashboard読み込み時にも複数APIの空結果 `null` がReact UIを白画面にする不備を修正しました。registry/APIは空project一覧を `[]` として返し、UI側のdashboard正規化で空配列field、planning/work status、merge/setup statusを防御的に扱うようにしました。`devos serve --ui` を再起動し、headless ChromeのDOM/screenshotでHuman Inbox dashboardが表示されることを確認済みです。
 - `devos spec` / `devos plan` / `devos bootstrap` の固定テンプレート生成を、concept内容とrepository構成を反映する生成へ更新しました。Go moduleとUI packageを検出し、Task YAMLへ `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build` のrequired verification commandを自動生成します。
 - sequential workerに `--adapter real-codex` を追加し、execution queueの `task_implementation` をReal Codex実装へ流した後、`verifying` に進んだtaskをOrchestrator local verificationまで進められるようにしました。既定は後方互換の `fake` です。
 - Windows local verificationは、Windows native runtime上でだけ許可するガード付きで対応しました。Linux/WSLからWindows environmentを直接local verificationしない境界を維持します。

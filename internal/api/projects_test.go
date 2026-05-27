@@ -52,6 +52,30 @@ func TestProjectsAPIListsRegisteredProjects(t *testing.T) {
 	}
 }
 
+func TestProjectsAPIListsEmptyProjectsAsArray(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"})).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Projects []registry.RegisteredProject `json:"projects"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Projects == nil {
+		t.Fatalf("projects is nil: %s", rec.Body.String())
+	}
+	if len(body.Projects) != 0 {
+		t.Fatalf("projects = %#v", body.Projects)
+	}
+}
+
 func TestProjectsAPIRoutesToAuthorityRuntime(t *testing.T) {
 	db, projectID := openAPITestDB(t)
 	regDB := openAPIRegistry(t)

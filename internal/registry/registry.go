@@ -246,7 +246,7 @@ ORDER BY display_name, id`)
 		return nil, err
 	}
 	defer rows.Close()
-	var projects []RegisteredProject
+	projects := make([]RegisteredProject, 0)
 	for rows.Next() {
 		project, err := scanProject(rows)
 		if err != nil {

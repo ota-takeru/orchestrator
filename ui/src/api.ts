@@ -37,8 +37,8 @@ async function getJSON<T>(path: string): Promise<T> {
 }
 
 export async function loadProjects(): Promise<RegisteredProject[]> {
-  const body = await getJSON<{ projects: RegisteredProject[] }>("/api/projects");
-  return body.projects;
+  const body = await getJSON<{ projects?: RegisteredProject[] | null }>("/api/projects");
+  return body.projects ?? [];
 }
 
 export async function loadDashboardData(projectID?: string): Promise<DashboardData> {
@@ -65,43 +65,43 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     setupStatus
   ] = await Promise.all([
     getJSON<HumanInboxSnapshot>("/api/ui/snapshot?limit=12"),
-    getJSON<{ tasks: TaskRecord[] }>("/api/tasks"),
-    getJSON<{ requests: FeatureRequest[] }>("/api/requests"),
-    getJSON<{ items: WorkQueueItem[] }>("/api/queue"),
+    getJSON<{ tasks?: TaskRecord[] | null }>("/api/tasks"),
+    getJSON<{ requests?: FeatureRequest[] | null }>("/api/requests"),
+    getJSON<{ items?: WorkQueueItem[] | null }>("/api/queue"),
     getJSON<WorkStatus>("/api/work/status"),
     getJSON<PlanningStatus>("/api/planning/status"),
-    getJSON<{ change_requests: ChangeRequest[] }>("/api/change-requests"),
-    getJSON<{ risks: DependencyRisk[] }>("/api/dependency-risks"),
-    getJSON<{ decisions: Decision[] }>("/api/decisions?status=open"),
-    getJSON<{ memories: MemoryRecord[] }>("/api/memory?type=baseline_issue"),
-    getJSON<{ artifacts: ArtifactRecord[] }>("/api/artifacts"),
-    getJSON<{ artifacts: TrustedArtifact[] }>("/api/artifacts/trusted"),
-    getJSON<{ mappings: PathMapping[] }>("/api/platform/path-mappings"),
-    getJSON<{ cards: ToolchainSetupCard[] }>("/api/platform/toolchain-setup"),
+    getJSON<{ change_requests?: ChangeRequest[] | null }>("/api/change-requests"),
+    getJSON<{ risks?: DependencyRisk[] | null }>("/api/dependency-risks"),
+    getJSON<{ decisions?: Decision[] | null }>("/api/decisions?status=open"),
+    getJSON<{ memories?: MemoryRecord[] | null }>("/api/memory?type=baseline_issue"),
+    getJSON<{ artifacts?: ArtifactRecord[] | null }>("/api/artifacts"),
+    getJSON<{ artifacts?: TrustedArtifact[] | null }>("/api/artifacts/trusted"),
+    getJSON<{ mappings?: PathMapping[] | null }>("/api/platform/path-mappings"),
+    getJSON<{ cards?: ToolchainSetupCard[] | null }>("/api/platform/toolchain-setup"),
     getJSON<MergeGateStatus>("/api/merge/status"),
-    getJSON<{ violations: InvariantViolation[] }>("/api/check"),
+    getJSON<{ violations?: InvariantViolation[] | null }>("/api/check"),
     getJSON<SetupStatus>("/api/setup")
   ]);
 
-  return {
+  return normalizeDashboard({
     snapshot,
-    tasks: taskBody.tasks,
-    featureRequests: requestBody.requests,
-    queueItems: queueBody.items,
-    workStatus,
-    planningStatus,
-    changeRequests: changeRequestBody.change_requests,
-    dependencyRisks: dependencyRiskBody.risks,
-    decisions: decisionBody.decisions,
-    baselineIssues: memoryBody.memories,
-    artifacts: artifactsBody.artifacts,
-    trustedArtifacts: artifactBody.artifacts,
-    pathMappings: pathMappingBody.mappings,
-    toolchainSetupCards: setupBody.cards,
-    mergeStatus,
-    projectViolations: checkBody.violations,
-    setupStatus
-  };
+    tasks: taskBody.tasks ?? [],
+    feature_requests: requestBody.requests ?? [],
+    queue_items: queueBody.items ?? [],
+    work_status: workStatus,
+    planning_status: planningStatus,
+    change_requests: changeRequestBody.change_requests ?? [],
+    dependency_risks: dependencyRiskBody.risks ?? [],
+    decisions: decisionBody.decisions ?? [],
+    baseline_issues: memoryBody.memories ?? [],
+    artifacts: artifactsBody.artifacts ?? [],
+    trusted_artifacts: artifactBody.artifacts ?? [],
+    path_mappings: pathMappingBody.mappings ?? [],
+    toolchain_setup_cards: setupBody.cards ?? [],
+    merge_status: mergeStatus,
+    project_violations: checkBody.violations ?? [],
+    setup_status: setupStatus
+  });
 }
 
 async function loadProjectDashboardData(projectID: string): Promise<DashboardData> {
@@ -256,14 +256,63 @@ function emptyWorkStatus(): WorkStatus {
   };
 }
 
+function normalizeSnapshot(snapshot: HumanInboxSnapshot): HumanInboxSnapshot {
+  return {
+    ...snapshot,
+    open_inbox_items: snapshot.open_inbox_items ?? [],
+    recommended_next_commands: snapshot.recommended_next_commands ?? []
+  };
+}
+
+function normalizeWorkStatus(status?: WorkStatus | null): WorkStatus {
+  return {
+    worker_runs: status?.worker_runs ?? [],
+    planning: {
+      runs: status?.planning?.runs ?? [],
+      artifacts: status?.planning?.artifacts ?? [],
+      queue: status?.planning?.queue ?? []
+    }
+  };
+}
+
+function normalizePlanningStatus(status?: PlanningStatus | null): PlanningStatus {
+  return {
+    runs: status?.runs ?? [],
+    artifacts: status?.artifacts ?? [],
+    queue: status?.queue ?? []
+  };
+}
+
+function normalizeMergeStatus(status?: MergeGateStatus | null): MergeGateStatus {
+  return {
+    queue: status?.queue ?? [],
+    blockers: status?.blockers ?? [],
+    blocking_inbox_items: status?.blocking_inbox_items ?? [],
+    ready: status?.ready ?? false
+  };
+}
+
+function normalizeSetupStatus(status?: SetupStatus | null): SetupStatus | undefined {
+  if (!status) return undefined;
+  return {
+    ...status,
+    git_dirty_files: status.git_dirty_files ?? [],
+    protected_paths: status.protected_paths ?? [],
+    environment_bindings: status.environment_bindings ?? [],
+    toolchain_setup_cards: status.toolchain_setup_cards ?? [],
+    actions: status.actions ?? [],
+    blockers: status.blockers ?? []
+  };
+}
+
 function normalizeDashboard(data: DashboardWireData): DashboardData {
   return {
-    snapshot: data.snapshot,
+    snapshot: normalizeSnapshot(data.snapshot),
     tasks: data.tasks ?? [],
     featureRequests: data.feature_requests ?? [],
     queueItems: data.queue_items ?? [],
-    workStatus: data.work_status ?? emptyWorkStatus(),
-    planningStatus: data.planning_status ?? { runs: [], artifacts: [], queue: [] },
+    workStatus: normalizeWorkStatus(data.work_status ?? emptyWorkStatus()),
+    planningStatus: normalizePlanningStatus(data.planning_status),
     changeRequests: data.change_requests ?? [],
     dependencyRisks: data.dependency_risks ?? [],
     decisions: data.decisions ?? [],
@@ -272,8 +321,8 @@ function normalizeDashboard(data: DashboardWireData): DashboardData {
     trustedArtifacts: data.trusted_artifacts ?? [],
     pathMappings: data.path_mappings ?? [],
     toolchainSetupCards: data.toolchain_setup_cards ?? [],
-    mergeStatus: data.merge_status ?? { queue: [], ready: true },
+    mergeStatus: normalizeMergeStatus(data.merge_status ?? { queue: [], ready: true }),
     projectViolations: data.project_violations ?? [],
-    setupStatus: data.setup_status
+    setupStatus: normalizeSetupStatus(data.setup_status)
   };
 }

@@ -70,6 +70,26 @@ func TestAddListRemoveProjects(t *testing.T) {
 	}
 }
 
+func TestListProjectsReturnsEmptySlice(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "registry.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	projects, err := db.ListProjects(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projects == nil {
+		t.Fatal("projects is nil")
+	}
+	if len(projects) != 0 {
+		t.Fatalf("project count = %d", len(projects))
+	}
+}
+
 func TestDuplicateAddIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "registry.sqlite"))

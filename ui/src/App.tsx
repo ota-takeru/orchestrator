@@ -56,6 +56,7 @@ function App() {
   const [dependencyFiles, setDependencyFiles] = useState("");
   const [selectedArtifactTaskID, setSelectedArtifactTaskID] = useState("");
   const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[]>([]);
+  const [taskArtifactsLoading, setTaskArtifactsLoading] = useState(false);
   const [taskActioning, setTaskActioning] = useState("");
   const [setupActioning, setSetupActioning] = useState("");
   const [workActioning, setWorkActioning] = useState("");
@@ -116,6 +117,12 @@ function App() {
     };
     void loadInitial();
   }, []);
+
+  useEffect(() => {
+    setSelectedArtifactTaskID("");
+    setTaskArtifacts([]);
+    setTaskArtifactsLoading(false);
+  }, [selectedProjectID]);
 
   useEffect(() => {
     if (!creatingProject || newProjectRootTouched) return;
@@ -399,11 +406,18 @@ function App() {
 
   const openTaskArtifacts = async (taskID: string) => {
     setSelectedArtifactTaskID(taskID);
+    setTaskArtifacts([]);
+    setTaskArtifactsLoading(true);
     setError("");
     try {
       setTaskArtifacts(await loadTaskArtifacts(taskID, selectedProjectID || undefined));
+      window.setTimeout(() => {
+        document.getElementById("task-artifacts-viewer")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Artifact load failed");
+    } finally {
+      setTaskArtifactsLoading(false);
     }
   };
 
@@ -498,6 +512,11 @@ function App() {
               onSubmitFeature={submitFeatureRequest}
               onApprove={approve}
               onOpenTaskArtifacts={openTaskArtifacts}
+              selectedArtifactTaskID={selectedArtifactTaskID}
+              taskArtifacts={taskArtifacts}
+              taskArtifactsLoading={taskArtifactsLoading}
+              taskActioning={taskActioning}
+              onTaskAction={submitTaskAction}
               workActioning={workActioning}
               onStartWork={submitWorkStart}
               artifactActioning={artifactActioning}
@@ -522,13 +541,6 @@ function App() {
             onSubmit={submitEnvBinding}
           />
           <SetupWizardPanel setup={data?.setupStatus} actioning={setupActioning} onRunAction={submitSetupAction} />
-          <ArtifactViewerPanel
-            taskID={selectedArtifactTaskID}
-            task={data?.tasks.find((task) => task.id === selectedArtifactTaskID)}
-            artifacts={taskArtifacts}
-            actioning={taskActioning}
-            onAction={submitTaskAction}
-          />
           <ChangeRequestPanel
             requests={data?.changeRequests ?? []}
             text={changeText}
@@ -658,6 +670,11 @@ function SelectedProjectDashboard({
   onSubmitFeature,
   onApprove,
   onOpenTaskArtifacts,
+  selectedArtifactTaskID,
+  taskArtifacts,
+  taskArtifactsLoading,
+  taskActioning,
+  onTaskAction,
   workActioning,
   onStartWork,
   artifactActioning,
@@ -674,6 +691,11 @@ function SelectedProjectDashboard({
   onSubmitFeature: () => void;
   onApprove: (item: InboxItem) => void;
   onOpenTaskArtifacts: (taskID: string) => void;
+  selectedArtifactTaskID: string;
+  taskArtifacts: TaskArtifact[];
+  taskArtifactsLoading: boolean;
+  taskActioning: string;
+  onTaskAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
   workActioning: string;
   onStartWork: (adapter: "fake" | "real-codex") => void;
   artifactActioning: string;
@@ -705,6 +727,16 @@ function SelectedProjectDashboard({
           <ReadyToRunPanel tasks={data.tasks} queueItems={data.queueItems} actioning={workActioning} onStartWork={onStartWork} onOpenTaskArtifacts={onOpenTaskArtifacts} />
           <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} showActions={false} />
           <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
+          {selectedArtifactTaskID ? (
+            <ArtifactViewerPanel
+              taskID={selectedArtifactTaskID}
+              task={data.tasks.find((task) => task.id === selectedArtifactTaskID)}
+              artifacts={taskArtifacts}
+              loading={taskArtifactsLoading}
+              actioning={taskActioning}
+              onAction={onTaskAction}
+            />
+          ) : null}
           {artifactsPanel}
         </>
       ) : (
@@ -712,6 +744,16 @@ function SelectedProjectDashboard({
           {artifactsPanel}
           <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} />
           <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
+          {selectedArtifactTaskID ? (
+            <ArtifactViewerPanel
+              taskID={selectedArtifactTaskID}
+              task={data.tasks.find((task) => task.id === selectedArtifactTaskID)}
+              artifacts={taskArtifacts}
+              loading={taskArtifactsLoading}
+              actioning={taskActioning}
+              onAction={onTaskAction}
+            />
+          ) : null}
         </>
       )}
       <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
@@ -1034,7 +1076,7 @@ function TaskPanel({ tasks, onOpenArtifacts }: { tasks: DashboardData["tasks"]; 
               {task.id} / {task.status}
             </small>
             <button className="secondary-button" type="button" onClick={() => onOpenArtifacts(task.id)}>
-              Artifacts
+              Open task artifacts
             </button>
           </div>
         ))}
@@ -1142,17 +1184,19 @@ function ArtifactViewerPanel({
   taskID,
   task,
   artifacts,
+  loading,
   actioning,
   onAction
 }: {
   taskID: string;
   task?: DashboardData["tasks"][number];
   artifacts: TaskArtifact[];
+  loading: boolean;
   actioning: string;
   onAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
 }) {
   return (
-    <section className="panel compact">
+    <section className="panel compact" id="task-artifacts-viewer" aria-busy={loading}>
       <div className="panel-heading">
         <h2>Diff & Artifacts</h2>
         <FileCheck2 size={18} className="text-zinc-500" />
@@ -1181,7 +1225,8 @@ function ArtifactViewerPanel({
           </button>
         </div>
       ) : null}
-      <StackEmpty empty={!taskID || artifacts.length === 0} label={taskID ? "No artifacts for selected task" : "Select a task"}>
+      {loading ? <div className="ready-run-status" role="status" aria-live="polite"><span className="ready-run-spinner" />Loading artifacts</div> : null}
+      <StackEmpty empty={!loading && (!taskID || artifacts.length === 0)} label={taskID ? "No artifacts for selected task" : "Select a task"}>
         {artifacts.slice(0, 12).map((artifact) => (
           <div className="stack-row" key={artifact.id}>
             <span>

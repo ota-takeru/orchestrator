@@ -136,7 +136,10 @@ test("project setup actions execute from the UI after creation", async ({ page }
   await expect(page.getByText("TASK-001 / ready_for_human_review")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Ready for review" })).toBeVisible();
   await page.getByRole("button", { name: "Open artifacts" }).click();
-  await expect(page.getByRole("heading", { name: "Diff & Artifacts" })).toBeVisible();
+  await expect(page.locator("#task-artifacts-viewer").getByRole("heading", { name: "Diff & Artifacts" })).toBeVisible();
+  await expect(page.locator("#task-artifacts-viewer")).toContainText("diff.patch");
+  await page.getByRole("button", { name: "Open task artifacts" }).click();
+  await expect(page.locator("#task-artifacts-viewer")).toContainText("fake-verification");
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 

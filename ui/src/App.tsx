@@ -1,8 +1,8 @@
-import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
+import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, requestDependencyApproval, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
-import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
+import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, requestDependencyApproval, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
+import type { CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -21,10 +21,19 @@ const countRows: Array<{
 
 function App() {
   const [projects, setProjects] = useState<RegisteredProject[]>([]);
+  const [currentProject, setCurrentProject] = useState<CurrentProject | undefined>();
+  const [runtimeOptions, setRuntimeOptions] = useState<ProjectRuntimeOption[]>([]);
   const [selectedProjectID, setSelectedProjectID] = useState("");
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectRoot, setNewProjectRoot] = useState("");
+  const [newProjectConcept, setNewProjectConcept] = useState("");
+  const [newProjectRuntime, setNewProjectRuntime] = useState<"windows" | "wsl">("wsl");
+  const [newProjectWslDistro, setNewProjectWslDistro] = useState("");
+  const [newProjectActioning, setNewProjectActioning] = useState(false);
   const [approving, setApproving] = useState<string>("");
   const [featureText, setFeatureText] = useState("");
   const [changeText, setChangeText] = useState("");
@@ -46,6 +55,7 @@ function App() {
   const [changeActioning, setChangeActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
+  const selectedProjectSummary = selectedProjectID ? selectedProject : currentProject;
 
   const loadSelectedDashboard = async (projectID: string) => {
     setLoading(true);
@@ -68,9 +78,16 @@ function App() {
       setLoading(true);
       setError("");
       try {
-        const registeredProjects = await loadProjects();
-        setProjects(registeredProjects);
-        const initialProjectID = registeredProjects[0]?.id ?? "";
+        const projectData = await loadProjects();
+        setProjects(projectData.projects);
+        setCurrentProject(projectData.current_project);
+        setRuntimeOptions(projectData.runtime_options);
+        const recommended = projectData.runtime_options.find((option) => option.recommended && option.available) ?? projectData.runtime_options.find((option) => option.available);
+        if (recommended) {
+          setNewProjectRuntime(recommended.authority_runtime);
+          setNewProjectWslDistro(recommended.wsl_distro ?? "");
+        }
+        const initialProjectID = projectData.current_project ? "" : (projectData.projects[0]?.id ?? "");
         setSelectedProjectID(initialProjectID);
         setData(await loadDashboardData(initialProjectID || undefined));
       } catch (err) {
@@ -89,8 +106,48 @@ function App() {
   const nextCommand = useMemo(() => data?.snapshot.recommended_next_commands?.[0] ?? "devos request --json <TEXT>", [data]);
 
   const selectProject = (projectID: string) => {
+    setCreatingProject(false);
     setSelectedProjectID(projectID);
     void loadSelectedDashboard(projectID);
+  };
+
+  const openNewProject = () => {
+    const recommended = runtimeOptions.find((option) => option.recommended && option.available) ?? runtimeOptions.find((option) => option.available);
+    if (recommended) {
+      setNewProjectRuntime(recommended.authority_runtime);
+      setNewProjectWslDistro(recommended.wsl_distro ?? "");
+    }
+    setCreatingProject(true);
+    setError("");
+  };
+
+  const submitNewProject = async () => {
+    setNewProjectActioning(true);
+    setError("");
+    try {
+      const result = await createProject({
+        display_name: newProjectName,
+        project_root: newProjectRoot,
+        concept: newProjectConcept,
+        authority_runtime: newProjectRuntime,
+        wsl_distro: newProjectWslDistro,
+        generate_initial_artifacts: true
+      });
+      const projectData = await loadProjects();
+      setProjects(projectData.projects);
+      setCurrentProject(projectData.current_project);
+      setRuntimeOptions(projectData.runtime_options);
+      setSelectedProjectID(result.project.id);
+      setCreatingProject(false);
+      setNewProjectName("");
+      setNewProjectRoot("");
+      setNewProjectConcept("");
+      setData(await loadDashboardData(result.project.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Project creation failed");
+    } finally {
+      setNewProjectActioning(false);
+    }
   };
 
   const approve = async (item: InboxItem) => {
@@ -276,13 +333,37 @@ function App() {
       </header>
 
       <div className="mx-auto grid max-w-7xl gap-5 px-5 py-5 lg:grid-cols-[260px_1fr_340px]">
-        <ProjectListSidebar projects={projects} selectedProjectID={selectedProjectID} onSelect={selectProject} />
+        <ProjectListSidebar
+          projects={projects}
+          currentProject={currentProject}
+          selectedProjectID={selectedProjectID}
+          onSelect={selectProject}
+          onNewProject={openNewProject}
+        />
         <section className="space-y-5">
           {error ? <ErrorBanner message={error} /> : null}
+          {creatingProject ? (
+            <NewProjectPanel
+              name={newProjectName}
+              root={newProjectRoot}
+              concept={newProjectConcept}
+              runtime={newProjectRuntime}
+              wslDistro={newProjectWslDistro}
+              runtimeOptions={runtimeOptions}
+              actioning={newProjectActioning}
+              setName={setNewProjectName}
+              setRoot={setNewProjectRoot}
+              setConcept={setNewProjectConcept}
+              setRuntime={setNewProjectRuntime}
+              setWslDistro={setNewProjectWslDistro}
+              onSubmit={submitNewProject}
+              onCancel={() => setCreatingProject(false)}
+            />
+          ) : null}
           {data ? (
             <SelectedProjectDashboard
               data={data}
-              selectedProject={selectedProject}
+              selectedProject={selectedProjectSummary}
               approving={approving}
               featureText={featureText}
               setFeatureText={setFeatureText}
@@ -361,12 +442,16 @@ function App() {
 
 function ProjectListSidebar({
   projects,
+  currentProject,
   selectedProjectID,
-  onSelect
+  onSelect,
+  onNewProject
 }: {
   projects: RegisteredProject[];
+  currentProject?: CurrentProject;
   selectedProjectID: string;
   onSelect: (projectID: string) => void;
+  onNewProject: () => void;
 }) {
   return (
     <aside className="project-sidebar">
@@ -375,7 +460,19 @@ function ProjectListSidebar({
           <h2>Projects</h2>
           <ServerCog size={18} className="text-zinc-500" />
         </div>
-        <ProjectSwitcher projects={projects} selectedProjectID={selectedProjectID} onSelect={onSelect} />
+        <ProjectSwitcher projects={projects} currentProject={currentProject} selectedProjectID={selectedProjectID} onSelect={onSelect} />
+        <button className="new-project-button" type="button" onClick={onNewProject}>
+          <Plus size={16} />
+          New Project
+        </button>
+        {currentProject ? (
+          <button className={`project-row ${selectedProjectID === "" ? "selected" : ""}`} onClick={() => onSelect("")} type="button">
+            <span>{currentProject.display_name}</span>
+            <small>
+              Current / {currentProject.authority_runtime} / {currentProject.status}
+            </small>
+          </button>
+        ) : null}
         <StackEmpty empty={projects.length === 0} label="No registered projects">
           <div className="project-list">
             {projects.map((project) => (
@@ -401,16 +498,20 @@ function ProjectListSidebar({
 
 function ProjectSwitcher({
   projects,
+  currentProject,
   selectedProjectID,
   onSelect
 }: {
   projects: RegisteredProject[];
+  currentProject?: CurrentProject;
   selectedProjectID: string;
   onSelect: (projectID: string) => void;
 }) {
+  const disabled = projects.length === 0 && !currentProject;
   return (
-    <select className="project-switcher" value={selectedProjectID} onChange={(event) => onSelect(event.target.value)} disabled={projects.length === 0}>
-      {projects.length === 0 ? <option value="">Single project</option> : null}
+    <select className="project-switcher" value={selectedProjectID} onChange={(event) => onSelect(event.target.value)} disabled={disabled}>
+      {currentProject ? <option value="">Current Project</option> : null}
+      {!currentProject && projects.length === 0 ? <option value="">No project</option> : null}
       {projects.map((project) => (
         <option key={project.id} value={project.id}>
           {project.display_name}
@@ -433,7 +534,7 @@ function SelectedProjectDashboard({
   onStartWork
 }: {
   data: DashboardData;
-  selectedProject?: RegisteredProject;
+  selectedProject?: RegisteredProject | CurrentProject;
   approving: string;
   featureText: string;
   setFeatureText: (value: string) => void;
@@ -455,7 +556,102 @@ function SelectedProjectDashboard({
   );
 }
 
-function ProjectStatusPanel({ project }: { project: RegisteredProject }) {
+function NewProjectPanel({
+  name,
+  root,
+  concept,
+  runtime,
+  wslDistro,
+  runtimeOptions,
+  actioning,
+  setName,
+  setRoot,
+  setConcept,
+  setRuntime,
+  setWslDistro,
+  onSubmit,
+  onCancel
+}: {
+  name: string;
+  root: string;
+  concept: string;
+  runtime: "windows" | "wsl";
+  wslDistro: string;
+  runtimeOptions: ProjectRuntimeOption[];
+  actioning: boolean;
+  setName: (value: string) => void;
+  setRoot: (value: string) => void;
+  setConcept: (value: string) => void;
+  setRuntime: (value: "windows" | "wsl") => void;
+  setWslDistro: (value: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  const availableOptions = runtimeOptions.filter((option) => option.available);
+  const canSubmit = name.trim() !== "" && root.trim() !== "" && concept.trim() !== "" && availableOptions.some((option) => option.authority_runtime === runtime);
+  const selectedOption = runtimeOptions.find((option) => option.authority_runtime === runtime);
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>New Project</h2>
+          <p>{selectedOption?.description ?? "Choose the runtime and initialize a local DevOS project."}</p>
+        </div>
+        <Plus size={20} className="text-zinc-500" />
+      </div>
+      <div className="new-project-grid">
+        <label>
+          <span>Name</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Project name" disabled={actioning} />
+        </label>
+        <label>
+          <span>Project root</span>
+          <input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="/path/to/new-project" disabled={actioning} />
+        </label>
+      </div>
+      <div className="runtime-choice-row">
+        {runtimeOptions.map((option) => (
+          <button
+            className={`runtime-choice ${option.authority_runtime === runtime ? "selected" : ""}`}
+            type="button"
+            key={option.authority_runtime}
+            disabled={actioning || !option.available}
+            onClick={() => {
+              setRuntime(option.authority_runtime);
+              setWslDistro(option.wsl_distro ?? "");
+            }}
+          >
+            <span>{option.label}</span>
+            <small>
+              {option.recommended ? "Detected / recommended" : option.detected ? "Detected" : "Unavailable"}
+              {option.wsl_distro ? ` / ${option.wsl_distro}` : ""}
+            </small>
+          </button>
+        ))}
+      </div>
+      {runtime === "wsl" ? (
+        <label className="compact-label">
+          <span>WSL distro</span>
+          <input value={wslDistro} onChange={(event) => setWslDistro(event.target.value)} placeholder="Ubuntu" disabled={actioning} />
+        </label>
+      ) : null}
+      <label className="compact-label">
+        <span>Concept</span>
+        <textarea value={concept} onChange={(event) => setConcept(event.target.value)} placeholder="What do you want this project to become?" disabled={actioning} rows={5} />
+      </label>
+      <div className="toolbar-row">
+        <button type="button" onClick={onSubmit} disabled={!canSubmit || actioning}>
+          {actioning ? "Creating" : "Create project"}
+        </button>
+        <button className="secondary-button no-margin" type="button" onClick={onCancel} disabled={actioning}>
+          Cancel
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ProjectStatusPanel({ project }: { project: RegisteredProject | CurrentProject }) {
   return (
     <section className="project-status">
       <div>

@@ -324,6 +324,50 @@ export type DashboardData = {
   setupStatus?: SetupStatus;
 };
 
+export type CurrentProject = {
+  id: string;
+  display_name: string;
+  authority_runtime: "windows" | "wsl";
+  primary_environment_id: string;
+  project_root: string;
+  windows_display_root?: string;
+  wsl_distro?: string;
+  wsl_project_root?: string;
+  status: "active" | "missing" | "invalid" | "disabled";
+  registered: boolean;
+};
+
+export type ProjectRuntimeOption = {
+  authority_runtime: "windows" | "wsl";
+  label: string;
+  description: string;
+  detected: boolean;
+  available: boolean;
+  recommended: boolean;
+  wsl_distro?: string;
+};
+
+export type ProjectListData = {
+  projects: RegisteredProject[];
+  current_project?: CurrentProject;
+  runtime_options: ProjectRuntimeOption[];
+};
+
+export type ProjectCreateInput = {
+  display_name: string;
+  project_root: string;
+  concept: string;
+  authority_runtime: "windows" | "wsl";
+  wsl_distro?: string;
+  windows_display_root?: string;
+  generate_initial_artifacts: boolean;
+};
+
+export type ProjectCreateResult = {
+  project: RegisteredProject;
+  dashboard: DashboardWireData;
+};
+
 export type RegisteredProject = {
   id: string;
   display_name: string;

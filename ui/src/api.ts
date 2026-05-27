@@ -12,6 +12,9 @@ import type {
   MergeGateStatus,
   PathMapping,
   PlanningStatus,
+  ProjectCreateInput,
+  ProjectCreateResult,
+  ProjectListData,
   RegisteredProject,
   SetupActionResult,
   SetupStatus,
@@ -36,9 +39,21 @@ async function getJSON<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function loadProjects(): Promise<RegisteredProject[]> {
-  const body = await getJSON<{ projects?: RegisteredProject[] | null }>("/api/projects");
-  return body.projects ?? [];
+export async function loadProjects(): Promise<ProjectListData> {
+  const body = await getJSON<Partial<ProjectListData> & { projects?: RegisteredProject[] | null }>("/api/projects");
+  return {
+    projects: body.projects ?? [],
+    current_project: body.current_project,
+    runtime_options: body.runtime_options ?? []
+  };
+}
+
+export async function createProject(input: ProjectCreateInput): Promise<ProjectCreateResult> {
+  const body = await postJSON<ProjectCreateResult>("/api/projects", input);
+  return {
+    ...body,
+    dashboard: body.dashboard
+  };
 }
 
 export async function loadDashboardData(projectID?: string): Promise<DashboardData> {

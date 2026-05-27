@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,11 @@ func NewHub(reg *registry.DB, windows ProjectAuthority, wsl ProjectAuthority) *H
 }
 
 func NewDefaultHub(reg *registry.DB) *Hub {
-	return NewHub(reg, WindowsLocalAuthority{}, NewWslAuthority(DefaultCommandExecutor{}, 30*time.Second))
+	wslAuthority := ProjectAuthority(NewWslAuthority(DefaultCommandExecutor{}, 30*time.Second))
+	if strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "" {
+		wslAuthority = WindowsLocalAuthority{}
+	}
+	return NewHub(reg, WindowsLocalAuthority{}, wslAuthority)
 }
 
 func (h *Hub) Project(ctx context.Context, projectID string) (registry.RegisteredProject, ProjectAuthority, error) {

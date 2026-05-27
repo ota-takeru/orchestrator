@@ -4,14 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
+	"github.com/ota-takeru/orchestrator/internal/artifactgen"
+	"github.com/ota-takeru/orchestrator/internal/preflight"
 	"github.com/ota-takeru/orchestrator/internal/projecthub"
 	"github.com/ota-takeru/orchestrator/internal/registry"
 	"github.com/ota-takeru/orchestrator/internal/storage"
+	"github.com/ota-takeru/orchestrator/internal/toolchains"
 )
 
 type Server struct {
@@ -115,6 +123,7 @@ func requiresLocalToken(r *http.Request) bool {
 		return false
 	}
 	return r.URL.Path == "/api/env/bindings" ||
+		r.URL.Path == "/api/projects" ||
 		strings.HasSuffix(r.URL.Path, "/env/bindings") ||
 		strings.Contains(r.URL.Path, "/approve") ||
 		strings.HasSuffix(r.URL.Path, "/tasks/materialize") ||
@@ -242,12 +251,16 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "not_found", "unknown projects route")
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
-		return
-	}
 	if s.hub == nil || s.hub.Registry == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "project_registry_unavailable", "project registry is not configured")
+		return
+	}
+	if r.Method == http.MethodPost {
+		s.handleProjectCreate(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST is required")
 		return
 	}
 	projects, err := s.hub.Registry.ListProjects(r.Context())
@@ -255,7 +268,362 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "projects_failed", err.Error())
 		return
 	}
-	writeAPIJSON(w, http.StatusOK, map[string]any{"projects": projects})
+	current := s.currentProjectSummary(r.Context())
+	if current != nil {
+		for _, project := range projects {
+			if filepath.Clean(project.ProjectRoot) == filepath.Clean(current.ProjectRoot) {
+				current.Registered = true
+				current = nil
+				break
+			}
+		}
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{
+		"projects":        projects,
+		"current_project": current,
+		"runtime_options": detectRuntimeOptions(),
+	})
+}
+
+type projectCreateRequest struct {
+	DisplayName              string                    `json:"display_name"`
+	ProjectRoot              string                    `json:"project_root"`
+	Concept                  string                    `json:"concept"`
+	AuthorityRuntime         registry.AuthorityRuntime `json:"authority_runtime"`
+	WSLDistro                string                    `json:"wsl_distro"`
+	WindowsDisplayRoot       string                    `json:"windows_display_root"`
+	GenerateInitialArtifacts bool                      `json:"generate_initial_artifacts"`
+}
+
+type projectRuntimeOption struct {
+	AuthorityRuntime registry.AuthorityRuntime `json:"authority_runtime"`
+	Label            string                    `json:"label"`
+	Description      string                    `json:"description"`
+	Detected         bool                      `json:"detected"`
+	Available        bool                      `json:"available"`
+	Recommended      bool                      `json:"recommended"`
+	WSLDistro        string                    `json:"wsl_distro,omitempty"`
+}
+
+type currentProjectSummary struct {
+	ID                   string                    `json:"id"`
+	DisplayName          string                    `json:"display_name"`
+	AuthorityRuntime     registry.AuthorityRuntime `json:"authority_runtime"`
+	PrimaryEnvironmentID string                    `json:"primary_environment_id"`
+	ProjectRoot          string                    `json:"project_root"`
+	Status               string                    `json:"status"`
+	Registered           bool                      `json:"registered"`
+}
+
+func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
+	var input projectCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	result, err := s.createProject(r.Context(), input)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "project_create_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) createProject(ctx context.Context, input projectCreateRequest) (map[string]any, error) {
+	name := strings.TrimSpace(input.DisplayName)
+	if name == "" {
+		return nil, fmt.Errorf("project name is required")
+	}
+	concept := strings.TrimSpace(input.Concept)
+	if concept == "" {
+		return nil, fmt.Errorf("concept is required")
+	}
+	root, err := prepareProjectRoot(ctx, input.ProjectRoot)
+	if err != nil {
+		return nil, err
+	}
+	option, err := selectedRuntimeOption(input)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureGitignoreDefaults(root); err != nil {
+		return nil, err
+	}
+	initResult, err := preflight.InitProject(ctx, root, concept)
+	if err != nil {
+		return nil, err
+	}
+	toolchainReport := toolchains.RunDoctor(ctx, initResult.PreflightReport.Environment, toolchains.Options{IncludeCodex: false})
+	db, dbPath, err := openProjectDataDB(ctx, initResult.ProjectRoot, "")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	projectRecord, err := db.SaveProjectInit(ctx, storage.ProjectInitInput{
+		Name:            name,
+		RootPath:        initResult.ProjectRoot,
+		Environment:     initResult.PreflightReport.Environment,
+		PreflightReport: initResult.PreflightReport,
+		ToolchainReport: &toolchainReport,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := db.SaveToolchainReport(ctx, projectRecord.ID, toolchainReport); err != nil {
+		return nil, err
+	}
+	artifacts := []storage.ArtifactVersionRecord{}
+	if input.GenerateInitialArtifacts {
+		artifacts, err = saveGeneratedArtifacts(ctx, db, projectRecord.ID, initResult.ProjectRoot, artifactgen.BuildInitialArtifacts(initResult.ProjectRoot, concept, true))
+		if err != nil {
+			return nil, err
+		}
+	}
+	add := registry.AddProjectInput{
+		DisplayName:      name,
+		AuthorityRuntime: option.AuthorityRuntime,
+		DataRoot:         filepath.Dir(dbPath),
+	}
+	switch option.AuthorityRuntime {
+	case registry.AuthorityWindows:
+		add.ProjectRoot = initResult.ProjectRoot
+	case registry.AuthorityWSL:
+		add.WSLDistro = option.WSLDistro
+		add.WSLProjectRoot = initResult.ProjectRoot
+		add.WindowsDisplayRoot = strings.TrimSpace(input.WindowsDisplayRoot)
+	default:
+		return nil, fmt.Errorf("unsupported authority runtime: %s", option.AuthorityRuntime)
+	}
+	project, err := s.hub.Registry.AddProject(ctx, add)
+	if err != nil {
+		return nil, err
+	}
+	dashboard, err := db.LoadProjectDashboard(ctx, projectRecord.ID, 20)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"project":          project,
+		"project_record":   projectRecord,
+		"database_path":    dbPath,
+		"init_result":      initResult,
+		"toolchain_report": toolchainReport,
+		"artifacts":        artifacts,
+		"dashboard":        dashboard,
+	}, nil
+}
+
+func openProjectDataDB(ctx context.Context, projectRoot string, dataRoot string) (*storage.DB, string, error) {
+	if strings.TrimSpace(dataRoot) == "" {
+		dataRoot = filepath.Join(projectRoot, "orchestrator-data")
+	}
+	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
+		return nil, "", err
+	}
+	dbPath := filepath.Join(dataRoot, "devos.sqlite")
+	db, err := storage.Open(ctx, dbPath)
+	if err != nil {
+		return nil, "", err
+	}
+	migrations, err := storage.RegisteredMigrations()
+	if err != nil {
+		_ = db.Close()
+		return nil, "", err
+	}
+	if err := db.Migrate(ctx, migrations); err != nil {
+		_ = db.Close()
+		return nil, "", err
+	}
+	return db, dbPath, nil
+}
+
+func prepareProjectRoot(ctx context.Context, projectRoot string) (string, error) {
+	root := strings.TrimSpace(projectRoot)
+	if root == "" {
+		return "", fmt.Errorf("project root is required")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	if info, err := os.Stat(abs); err == nil {
+		if !info.IsDir() {
+			return "", fmt.Errorf("project root is not a directory: %s", abs)
+		}
+	} else if os.IsNotExist(err) {
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			return "", err
+		}
+	} else {
+		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(abs, ".git")); os.IsNotExist(err) {
+		cmd := exec.CommandContext(ctx, "git", "-C", abs, "init")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git init failed: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+	} else if err != nil {
+		return "", err
+	}
+	config := exec.CommandContext(ctx, "git", "-C", abs, "config", "core.autocrlf", "false")
+	if out, err := config.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git config core.autocrlf failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return abs, nil
+}
+
+func ensureGitignoreDefaults(root string) error {
+	path := filepath.Join(root, ".gitignore")
+	existing := ""
+	if raw, err := os.ReadFile(path); err == nil {
+		existing = string(raw)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	required := []string{".env.local", ".env.*", "orchestrator-data/", ".devagent-worktrees/"}
+	var additions []string
+	for _, entry := range required {
+		if !gitignoreContains(existing, entry) {
+			additions = append(additions, entry)
+		}
+	}
+	if len(additions) == 0 {
+		return ensureGitattributesDefault(root)
+	}
+	var b strings.Builder
+	b.WriteString(existing)
+	if existing != "" && !strings.HasSuffix(existing, "\n") {
+		b.WriteString("\n")
+	}
+	for _, entry := range additions {
+		b.WriteString(entry)
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	return ensureGitattributesDefault(root)
+}
+
+func gitignoreContains(content string, entry string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == entry {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureGitattributesDefault(root string) error {
+	path := filepath.Join(root, ".gitattributes")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.WriteFile(path, []byte("* text=auto eol=lf\n"), 0o644)
+}
+
+func saveGeneratedArtifacts(ctx context.Context, db *storage.DB, projectID string, root string, artifacts []artifactgen.Artifact) ([]storage.ArtifactVersionRecord, error) {
+	records := make([]storage.ArtifactVersionRecord, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		absPath := filepath.Join(root, filepath.FromSlash(artifact.Path))
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(absPath, artifact.Content, 0o644); err != nil {
+			return nil, err
+		}
+		record, err := db.SaveArtifactVersion(ctx, storage.ArtifactVersionInput{
+			ProjectID:    projectID,
+			ArtifactType: artifact.Type,
+			Path:         filepath.ToSlash(artifact.Path),
+			Content:      artifact.Content,
+			Status:       "proposed",
+		})
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+func selectedRuntimeOption(input projectCreateRequest) (projectRuntimeOption, error) {
+	selected := input.AuthorityRuntime
+	if strings.TrimSpace(string(selected)) == "" {
+		for _, option := range detectRuntimeOptions() {
+			if option.Recommended && option.Available {
+				return option, nil
+			}
+		}
+		return projectRuntimeOption{}, fmt.Errorf("authority runtime is required")
+	}
+	for _, option := range detectRuntimeOptions() {
+		if option.AuthorityRuntime == selected && option.Available {
+			if option.AuthorityRuntime == registry.AuthorityWSL && strings.TrimSpace(input.WSLDistro) != "" {
+				option.WSLDistro = strings.TrimSpace(input.WSLDistro)
+			}
+			return option, nil
+		}
+	}
+	return projectRuntimeOption{}, fmt.Errorf("authority runtime %s is not available from this server", selected)
+}
+
+func detectRuntimeOptions() []projectRuntimeOption {
+	if runtime.GOOS == "windows" {
+		return []projectRuntimeOption{{
+			AuthorityRuntime: registry.AuthorityWindows,
+			Label:            "Windows",
+			Description:      "Create and operate the project from this Windows host.",
+			Detected:         true,
+			Available:        true,
+			Recommended:      true,
+		}}
+	}
+	if distro := strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")); distro != "" {
+		return []projectRuntimeOption{{
+			AuthorityRuntime: registry.AuthorityWSL,
+			Label:            "WSL",
+			Description:      "Create and operate the project inside the current WSL distribution.",
+			Detected:         true,
+			Available:        true,
+			Recommended:      true,
+			WSLDistro:        distro,
+		}}
+	}
+	return []projectRuntimeOption{{
+		AuthorityRuntime: registry.AuthorityWSL,
+		Label:            "WSL",
+		Description:      "WSL is not detected for this server process.",
+		Detected:         false,
+		Available:        false,
+	}}
+}
+
+func (s *Server) currentProjectSummary(ctx context.Context) *currentProjectSummary {
+	if s == nil || s.db == nil || strings.TrimSpace(s.projectID) == "" {
+		return nil
+	}
+	setup, err := s.db.LoadSetupStatus(ctx, s.projectID)
+	if err != nil {
+		return nil
+	}
+	authority := registry.AuthorityWindows
+	primary := "windows-main"
+	if strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "" {
+		authority = registry.AuthorityWSL
+		primary = "wsl-main"
+	}
+	return &currentProjectSummary{
+		ID:                   s.projectID,
+		DisplayName:          filepath.Base(setup.ProjectRoot),
+		AuthorityRuntime:     authority,
+		PrimaryEnvironmentID: primary,
+		ProjectRoot:          setup.ProjectRoot,
+		Status:               "active",
+		Registered:           false,
+	}
 }
 
 func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {

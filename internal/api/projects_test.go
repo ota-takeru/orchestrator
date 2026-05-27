@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -73,6 +76,66 @@ func TestProjectsAPIListsEmptyProjectsAsArray(t *testing.T) {
 	}
 	if len(body.Projects) != 0 {
 		t.Fatalf("projects = %#v", body.Projects)
+	}
+}
+
+func TestProjectsAPICreatesProjectFromUI(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for project creation")
+	}
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+	root := filepath.Join(t.TempDir(), "new-app")
+	body := []byte(`{
+		"display_name":"New App",
+		"project_root":` + quoteJSON(root) + `,
+		"concept":"Build a small local project from the UI.",
+		"authority_runtime":"wsl",
+		"wsl_distro":"Ubuntu",
+		"generate_initial_artifacts":true
+	}`)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(body))
+	NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"})).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Project struct {
+			DisplayName      string                    `json:"display_name"`
+			AuthorityRuntime registry.AuthorityRuntime `json:"authority_runtime"`
+			ProjectRoot      string                    `json:"project_root"`
+			WSLDistro        string                    `json:"wsl_distro"`
+		} `json:"project"`
+		Artifacts []struct {
+			ArtifactType string `json:"artifact_type"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Project.DisplayName != "New App" || created.Project.AuthorityRuntime != registry.AuthorityWSL || created.Project.WSLDistro != "Ubuntu" {
+		t.Fatalf("project = %#v", created.Project)
+	}
+	if created.Project.ProjectRoot != root {
+		t.Fatalf("project root = %s", created.Project.ProjectRoot)
+	}
+	if len(created.Artifacts) != 4 {
+		t.Fatalf("artifacts = %#v", created.Artifacts)
+	}
+	for _, rel := range []string{".git", ".gitattributes", ".gitignore", ".devagent/concept.md", ".devagent/prd.md", ".devagent/architecture.md", ".devagent/roadmap.yaml", ".devagent/tasks/TASK-001.yaml", "orchestrator-data/devos.sqlite"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("%s missing: %v", rel, err)
+		}
+	}
+	projects, err := regDB.ListProjects(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].DisplayName != "New App" {
+		t.Fatalf("projects = %#v", projects)
 	}
 }
 
@@ -209,6 +272,11 @@ func openAPIRegistry(t *testing.T) *registry.DB {
 		}
 	})
 	return regDB
+}
+
+func quoteJSON(value string) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
 }
 
 type apiFakeAuthority struct {

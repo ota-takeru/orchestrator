@@ -32,6 +32,7 @@
 - `.gitattributes`、`.gitignore`、Go moduleを持つ一時targetで、`devos init`、`spec`、`plan`、artifact承認、`tasks materialize`、`work start --adapter fake`、review/merge approval、merge queue fake reverifyまでを再実行し、`TASK-001` が `merged`、`devos check` violationsなし、open Inboxなしになることを確認しました。
 - Change Request一時target回帰として、`change request`、`change analyze`、`change approve`、`work start` によるFeature Request planning合流、scope Decision作成、`promote_task_group_proposal` 承認、execution queue投入、fake worker実行までを確認しました。最終taskは `ready_for_human_review`、`devos check` violationsなし、open Inboxなしです。
 - Change Requestの分析/承認をLocal API、multi-project authority bridge、React UIへ接続しました。WSL projectでは `devos change analyze` / `devos change approve` のcommand bridge経由で処理します。
+- Windows native追加E2Eの実行可否を確認し、PowerShell / cmd / Codex CLI 0.133.0 は利用可能でしたが、Windows PATH上のGoと `devos` が未検出でした。automatic toolchain installationはスコープ外のため、real verification commandを持つWindows targetでの追加E2EはWindows側Go/devos準備後に実施する残検証として扱います。
 - 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`、`git diff --check`。
 - 残る実機検証: この環境ではWindows native targetを直接実行できないため、real verification commandを持つWindows targetでの追加E2Eは継続確認として残ります。
 

@@ -519,7 +519,7 @@ function ProjectListSidebar({
   onNewProject: () => void;
 }) {
   return (
-    <aside className="project-sidebar">
+    <aside className="project-sidebar" aria-label="Projects">
       <div className="panel compact">
         <div className="panel-heading">
           <h2>Projects</h2>
@@ -574,7 +574,7 @@ function ProjectSwitcher({
 }) {
   const disabled = projects.length === 0 && !currentProject;
   return (
-    <select className="project-switcher" value={selectedProjectID} onChange={(event) => onSelect(event.target.value)} disabled={disabled}>
+    <select className="project-switcher" aria-label="Project" value={selectedProjectID} onChange={(event) => onSelect(event.target.value)} disabled={disabled}>
       {currentProject ? <option value="">Current Project</option> : null}
       {!currentProject && projects.length === 0 ? <option value="">No project</option> : null}
       {projects.map((project) => (
@@ -1120,7 +1120,7 @@ function DependencyRiskPanel({
       </div>
       <div className="compact-form">
         <input value={dependencyName} onChange={(event) => setDependencyName(event.target.value)} placeholder="package name" />
-        <select value={dependencyManager} onChange={(event) => setDependencyManager(event.target.value)}>
+        <select aria-label="Package manager" value={dependencyManager} onChange={(event) => setDependencyManager(event.target.value)}>
           <option value="npm">npm</option>
           <option value="pnpm">pnpm</option>
           <option value="go">go</option>
@@ -1128,12 +1128,12 @@ function DependencyRiskPanel({
           <option value="cargo">cargo</option>
           <option value="other">other</option>
         </select>
-        <select value={dependencyType} onChange={(event) => setDependencyType(event.target.value)}>
+        <select aria-label="Dependency type" value={dependencyType} onChange={(event) => setDependencyType(event.target.value)}>
           <option value="production">production</option>
           <option value="development">development</option>
           <option value="tool">tool</option>
         </select>
-        <select value={dependencyRisk} onChange={(event) => setDependencyRisk(event.target.value)}>
+        <select aria-label="Dependency risk" value={dependencyRisk} onChange={(event) => setDependencyRisk(event.target.value)}>
           <option value="low">low</option>
           <option value="medium">medium</option>
           <option value="high">high</option>
@@ -1206,7 +1206,7 @@ function InboxPanel({
         </div>
         <Inbox size={20} className="text-zinc-500" />
       </div>
-      <div className="table-shell">
+      <div className="table-shell" tabIndex={0} aria-label="Open inbox items">
         <table>
           <thead>
             <tr>
@@ -1214,7 +1214,7 @@ function InboxPanel({
               <th>Type</th>
               <th>Title</th>
               <th>Source</th>
-              <th />
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>

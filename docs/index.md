@@ -34,6 +34,7 @@
 次の文書は、このリポジトリをCodexで実装していくための運用ガイドです。Orchestratorとして作る製品の正規仕様ではありません。
 
 - [codex-implementation-workflow.md](codex-implementation-workflow.md) - Codexへの依頼単位、context選択、検証、レビュー、止まる条件
+- [ui-quality-workflow.md](ui-quality-workflow.md) - Storybook / Playwright / MCP / axe-core を使ったUI実装・検証の運用ガイド
 
 この区分の文書は、作業手順やプロンプト設計には使えますが、製品仕様、状態遷移、DB schema、Decision Gate、platform contractを定義しません。正規仕様と衝突する場合は "Canonical Implementation Docs" を優先します。
 

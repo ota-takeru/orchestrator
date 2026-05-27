@@ -79,6 +79,11 @@ select {
   font-size: 12px;
 }
 
+.project-row.selected small,
+.runtime-choice.selected small {
+  color: #475467;
+}
+
 .project-status {
   display: flex;
   align-items: flex-start;

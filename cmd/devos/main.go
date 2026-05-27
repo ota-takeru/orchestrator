@@ -1590,6 +1590,40 @@ func runArtifacts(ctx context.Context, args []string, stdout io.Writer, stderr i
 		}
 		fmt.Fprintf(stdout, "Artifact reviewed: %s v%d %s\n", record.ArtifactID, record.Version, record.Status)
 		return 0
+	case "revise":
+		fs := flag.NewFlagSet("artifacts revise", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		contentStdin := fs.Bool("content-stdin", false, "read revised artifact content from stdin")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("artifact id is required"))
+		}
+		if !*contentStdin {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("--content-stdin is required"))
+		}
+		content, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "artifact_revise_failed", err)
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "artifact_revise_failed", err)
+		}
+		defer db.Close()
+		record, err := db.SaveArtifactRevision(ctx, projectID, fs.Arg(0), content)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "artifact_revise_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, record, 0)
+		}
+		fmt.Fprintf(stdout, "Artifact revision saved: %s v%d %s\n", record.ArtifactID, record.Version, record.Status)
+		return 0
 	case "trusted":
 		return runArtifactsTrusted(ctx, args[1:], stdout)
 	case "check":
@@ -3927,6 +3961,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos artifacts trusted [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
+	fmt.Fprintln(w, "  devos artifacts revise [--project-root PATH] [--data-root PATH] --content-stdin [--json] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")

@@ -195,11 +195,24 @@ export async function startWork(projectID?: string, adapter = "fake"): Promise<W
   });
 }
 
-export async function approveArtifact(artifactID: string, version: number, projectID?: string): Promise<void> {
+export async function approveArtifact(
+  artifactID: string,
+  version: number,
+  projectID?: string,
+  status: "approved" | "approved_with_notes" | "rejected" = "approved",
+  notes = "Approved from DevOS UI"
+): Promise<void> {
   const path = projectID
     ? `/api/projects/${encodeURIComponent(projectID)}/artifacts/${encodeURIComponent(artifactID)}/approve`
     : `/api/artifacts/${encodeURIComponent(artifactID)}/approve`;
-  await postJSON(path, { version, status: "approved", notes: "Approved from DevOS UI" });
+  await postJSON(path, { version, status, notes });
+}
+
+export async function reviseArtifact(artifactID: string, content: string, projectID?: string): Promise<void> {
+  const path = projectID
+    ? `/api/projects/${encodeURIComponent(projectID)}/artifacts/${encodeURIComponent(artifactID)}/revise`
+    : `/api/artifacts/${encodeURIComponent(artifactID)}/revise`;
+  await postJSON(path, { content });
 }
 
 export async function materializeTasks(projectID?: string): Promise<{ tasks?: TaskRecord[] }> {

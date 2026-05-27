@@ -184,6 +184,51 @@ func TestListArtifactsWithContentReturnsLatestSnapshot(t *testing.T) {
 	}
 }
 
+func TestSaveArtifactRevisionCreatesNewProposedVersionAndWritesProjectFile(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	root := t.TempDir()
+	if _, err := db.SQL().ExecContext(ctx, "UPDATE projects SET root_path = ? WHERE id = ?", root, "PROJECT-001"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD\n\nFirst draft."),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveArtifactVersion(ctx, "PROJECT-001", first.ArtifactID, first.Version, "rejected", "Needs metrics."); err != nil {
+		t.Fatal(err)
+	}
+
+	revised, err := db.SaveArtifactRevision(ctx, "PROJECT-001", first.ArtifactID, []byte("# PRD\n\nSecond draft with metrics."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revised.Version != 2 || revised.Status != "proposed" {
+		t.Fatalf("revised = %#v", revised)
+	}
+	content, err := os.ReadFile(filepath.Join(root, ".devagent", "prd.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "# PRD\n\nSecond draft with metrics." {
+		t.Fatalf("project artifact content = %q", string(content))
+	}
+	var firstStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM artifact_versions WHERE id = ?", first.VersionID).Scan(&firstStatus); err != nil {
+		t.Fatal(err)
+	}
+	if firstStatus != "superseded" {
+		t.Fatalf("first status = %s", firstStatus)
+	}
+}
+
 func TestApproveArtifactVersionSupersedesPreviousApprovedVersion(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

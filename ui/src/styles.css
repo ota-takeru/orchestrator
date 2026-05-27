@@ -639,6 +639,98 @@ button:disabled {
   max-height: 360px;
 }
 
+.markdown-preview {
+  max-height: 430px;
+  overflow: auto;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 14px 16px;
+  color: #182230;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.markdown-preview h3,
+.markdown-preview h4,
+.markdown-preview h5,
+.markdown-preview p,
+.markdown-preview ul,
+.markdown-preview pre {
+  margin: 0;
+}
+
+.markdown-preview h3 {
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.markdown-preview h4 {
+  margin-top: 16px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.markdown-preview h5 {
+  margin-top: 14px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.markdown-preview p,
+.markdown-preview ul,
+.markdown-preview pre {
+  margin-top: 10px;
+}
+
+.markdown-preview ul {
+  padding-left: 18px;
+}
+
+.markdown-preview code {
+  border-radius: 5px;
+  background: #eef2f6;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.markdown-code {
+  overflow: auto;
+  border-radius: 8px;
+  background: #101828;
+  color: #f8fafc;
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.artifact-review-notes,
+.artifact-revision-editor {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.artifact-review-notes textarea,
+.artifact-revision-editor textarea {
+  font-weight: 400;
+}
+
+.artifact-revision-editor textarea {
+  min-height: 220px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.artifact-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .artifact-actions {
   display: flex;
   flex-wrap: wrap;

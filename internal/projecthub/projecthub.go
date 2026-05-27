@@ -29,6 +29,7 @@ type ProjectAuthority interface {
 	StartWork(ctx context.Context, project registry.RegisteredProject, input storage.WorkStartInput) (any, error)
 	Artifacts(ctx context.Context, project registry.RegisteredProject, artifactType string) (any, error)
 	ApproveArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, version int, status string, notes string) (any, error)
+	ReviseArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, content string) (any, error)
 	MaterializeTasks(ctx context.Context, project registry.RegisteredProject) (any, error)
 	ApproveInboxItem(ctx context.Context, project registry.RegisteredProject, inboxID string, option string, notes string) (any, error)
 	SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error)
@@ -221,6 +222,15 @@ func (WindowsLocalAuthority) ApproveArtifact(ctx context.Context, project regist
 	}
 	defer db.Close()
 	return db.ApproveArtifactVersion(ctx, projectID, artifactID, version, status, notes)
+}
+
+func (WindowsLocalAuthority) ReviseArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, content string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.SaveArtifactRevision(ctx, projectID, artifactID, []byte(content))
 }
 
 func (WindowsLocalAuthority) MaterializeTasks(ctx context.Context, project registry.RegisteredProject) (any, error) {
@@ -549,6 +559,31 @@ func (a WslAuthority) ApproveArtifact(ctx context.Context, project registry.Regi
 	}
 	if err := a.runJSONWithTrailing(ctx, project, &body, args, artifactID); err != nil {
 		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) ReviseArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, content string) (any, error) {
+	executor, ok := a.executor.(StdinCommandExecutor)
+	if !ok {
+		return nil, &AuthorityError{Code: "wsl_stdin_missing", Message: "wsl command executor does not support stdin for artifact revision"}
+	}
+	base, err := a.commandArgs(project, []string{"artifacts", "revise", "--content-stdin"}, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	stdout, stderr, exitCode, runErr := executor.RunWithInput(runCtx, content, "wsl.exe", base...)
+	if runCtx.Err() == context.DeadlineExceeded {
+		return nil, &AuthorityError{Code: "wsl_timeout", Message: "wsl authority command timed out"}
+	}
+	if runErr != nil {
+		return nil, &AuthorityError{Code: "wsl_command_failed", Message: runErr.Error(), ExitCode: exitCode, Stderr: strings.TrimSpace(string(stderr))}
+	}
+	var body map[string]any
+	if err := json.Unmarshal(stdout, &body); err != nil {
+		return nil, &AuthorityError{Code: "wsl_invalid_json", Message: err.Error(), Stderr: strings.TrimSpace(string(stdout))}
 	}
 	return body, nil
 }

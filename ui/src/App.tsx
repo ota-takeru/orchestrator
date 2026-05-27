@@ -1,8 +1,8 @@
 import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChecks, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, requestDependencyApproval, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
-import type { CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
+import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, requestDependencyApproval, reviseArtifact, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
+import type { ArtifactRecord, CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -291,16 +291,31 @@ function App() {
     }
   };
 
-  const submitApproveArtifact = async (artifactID: string, version: number) => {
-    setArtifactActioning(`approve:${artifactID}`);
+  const submitReviewArtifact = async (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => {
+    setArtifactActioning(`${status}:${artifactID}`);
     setError("");
     setNotice("");
     try {
-      await approveArtifact(artifactID, version, selectedProjectID || undefined);
+      await approveArtifact(artifactID, version, selectedProjectID || undefined, status, notes);
       await refresh();
-      setNotice("Artifact approved.");
+      setNotice(status === "rejected" ? "Artifact changes requested." : "Artifact approved.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Artifact approval failed");
+      setError(err instanceof Error ? err.message : "Artifact review failed");
+    } finally {
+      setArtifactActioning("");
+    }
+  };
+
+  const submitReviseArtifact = async (artifactID: string, content: string) => {
+    setArtifactActioning(`revise:${artifactID}`);
+    setError("");
+    setNotice("");
+    try {
+      await reviseArtifact(artifactID, content, selectedProjectID || undefined);
+      await refresh();
+      setNotice("Artifact revision saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Artifact revision failed");
     } finally {
       setArtifactActioning("");
     }
@@ -464,7 +479,8 @@ function App() {
               workActioning={workActioning}
               onStartWork={submitWorkStart}
               artifactActioning={artifactActioning}
-              onApproveArtifact={submitApproveArtifact}
+              onReviewArtifact={submitReviewArtifact}
+              onReviseArtifact={submitReviseArtifact}
               onMaterializeTasks={submitMaterializeTasks}
             />
           ) : (
@@ -622,7 +638,8 @@ function SelectedProjectDashboard({
   workActioning,
   onStartWork,
   artifactActioning,
-  onApproveArtifact,
+  onReviewArtifact,
+  onReviseArtifact,
   onMaterializeTasks
 }: {
   data: DashboardData;
@@ -636,13 +653,14 @@ function SelectedProjectDashboard({
   workActioning: string;
   onStartWork: (adapter: "fake" | "real-codex") => void;
   artifactActioning: string;
-  onApproveArtifact: (artifactID: string, version: number) => void;
+  onReviewArtifact: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
+  onReviseArtifact: (artifactID: string, content: string) => void;
   onMaterializeTasks: () => void;
 }) {
   return (
     <>
       {selectedProject ? <ProjectStatusPanel project={selectedProject} /> : null}
-      <ArtifactsPanel artifacts={data.artifacts} actioning={artifactActioning} onApprove={onApproveArtifact} onMaterialize={onMaterializeTasks} />
+      <ArtifactsPanel artifacts={data.artifacts} actioning={artifactActioning} onReview={onReviewArtifact} onRevise={onReviseArtifact} onMaterialize={onMaterializeTasks} />
       <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
       <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
@@ -1463,14 +1481,19 @@ function TrustedArtifactsPanel({ artifacts }: { artifacts: DashboardData["truste
 function ArtifactsPanel({
   artifacts,
   actioning,
-  onApprove,
+  onReview,
+  onRevise,
   onMaterialize
 }: {
   artifacts: DashboardData["artifacts"];
   actioning: string;
-  onApprove: (artifactID: string, version: number) => void;
+  onReview: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
+  onRevise: (artifactID: string, content: string) => void;
   onMaterialize: () => void;
 }) {
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [editingArtifacts, setEditingArtifacts] = useState<Record<string, boolean>>({});
+  const [revisionContent, setRevisionContent] = useState<Record<string, string>>({});
   const pendingCount = artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved").length;
   return (
     <section className="panel">
@@ -1489,6 +1512,12 @@ function ArtifactsPanel({
       <StackEmpty empty={artifacts.length === 0} label="No artifacts">
         {artifacts.map((artifact) => {
           const canApprove = artifact.latest_version ? artifact.approved_version !== artifact.latest_version && artifact.status !== "approved" : false;
+          const notes = reviewNotes[artifact.artifact_id] ?? "";
+          const trimmedNotes = notes.trim();
+          const approveStatus = trimmedNotes ? "approved_with_notes" : "approved";
+          const isEditing = editingArtifacts[artifact.artifact_id] ?? false;
+          const draftContent = revisionContent[artifact.artifact_id] ?? artifact.content ?? "";
+          const hasRevisionChange = draftContent !== (artifact.content ?? "");
           return (
             <div className="artifact-review-card" key={artifact.artifact_id}>
               <div className="artifact-review-header">
@@ -1499,26 +1528,178 @@ function ArtifactsPanel({
                   </small>
                   <small>{artifact.path}</small>
                 </div>
+              </div>
+              <ArtifactContentPreview artifact={artifact} />
+              {isEditing ? (
+                <label className="artifact-revision-editor">
+                  <span>Revision content</span>
+                  <textarea
+                    value={draftContent}
+                    onChange={(event) => setRevisionContent((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
+                    rows={10}
+                    disabled={actioning !== ""}
+                  />
+                </label>
+              ) : null}
+              <label className="artifact-review-notes">
+                <span>Review notes</span>
+                <textarea
+                  value={notes}
+                  onChange={(event) => setReviewNotes((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
+                  placeholder="Approval notes or requested changes"
+                  rows={3}
+                  disabled={!canApprove || actioning !== ""}
+                />
+              </label>
+              <div className="artifact-review-actions">
                 <button
                   className="secondary-button no-margin"
                   type="button"
-                  onClick={() => onApprove(artifact.artifact_id, artifact.latest_version || 1)}
+                  onClick={() => {
+                    setRevisionContent((previous) => ({ ...previous, [artifact.artifact_id]: previous[artifact.artifact_id] ?? artifact.content ?? "" }));
+                    setEditingArtifacts((previous) => ({ ...previous, [artifact.artifact_id]: !isEditing }));
+                  }}
                   disabled={!canApprove || actioning !== ""}
                 >
-                  {actioning === `approve:${artifact.artifact_id}` ? "Approving" : "Approve latest"}
+                  {isEditing ? "Close editor" : "Edit revision"}
+                </button>
+                {isEditing ? (
+                  <button
+                    className="secondary-button no-margin"
+                    type="button"
+                    onClick={() => onRevise(artifact.artifact_id, draftContent)}
+                    disabled={!canApprove || !draftContent.trim() || !hasRevisionChange || actioning !== ""}
+                  >
+                    {actioning === `revise:${artifact.artifact_id}` ? "Saving" : "Save revision"}
+                  </button>
+                ) : null}
+                <button
+                  className="secondary-button no-margin"
+                  type="button"
+                  onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, approveStatus, trimmedNotes || "Approved from DevOS UI")}
+                  disabled={!canApprove || actioning !== ""}
+                >
+                  {actioning === `${approveStatus}:${artifact.artifact_id}` ? "Approving" : trimmedNotes ? "Approve with notes" : "Approve latest"}
+                </button>
+                <button
+                  className="secondary-button no-margin"
+                  type="button"
+                  onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, "rejected", trimmedNotes)}
+                  disabled={!canApprove || !trimmedNotes || actioning !== ""}
+                >
+                  {actioning === `rejected:${artifact.artifact_id}` ? "Requesting" : "Request changes"}
                 </button>
               </div>
-              {artifact.content ? (
-                <pre className="artifact-content artifact-content-review">{artifact.content.slice(0, 6000)}</pre>
-              ) : (
-                <div className="empty-stack">Content preview unavailable</div>
-              )}
             </div>
           );
         })}
       </StackEmpty>
     </section>
   );
+}
+
+function ArtifactContentPreview({ artifact }: { artifact: ArtifactRecord }) {
+  if (!artifact.content) {
+    return <div className="empty-stack">Content preview unavailable</div>;
+  }
+  const content = artifact.content.slice(0, 6000);
+  if (artifact.path?.toLowerCase().endsWith(".md")) {
+    return <div className="markdown-preview">{renderMarkdown(content)}</div>;
+  }
+  return <pre className="artifact-content artifact-content-review">{content}</pre>;
+}
+
+function renderMarkdown(content: string): ReactNode[] {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const nodes: ReactNode[] = [];
+  let paragraph: string[] = [];
+  let listItems: string[] = [];
+  let codeLines: string[] = [];
+  let inCode = false;
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    nodes.push(<p key={`p-${nodes.length}`}>{renderInline(paragraph.join(" "))}</p>);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    nodes.push(
+      <ul key={`ul-${nodes.length}`}>
+        {listItems.map((item, index) => (
+          <li key={`${index}-${item}`}>{renderInline(item)}</li>
+        ))}
+      </ul>
+    );
+    listItems = [];
+  };
+  const flushCode = () => {
+    nodes.push(
+      <pre className="markdown-code" key={`code-${nodes.length}`}>
+        {codeLines.join("\n")}
+      </pre>
+    );
+    codeLines = [];
+  };
+
+  lines.forEach((line) => {
+    if (line.trim().startsWith("```")) {
+      if (inCode) {
+        flushCode();
+        inCode = false;
+      } else {
+        flushParagraph();
+        flushList();
+        inCode = true;
+      }
+      return;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      return;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      return;
+    }
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      nodes.push(renderMarkdownHeading(heading[1].length, heading[2], nodes.length));
+      return;
+    }
+    const unordered = /^\s*[-*]\s+(.+)$/.exec(line);
+    const ordered = /^\s*\d+\.\s+(.+)$/.exec(line);
+    if (unordered || ordered) {
+      flushParagraph();
+      listItems.push((unordered ?? ordered)?.[1] ?? line.trim());
+      return;
+    }
+    flushList();
+    paragraph.push(line.trim());
+  });
+
+  if (inCode) flushCode();
+  flushParagraph();
+  flushList();
+  return nodes;
+}
+
+function renderMarkdownHeading(level: number, text: string, key: number) {
+  if (level <= 1) return <h3 key={`h-${key}`}>{renderInline(text)}</h3>;
+  if (level === 2) return <h4 key={`h-${key}`}>{renderInline(text)}</h4>;
+  return <h5 key={`h-${key}`}>{renderInline(text)}</h5>;
+}
+
+function renderInline(text: string): ReactNode[] {
+  return text.split(/(`[^`]+`)/g).map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={`${index}-${part}`}>{part.slice(1, -1)}</code>;
+    }
+    return <span key={`${index}-${part}`}>{part}</span>;
+  });
 }
 
 function PathMappingsPanel({ mappings }: { mappings: DashboardData["pathMappings"] }) {

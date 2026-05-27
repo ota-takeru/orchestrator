@@ -330,6 +330,54 @@ WHERE id = ?`, status, approvedVersionID, now, artifactID); err != nil {
 	return record, nil
 }
 
+func (db *DB) SaveArtifactRevision(ctx context.Context, projectID string, artifactID string, content []byte) (ArtifactVersionRecord, error) {
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(artifactID) == "" {
+		return ArtifactVersionRecord{}, fmt.Errorf("project id and artifact id are required")
+	}
+	var root string
+	if err := db.sql.QueryRowContext(ctx, "SELECT root_path FROM projects WHERE id = ?", projectID).Scan(&root); err != nil {
+		return ArtifactVersionRecord{}, err
+	}
+	var artifactType ArtifactType
+	var oldLatestVersionID string
+	var artifactPath string
+	if err := db.sql.QueryRowContext(ctx, `
+SELECT a.artifact_type, COALESCE(a.latest_version_id, ''), COALESCE(latest.path, '')
+FROM artifacts a
+LEFT JOIN artifact_versions latest ON latest.id = a.latest_version_id
+WHERE a.project_id = ? AND a.id = ?`, projectID, artifactID).Scan(&artifactType, &oldLatestVersionID, &artifactPath); err != nil {
+		if err == sql.ErrNoRows {
+			return ArtifactVersionRecord{}, fmt.Errorf("artifact not found: %s", artifactID)
+		}
+		return ArtifactVersionRecord{}, err
+	}
+	if strings.TrimSpace(artifactPath) == "" {
+		return ArtifactVersionRecord{}, fmt.Errorf("artifact path is missing: %s", artifactID)
+	}
+	if err := writeProjectArtifactFile(root, artifactPath, content); err != nil {
+		return ArtifactVersionRecord{}, err
+	}
+	record, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    projectID,
+		ArtifactType: artifactType,
+		Path:         filepath.ToSlash(artifactPath),
+		Content:      content,
+		Status:       "proposed",
+	})
+	if err != nil {
+		return ArtifactVersionRecord{}, err
+	}
+	if oldLatestVersionID != "" && oldLatestVersionID != record.VersionID {
+		if _, err := db.sql.ExecContext(ctx, `
+UPDATE artifact_versions
+SET status = 'superseded'
+WHERE id = ? AND status IN ('proposed', 'rejected')`, oldLatestVersionID); err != nil {
+			return ArtifactVersionRecord{}, err
+		}
+	}
+	return record, nil
+}
+
 func ensureArtifact(ctx context.Context, tx *sql.Tx, projectID string, artifactID string, artifactType ArtifactType, now string) error {
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO artifacts(
@@ -468,6 +516,36 @@ func artifactVersionSnapshotPath(projectID string, artifactID string, versionID 
 		name = "artifact"
 	}
 	return filepath.Join("projects", projectID, "artifacts", artifactID, versionID, name)
+}
+
+func writeProjectArtifactFile(root string, relPath string, content []byte) error {
+	cleanRel := filepath.Clean(filepath.FromSlash(relPath))
+	if filepath.IsAbs(cleanRel) || cleanRel == "." || cleanRel == string(filepath.Separator) || strings.HasPrefix(cleanRel, ".."+string(filepath.Separator)) || cleanRel == ".." {
+		return fmt.Errorf("invalid artifact path: %s", relPath)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	absPath, err := filepath.Abs(filepath.Join(absRoot, cleanRel))
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return err
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return fmt.Errorf("artifact path escapes project root: %s", relPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := absPath + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, absPath)
 }
 
 func artifactBelongsToProject(ctx context.Context, tx *sql.Tx, projectID string, artifactID string) bool {

@@ -220,6 +220,45 @@ func TestServerApprovesArtifactAndMaterializesTasks(t *testing.T) {
 	}
 }
 
+func TestServerRevisesArtifact(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	if _, err := db.SQL().ExecContext(ctx, "UPDATE projects SET root_path = ? WHERE id = ?", root, projectID); err != nil {
+		t.Fatal(err)
+	}
+	record, err := db.SaveArtifactVersion(ctx, storage.ArtifactVersionInput{
+		ProjectID:    projectID,
+		ArtifactType: storage.ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD\n\nFirst draft."),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/artifacts/"+record.ArtifactID+"/revise", bytes.NewBufferString(`{"content":"# PRD\n\nSecond draft."}`))
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var revised storage.ArtifactVersionRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &revised); err != nil {
+		t.Fatal(err)
+	}
+	if revised.Version != 2 || revised.Status != "proposed" {
+		t.Fatalf("revised = %#v", revised)
+	}
+	content, err := os.ReadFile(filepath.Join(root, ".devagent", "prd.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "# PRD\n\nSecond draft." {
+		t.Fatalf("content = %q", string(content))
+	}
+}
+
 func TestServerAnalyzesAndApprovesChangeRequest(t *testing.T) {
 	db, projectID := openAPITestDB(t)
 	ctx := context.Background()

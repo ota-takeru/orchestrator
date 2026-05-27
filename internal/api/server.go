@@ -1342,6 +1342,21 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "artifacts" && parts[5] == "revise":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		content, ok := decodeArtifactRevisionBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.ReviseArtifact(r.Context(), project, parts[4], content)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
 	case len(parts) == 5 && action == "tasks" && parts[4] == "materialize":
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
@@ -1669,12 +1684,29 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleArtifactRoute(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) != 4 || parts[0] != "api" || parts[1] != "artifacts" || parts[3] != "approve" {
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "artifacts" {
 		writeAPIError(w, http.StatusNotFound, "not_found", "unknown artifact route")
 		return
 	}
 	if r.Method != http.MethodPost {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	if parts[3] == "revise" {
+		content, ok := decodeArtifactRevisionBody(w, r)
+		if !ok {
+			return
+		}
+		record, err := s.db.SaveArtifactRevision(r.Context(), s.projectID, parts[2], []byte(content))
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "artifact_revise_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, record)
+		return
+	}
+	if parts[3] != "approve" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown artifact route")
 		return
 	}
 	input, ok := decodeArtifactApprovalBody(w, r)
@@ -1995,6 +2027,21 @@ func decodeArtifactApprovalBody(w http.ResponseWriter, r *http.Request) (artifac
 		input.Status = "approved"
 	}
 	return input, true
+}
+
+func decodeArtifactRevisionBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var input struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return "", false
+	}
+	if strings.TrimSpace(input.Content) == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_content", "artifact content is required")
+		return "", false
+	}
+	return input.Content, true
 }
 
 func decodeEnvBindingBody(w http.ResponseWriter, r *http.Request) (storage.EnvBindingInput, bool) {

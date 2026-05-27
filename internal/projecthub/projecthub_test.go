@@ -280,6 +280,9 @@ func (f fakeAuthority) Artifacts(context.Context, registry.RegisteredProject, st
 func (f fakeAuthority) ApproveArtifact(context.Context, registry.RegisteredProject, string, int, string, string) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
+func (f fakeAuthority) ReviseArtifact(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
 func (f fakeAuthority) MaterializeTasks(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }

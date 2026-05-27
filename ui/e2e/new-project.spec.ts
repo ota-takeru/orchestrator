@@ -31,10 +31,38 @@ test("creating a project selects it and replaces the creation form with its dash
   await expect(activityPanel.getByText(projectRoot)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Artifacts", exact: true })).toBeVisible();
   await expect(page.getByText("4 waiting for review")).toBeVisible();
-  const prdPreview = page.locator(".artifact-content-review", { hasText: "# PRD" });
+  const prdPreview = page.locator(".markdown-preview", { hasText: "PRD" });
   await expect(prdPreview).toBeVisible();
+  await expect(prdPreview.getByRole("heading", { name: "PRD" })).toBeVisible();
   await expect(prdPreview).toContainText("A project created by the UI end-to-end check.");
   await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
+test("artifact review supports requesting changes with notes", async ({ page }, testInfo) => {
+  const projectRoot = path.normalize(testInfo.outputPath("review-project"));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "New Project" }).click();
+  await page.getByLabel("Name").fill("UI Review Project");
+  await page.getByLabel("Project root").fill(projectRoot);
+  await page.getByPlaceholder("What do you want this project to become?").fill("A project used to review generated markdown artifacts.");
+  await page.getByRole("button", { name: "Create project" }).click();
+  await expect(page.getByText("UI Review Project was created and selected.")).toBeVisible({ timeout: 30_000 });
+
+  const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
+  await expect(prdCard.locator(".markdown-preview").getByRole("heading", { name: "PRD" })).toBeVisible();
+  await expect(prdCard.getByRole("button", { name: "Request changes" })).toBeDisabled();
+  await prdCard.getByLabel("Review notes").fill("Add a clearer success metric before approval.");
+  await prdCard.getByRole("button", { name: "Request changes" }).click();
+  await expect(page.getByText("Artifact changes requested.")).toBeVisible();
+  await expect(prdCard.getByText("rejected / latest v1 / approved v0")).toBeVisible();
+
+  await prdCard.getByRole("button", { name: "Edit revision" }).click();
+  await prdCard.getByLabel("Revision content").fill("# PRD\n\nSecond draft with a measurable success metric.");
+  await prdCard.getByRole("button", { name: "Save revision" }).click();
+  await expect(page.getByText("Artifact revision saved.")).toBeVisible();
+  await expect(prdCard.getByText("proposed / latest v2 / approved v0")).toBeVisible();
+  await expect(prdCard.locator(".markdown-preview")).toContainText("Second draft with a measurable success metric.");
 });
 
 test("project setup actions execute from the UI after creation", async ({ page }, testInfo) => {

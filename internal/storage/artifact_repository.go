@@ -45,6 +45,8 @@ type ArtifactRecord struct {
 	LatestVersion     int          `json:"latest_version,omitempty"`
 	ApprovedVersion   int          `json:"approved_version,omitempty"`
 	Path              string       `json:"path,omitempty"`
+	ContentHash       string       `json:"content_hash,omitempty"`
+	Content           string       `json:"content,omitempty"`
 }
 
 type TrustedArtifactContextRecord struct {
@@ -65,13 +67,22 @@ type TrustedArtifactContentRecord struct {
 }
 
 func (db *DB) ListArtifacts(ctx context.Context, projectID string, artifactType string) ([]ArtifactRecord, error) {
+	return db.listArtifacts(ctx, projectID, artifactType, false)
+}
+
+func (db *DB) ListArtifactsWithContent(ctx context.Context, projectID string, artifactType string) ([]ArtifactRecord, error) {
+	return db.listArtifacts(ctx, projectID, artifactType, true)
+}
+
+func (db *DB) listArtifacts(ctx context.Context, projectID string, artifactType string, includeContent bool) ([]ArtifactRecord, error) {
 	query := `
 SELECT a.id, a.artifact_type, a.status,
        COALESCE(a.latest_version_id, ''),
        COALESCE(a.approved_version_id, ''),
        COALESCE(latest.version, 0),
        COALESCE(approved.version, 0),
-       COALESCE(latest.path, '')
+       COALESCE(latest.path, ''),
+       COALESCE(latest.content_hash, '')
 FROM artifacts a
 LEFT JOIN artifact_versions latest ON latest.id = a.latest_version_id
 LEFT JOIN artifact_versions approved ON approved.id = a.approved_version_id
@@ -100,8 +111,16 @@ WHERE a.project_id = ?`
 			&artifact.LatestVersion,
 			&artifact.ApprovedVersion,
 			&artifact.Path,
+			&artifact.ContentHash,
 		); err != nil {
 			return nil, err
+		}
+		if includeContent && artifact.LatestVersionID != "" && artifact.ContentHash != "" {
+			content, err := db.readArtifactVersionSnapshotByFields(projectID, artifact.ArtifactID, artifact.LatestVersionID, artifact.Path, artifact.ContentHash)
+			if err != nil {
+				return nil, err
+			}
+			artifact.Content = string(content)
 		}
 		artifacts = append(artifacts, artifact)
 	}
@@ -425,13 +444,20 @@ func (db *DB) writeArtifactVersionSnapshot(projectID string, artifactID string, 
 }
 
 func (db *DB) readArtifactVersionSnapshot(projectID string, record TrustedArtifactContextRecord) ([]byte, error) {
-	relPath := artifactVersionSnapshotPath(projectID, record.ArtifactID, record.VersionID, record.Path)
+	return db.readArtifactVersionSnapshotByFields(projectID, record.ArtifactID, record.VersionID, record.Path, record.ContentHash)
+}
+
+func (db *DB) readArtifactVersionSnapshotByFields(projectID string, artifactID string, versionID string, artifactPath string, contentHash string) ([]byte, error) {
+	relPath := artifactVersionSnapshotPath(projectID, artifactID, versionID, artifactPath)
 	content, err := os.ReadFile(filepath.Join(db.dataRoot, relPath))
 	if err != nil {
-		return nil, fmt.Errorf("read artifact version snapshot %s: %w", record.VersionID, err)
+		return nil, fmt.Errorf("read artifact version snapshot %s: %w", versionID, err)
 	}
-	if hash := sha256Hex(content); hash != record.ContentHash {
-		return nil, fmt.Errorf("artifact version snapshot hash mismatch: %s", record.VersionID)
+	if hash := sha256Hex(content); hash != contentHash {
+		return nil, fmt.Errorf("artifact version snapshot hash mismatch: %s", versionID)
+	}
+	if len(content) > 512*1024 {
+		content = content[:512*1024]
 	}
 	return content, nil
 }

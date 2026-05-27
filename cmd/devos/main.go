@@ -1606,6 +1606,7 @@ func runArtifactsList(ctx context.Context, args []string, stdout io.Writer) int 
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
 	artifactType := fs.String("type", "", "artifact type")
+	includeContent := fs.Bool("include-content", false, "include latest artifact content in JSON output")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -1615,7 +1616,12 @@ func runArtifactsList(ctx context.Context, args []string, stdout io.Writer) int 
 		return writeError(stdout, *jsonOut, errCode, "artifacts_list_failed", err)
 	}
 	defer db.Close()
-	artifacts, err := db.ListArtifacts(ctx, projectID, *artifactType)
+	var artifacts []storage.ArtifactRecord
+	if *includeContent {
+		artifacts, err = db.ListArtifactsWithContent(ctx, projectID, *artifactType)
+	} else {
+		artifacts, err = db.ListArtifacts(ctx, projectID, *artifactType)
+	}
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "artifacts_list_failed", err)
 	}
@@ -3917,7 +3923,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos plan status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan consolidate [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos plan checkpoint --task TASK_ID [--project-root PATH] [--data-root PATH] [--json]")
-	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")
+	fmt.Fprintln(w, "  devos artifacts [--project-root PATH] [--data-root PATH] [--type TYPE] [--include-content] [--json]")
 	fmt.Fprintln(w, "  devos artifacts trusted [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")

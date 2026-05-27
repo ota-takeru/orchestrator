@@ -605,6 +605,40 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.artifact-review-card {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #e4e7ec;
+  padding-top: 12px;
+}
+
+.artifact-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.artifact-review-header span,
+.artifact-review-header small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.artifact-review-header span {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.artifact-review-header small {
+  margin-top: 4px;
+  color: #667085;
+}
+
+.artifact-content-review {
+  max-height: 360px;
+}
+
 .artifact-actions {
   display: flex;
   flex-wrap: wrap;
@@ -668,6 +702,10 @@ button:disabled {
   .path-input-row,
   .runtime-choice-row {
     grid-template-columns: 1fr;
+  }
+
+  .artifact-review-header {
+    display: grid;
   }
 
   th:nth-child(4),

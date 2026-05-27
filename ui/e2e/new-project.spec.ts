@@ -30,7 +30,10 @@ test("creating a project selects it and replaces the creation form with its dash
   const activityPanel = page.locator("section", { has: page.getByRole("heading", { name: "Project Activity" }) });
   await expect(activityPanel.getByText(projectRoot)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Artifacts", exact: true })).toBeVisible();
-  await expect(page.getByText("4 drafts")).toBeVisible();
+  await expect(page.getByText("4 waiting for review")).toBeVisible();
+  const prdPreview = page.locator(".artifact-content-review", { hasText: "# PRD" });
+  await expect(prdPreview).toBeVisible();
+  await expect(prdPreview).toContainText("A project created by the UI end-to-end check.");
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 

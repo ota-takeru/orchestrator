@@ -185,6 +185,15 @@ func TestServerApprovesArtifactAndMaterializesTasks(t *testing.T) {
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", listRec.Code, listRec.Body.String())
 	}
+	var listed struct {
+		Artifacts []storage.ArtifactRecord `json:"artifacts"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Artifacts) != 4 || listed.Artifacts[0].Content == "" {
+		t.Fatalf("listed artifacts = %#v", listed.Artifacts)
+	}
 
 	for _, record := range records {
 		req := httptest.NewRequest(http.MethodPost, "/api/artifacts/"+record.ArtifactID+"/approve", bytes.NewBufferString(`{"version":1,"status":"approved"}`))

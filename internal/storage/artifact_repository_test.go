@@ -152,6 +152,36 @@ func TestListArtifactsReturnsLatestAndApprovedVersions(t *testing.T) {
 	if artifacts[0].LatestVersion != 1 || artifacts[0].ApprovedVersion != 1 || artifacts[0].Path != ".devagent/prd.md" {
 		t.Fatalf("artifact = %#v", artifacts[0])
 	}
+	if artifacts[0].Content != "" {
+		t.Fatalf("content should not be included by default: %#v", artifacts[0])
+	}
+}
+
+func TestListArtifactsWithContentReturnsLatestSnapshot(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	insertProject(t, db.SQL(), "PROJECT-001")
+	record, err := db.SaveArtifactVersion(ctx, ArtifactVersionInput{
+		ProjectID:    "PROJECT-001",
+		ArtifactType: ArtifactPRD,
+		Path:         ".devagent/prd.md",
+		Content:      []byte("# PRD\n\nReview me before approval."),
+		Status:       "proposed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	artifacts, err := db.ListArtifactsWithContent(ctx, "PROJECT-001", "prd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("artifact count = %d", len(artifacts))
+	}
+	if artifacts[0].LatestVersionID != record.VersionID || artifacts[0].Content != "# PRD\n\nReview me before approval." || artifacts[0].ContentHash != record.Hash {
+		t.Fatalf("artifact with content = %#v", artifacts[0])
+	}
 }
 
 func TestApproveArtifactVersionSupersedesPreviousApprovedVersion(t *testing.T) {

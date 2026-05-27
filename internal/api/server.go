@@ -1659,7 +1659,7 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
 		return
 	}
-	artifacts, err := s.db.ListArtifacts(r.Context(), s.projectID, r.URL.Query().Get("type"))
+	artifacts, err := s.db.ListArtifactsWithContent(r.Context(), s.projectID, r.URL.Query().Get("type"))
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "artifacts_failed", err.Error())
 		return

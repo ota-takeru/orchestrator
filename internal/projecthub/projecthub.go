@@ -207,7 +207,7 @@ func (WindowsLocalAuthority) Artifacts(ctx context.Context, project registry.Reg
 		return nil, err
 	}
 	defer db.Close()
-	artifacts, err := db.ListArtifacts(ctx, projectID, artifactType)
+	artifacts, err := db.ListArtifactsWithContent(ctx, projectID, artifactType)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +528,7 @@ func (a WslAuthority) StartWork(ctx context.Context, project registry.Registered
 
 func (a WslAuthority) Artifacts(ctx context.Context, project registry.RegisteredProject, artifactType string) (any, error) {
 	var body map[string]any
-	args := []string{"artifacts"}
+	args := []string{"artifacts", "--include-content"}
 	if strings.TrimSpace(artifactType) != "" {
 		args = append(args, "--type", artifactType)
 	}

@@ -122,7 +122,7 @@ func (db *DB) LoadProjectDashboard(ctx context.Context, projectID string, limit 
 	if err != nil {
 		return ProjectDashboardData{}, err
 	}
-	artifacts, err := db.ListArtifacts(ctx, projectID, "")
+	artifacts, err := db.ListArtifactsWithContent(ctx, projectID, "")
 	if err != nil {
 		return ProjectDashboardData{}, err
 	}

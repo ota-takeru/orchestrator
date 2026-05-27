@@ -84,6 +84,8 @@ export type ArtifactRecord = {
   latest_version?: number;
   approved_version?: number;
   path?: string;
+  content_hash?: string;
+  content?: string;
 };
 
 export type PathMapping = {

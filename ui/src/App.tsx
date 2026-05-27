@@ -463,6 +463,9 @@ function App() {
               onOpenTaskArtifacts={openTaskArtifacts}
               workActioning={workActioning}
               onStartWork={submitWorkStart}
+              artifactActioning={artifactActioning}
+              onApproveArtifact={submitApproveArtifact}
+              onMaterializeTasks={submitMaterializeTasks}
             />
           ) : (
             <LoadingPanel />
@@ -516,12 +519,6 @@ function App() {
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
           <MergeGatePanel status={data?.mergeStatus} />
           <ProjectCheckPanel violations={data?.projectViolations ?? []} />
-          <ArtifactsPanel
-            artifacts={data?.artifacts ?? []}
-            actioning={artifactActioning}
-            onApprove={submitApproveArtifact}
-            onMaterialize={submitMaterializeTasks}
-          />
           <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
           <PathMappingsPanel mappings={data?.pathMappings ?? []} />
           <DecisionPanel decisions={data?.decisions ?? []} />
@@ -623,7 +620,10 @@ function SelectedProjectDashboard({
   onApprove,
   onOpenTaskArtifacts,
   workActioning,
-  onStartWork
+  onStartWork,
+  artifactActioning,
+  onApproveArtifact,
+  onMaterializeTasks
 }: {
   data: DashboardData;
   selectedProject?: RegisteredProject | CurrentProject;
@@ -635,10 +635,14 @@ function SelectedProjectDashboard({
   onOpenTaskArtifacts: (taskID: string) => void;
   workActioning: string;
   onStartWork: (adapter: "fake" | "real-codex") => void;
+  artifactActioning: string;
+  onApproveArtifact: (artifactID: string, version: number) => void;
+  onMaterializeTasks: () => void;
 }) {
   return (
     <>
       {selectedProject ? <ProjectStatusPanel project={selectedProject} /> : null}
+      <ArtifactsPanel artifacts={data.artifacts} actioning={artifactActioning} onApprove={onApproveArtifact} onMaterialize={onMaterializeTasks} />
       <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
       <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
@@ -1467,12 +1471,13 @@ function ArtifactsPanel({
   onApprove: (artifactID: string, version: number) => void;
   onMaterialize: () => void;
 }) {
+  const pendingCount = artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved").length;
   return (
-    <section className="panel compact">
+    <section className="panel">
       <div className="panel-heading">
         <div>
           <h2>Artifacts</h2>
-          <p>{artifacts.length} drafts</p>
+          <p>{pendingCount > 0 ? `${pendingCount} waiting for review` : `${artifacts.length} artifacts`}</p>
         </div>
         <FileCheck2 size={18} className="text-zinc-500" />
       </div>
@@ -1485,20 +1490,29 @@ function ArtifactsPanel({
         {artifacts.map((artifact) => {
           const canApprove = artifact.latest_version ? artifact.approved_version !== artifact.latest_version && artifact.status !== "approved" : false;
           return (
-            <div className="stack-row" key={artifact.artifact_id}>
-              <span>{artifact.artifact_type}</span>
-              <small>
-                {artifact.status} / latest v{artifact.latest_version || 0} / approved v{artifact.approved_version || 0}
-              </small>
-              <small>{artifact.path}</small>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => onApprove(artifact.artifact_id, artifact.latest_version || 1)}
-                disabled={!canApprove || actioning !== ""}
-              >
-                {actioning === `approve:${artifact.artifact_id}` ? "Approving" : "Approve latest"}
-              </button>
+            <div className="artifact-review-card" key={artifact.artifact_id}>
+              <div className="artifact-review-header">
+                <div>
+                  <span>{artifact.artifact_type}</span>
+                  <small>
+                    {artifact.status} / latest v{artifact.latest_version || 0} / approved v{artifact.approved_version || 0}
+                  </small>
+                  <small>{artifact.path}</small>
+                </div>
+                <button
+                  className="secondary-button no-margin"
+                  type="button"
+                  onClick={() => onApprove(artifact.artifact_id, artifact.latest_version || 1)}
+                  disabled={!canApprove || actioning !== ""}
+                >
+                  {actioning === `approve:${artifact.artifact_id}` ? "Approving" : "Approve latest"}
+                </button>
+              </div>
+              {artifact.content ? (
+                <pre className="artifact-content artifact-content-review">{artifact.content.slice(0, 6000)}</pre>
+              ) : (
+                <div className="empty-stack">Content preview unavailable</div>
+              )}
             </div>
           );
         })}

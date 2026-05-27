@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/platform"
@@ -62,7 +65,8 @@ func (r LocalRunner) RunCommand(ctx context.Context, req RunCommandRequest) (Run
 		commandCtx, cancel = context.WithTimeout(ctx, req.Timeout)
 	}
 	defer cancel()
-	cmd := exec.CommandContext(commandCtx, req.Argv[0], req.Argv[1:]...)
+	argv := resolveLocalArgv(r.environment, req.Argv)
+	cmd := exec.CommandContext(commandCtx, argv[0], argv[1:]...)
 	cmd.Dir = req.CWD
 	var stdout, stderr bytes.Buffer
 	if req.CaptureStdout {
@@ -93,6 +97,28 @@ func (r LocalRunner) RunCommand(ctx context.Context, req RunCommandRequest) (Run
 		return result, nil
 	}
 	return result, nil
+}
+
+func resolveLocalArgv(env platform.ExecutionEnvironment, argv []string) []string {
+	if len(argv) == 0 || runtime.GOOS != "windows" || argv[0] != "sh" {
+		return argv
+	}
+	if _, err := exec.LookPath("sh"); err == nil {
+		return argv
+	}
+	for _, candidate := range []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "Git", "usr", "bin", "sh.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "Git", "bin", "bash.exe"),
+	} {
+		if candidate == "" {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			resolved := append([]string{candidate}, argv[1:]...)
+			return resolved
+		}
+	}
+	return argv
 }
 
 func (r LocalRunner) CollectArtifacts(ctx context.Context, req ArtifactCollectionRequest) ([]RunArtifact, error) {

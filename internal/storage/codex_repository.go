@@ -211,9 +211,11 @@ func (db *DB) runRealCodexTask(ctx context.Context, projectID string, taskID str
 	if err != nil {
 		return RealCodexRunResult{}, err
 	}
-	classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
-	if len(blockers) > 0 {
-		return db.recordRealCodexAdapterBlockedForRunType(ctx, projectID, taskID, env, runType, classification, blockers)
+	if usesLocalCodexRuntime(executor) || env.OSFamily == platform.OSFamilyWindows {
+		classification, blockers := evaluateRealCodexEnvironment(env, realCodexRuntimeGOOS)
+		if len(blockers) > 0 {
+			return db.recordRealCodexAdapterBlockedForRunType(ctx, projectID, taskID, env, runType, classification, blockers)
+		}
 	}
 	runPolicy := db.activeRunProfileNetworkPolicy(ctx, projectID)
 	doctorReport := runRealCodexDoctor(ctx, env, toolchains.Options{IncludeCodex: true})
@@ -293,6 +295,15 @@ func (db *DB) runRealCodexTask(ctx context.Context, projectID string, taskID str
 		result.ImplementationRun = runID
 	}
 	return result, nil
+}
+
+func usesLocalCodexRuntime(executor CodexExecutor) bool {
+	switch executor.(type) {
+	case LocalCodexExecutor, *LocalCodexExecutor:
+		return true
+	default:
+		return false
+	}
 }
 
 func (db *DB) PreviewRealCodexTask(ctx context.Context, projectID string, taskID string) (RealCodexPreviewResult, error) {

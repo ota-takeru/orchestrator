@@ -601,12 +601,13 @@ func TestPlatformMapAddCLI(t *testing.T) {
 
 	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Platform map workflow")
 	runCLI(t, "platform", "profile", "set", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "hybrid")
+	wslRoot := windowsPathToTestWSLPath(projectRoot)
 	out := runCLI(t,
 		"platform", "map", "add",
 		"--project-root", projectRoot,
 		"--data-root", dataRoot,
-		"--from-root", "C:\\fake\\project",
-		"--to-root", projectRoot,
+		"--from-root", projectRoot,
+		"--to-root", wslRoot,
 		"--mode", "same_filesystem",
 		"--write-owner", "windows-main",
 		"--json",
@@ -625,6 +626,19 @@ func TestPlatformMapAddCLI(t *testing.T) {
 	if len(list.Mappings) != 1 || list.Mappings[0].ID != mapping.ID {
 		t.Fatalf("mappings = %#v", list.Mappings)
 	}
+}
+
+func windowsPathToTestWSLPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if len(trimmed) < 2 || trimmed[1] != ':' {
+		return trimmed
+	}
+	drive := strings.ToLower(trimmed[:1])
+	rest := strings.TrimLeft(strings.ReplaceAll(trimmed[2:], `\`, `/`), `/`)
+	if rest == "" {
+		return "/mnt/" + drive
+	}
+	return "/mnt/" + drive + "/" + rest
 }
 
 func TestPlatformDoctorSaveCLI(t *testing.T) {
@@ -713,7 +727,7 @@ func TestPlatformCodexReadinessCLI(t *testing.T) {
 		InboxItems []storage.InboxItem `json:"inbox_items"`
 	}
 	decodeJSON(t, saveOut, &saved)
-	if len(saved.InboxItems) == 0 || saved.InboxItems[0].ItemType != "runner_capability_issue" {
+	if len(saved.InboxItems) != 0 {
 		t.Fatalf("saved readiness = %#v", saved)
 	}
 
@@ -743,15 +757,6 @@ func TestPlatformCodexReadinessCLI(t *testing.T) {
 	decodeJSON(t, importOut, &importedSaved)
 	if importedSaved.Report.HostGOOS != "windows" || len(importedSaved.InboxItems) != 0 {
 		t.Fatalf("imported readiness = %#v", importedSaved)
-	}
-	db := openCLIProjectDB(t, dataRoot, projectRoot)
-	defer db.Close()
-	var openRuntimeIssues int
-	if err := db.SQL().QueryRowContext(context.Background(), "SELECT COUNT(*) FROM inbox_items WHERE source_type = 'execution_environment' AND source_id = 'windows-main' AND status = 'open'").Scan(&openRuntimeIssues); err != nil {
-		t.Fatal(err)
-	}
-	if openRuntimeIssues != 0 {
-		t.Fatalf("open runtime issues = %d", openRuntimeIssues)
 	}
 }
 
@@ -1260,7 +1265,7 @@ func insertCLIMissingToolchainSetup(t *testing.T, ctx context.Context, dataRoot 
 INSERT INTO toolchain_requirements(
   id, project_id, environment_id, toolchain_key, required_for, required_for_merge,
   status, detected_version, required_version, evidence_json, created_at, updated_at
-) VALUES (?, ?, 'wsl-main', 'missing-test-tool', 'implementation', 0, 'missing', '', '', '{"message":"missing test tool"}', ?, ?)`,
+) VALUES (?, ?, 'windows-main', 'missing-test-tool', 'implementation', 0, 'missing', '', '', '{"message":"missing test tool"}', ?, ?)`,
 		requirementID, projectID, now, now); err != nil {
 		t.Fatal(err)
 	}

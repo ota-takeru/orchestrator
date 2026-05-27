@@ -572,7 +572,7 @@ func selectedRuntimeOption(input projectCreateRequest) (projectRuntimeOption, er
 
 func detectRuntimeOptions() []projectRuntimeOption {
 	if runtime.GOOS == "windows" {
-		return []projectRuntimeOption{{
+		options := []projectRuntimeOption{{
 			AuthorityRuntime: registry.AuthorityWindows,
 			Label:            "Windows",
 			Description:      "Create and operate the project from this Windows host.",
@@ -580,6 +580,18 @@ func detectRuntimeOptions() []projectRuntimeOption {
 			Available:        true,
 			Recommended:      true,
 		}}
+		if distro := strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")); distro != "" || wslExeAvailable() {
+			options = append(options, projectRuntimeOption{
+				AuthorityRuntime: registry.AuthorityWSL,
+				Label:            "WSL",
+				Description:      "Create and operate the project through WSL from this Windows host.",
+				Detected:         true,
+				Available:        true,
+				Recommended:      false,
+				WSLDistro:        distro,
+			})
+		}
+		return options
 	}
 	if distro := strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")); distro != "" {
 		return []projectRuntimeOption{{
@@ -599,6 +611,16 @@ func detectRuntimeOptions() []projectRuntimeOption {
 		Detected:         false,
 		Available:        false,
 	}}
+}
+
+func wslExeAvailable() bool {
+	if _, err := exec.LookPath("wsl.exe"); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("SystemRoot"), "System32", "wsl.exe")); err == nil {
+		return true
+	}
+	return false
 }
 
 func (s *Server) currentProjectSummary(ctx context.Context) *currentProjectSummary {

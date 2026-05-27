@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -24,6 +25,9 @@ func TestResolveProjectRoot(t *testing.T) {
 }
 
 func TestPreflightDetectsCaseCollision(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows test directories are case-insensitive by default")
+	}
 	root := newGitRepo(t)
 	writeFile(t, filepath.Join(root, "README.md"), "a")
 	writeFile(t, filepath.Join(root, "Readme.md"), "b")

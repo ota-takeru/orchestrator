@@ -46,7 +46,7 @@ func TestPublishDryRunBlocksDivergedRemote(t *testing.T) {
 	gitRun(t, repo, "remote", "add", "origin", remote)
 	gitRun(t, repo, "push", "origin", "main")
 	clone := filepath.Join(t.TempDir(), "clone")
-	gitRun(t, "", "clone", remote, clone)
+	gitRun(t, "", "clone", "--branch", "main", remote, clone)
 	gitRun(t, clone, "config", "user.email", "test@example.com")
 	gitRun(t, clone, "config", "user.name", "Test User")
 	writeAndCommit(t, clone, "remote.txt", "remote\n")

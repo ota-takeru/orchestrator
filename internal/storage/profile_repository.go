@@ -248,6 +248,9 @@ func looksLikeWindowsRoot(path string) bool {
 }
 
 func fakeWSLEnvironment(id string, role platform.Role, projectRoot string) platform.ExecutionEnvironment {
+	if looksLikeWindowsRoot(projectRoot) {
+		projectRoot = windowsRootToWSLRoot(projectRoot)
+	}
 	return platform.ExecutionEnvironment{
 		ID:             id,
 		OSFamily:       platform.OSFamilyWSL,
@@ -259,6 +262,19 @@ func fakeWSLEnvironment(id string, role platform.Role, projectRoot string) platf
 		SandboxProfile: platform.SandboxLinuxBubblewrap,
 		Status:         "configured",
 	}
+}
+
+func windowsRootToWSLRoot(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if len(trimmed) < 2 || trimmed[1] != ':' {
+		return trimmed
+	}
+	drive := strings.ToLower(trimmed[:1])
+	rest := strings.TrimLeft(strings.ReplaceAll(trimmed[2:], `\`, `/`), `/`)
+	if rest == "" {
+		return "/mnt/" + drive
+	}
+	return "/mnt/" + drive + "/" + rest
 }
 
 func fakeLinuxEnvironment(id string, role platform.Role, projectRoot string) platform.ExecutionEnvironment {

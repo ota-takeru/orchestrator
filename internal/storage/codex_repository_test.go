@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -334,7 +335,21 @@ func TestPreviewRealCodexTaskDoesNotMutateTask(t *testing.T) {
 	ctx := context.Background()
 	projectRoot := t.TempDir()
 	insertProject(t, db.SQL(), "PROJECT-001")
-	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	if runtime.GOOS == "windows" {
+		insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
+			ID:             "windows-main",
+			OSFamily:       platform.OSFamilyWindows,
+			Role:           platform.RolePrimary,
+			Shell:          platform.ShellPowerShell,
+			ProjectRoot:    projectRoot,
+			GitProvider:    platform.GitProviderWindows,
+			CodexAdapter:   platform.CodexAdapterWindows,
+			SandboxProfile: platform.SandboxWindowsNative,
+			Status:         "configured",
+		})
+	} else {
+		insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
+	}
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
 	setRealCodexDoctorDetectedForTest(t)
 
@@ -367,7 +382,7 @@ func TestPreviewRealCodexTaskDoesNotMutateTask(t *testing.T) {
 func TestRunRealCodexTaskThenVerificationReachesReview(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
-	projectRoot := t.TempDir()
+	projectRoot := "/tmp/devos-wsl-sidecar"
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
@@ -427,7 +442,8 @@ WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"codex-output-che
 	if err := db.SQL().QueryRowContext(ctx, "SELECT evidence_json FROM verification_results WHERE run_id = ?", verifyResult.VerificationRun).Scan(&evidenceRaw); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(evidenceRaw, runResult.WorktreeRoot) || !strings.Contains(evidenceRaw, runResult.HeadCommit) || !strings.Contains(evidenceRaw, "verification_plan_hash") {
+	escapedWorktreeRoot := strings.ReplaceAll(runResult.WorktreeRoot, `\`, `\\`)
+	if !strings.Contains(evidenceRaw, escapedWorktreeRoot) || !strings.Contains(evidenceRaw, runResult.HeadCommit) || !strings.Contains(evidenceRaw, "verification_plan_hash") {
 		t.Fatalf("verification evidence = %s", evidenceRaw)
 	}
 }
@@ -435,7 +451,7 @@ WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"codex-output-che
 func TestRunRealCodexTaskFailureOpensDecision(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
-	projectRoot := t.TempDir()
+	projectRoot := "/tmp/devos-wsl-main"
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
@@ -465,7 +481,7 @@ func TestRunRealCodexTaskFailureOpensDecision(t *testing.T) {
 func TestRunRealCodexTaskInvalidFinalMessageOpensDecision(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
-	projectRoot := t.TempDir()
+	projectRoot := "/tmp/devos-wsl-sidecar"
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", projectRoot)
 	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
@@ -591,7 +607,7 @@ func TestRunRealCodexTaskDependencyCommandBlocksAndSavesNetworkEvidence(t *testi
 func TestRunRealCodexTaskSupportsWSLPrimaryEnvironment(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
-	projectRoot := t.TempDir()
+	projectRoot := "/tmp/devos-wsl-main"
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
 		ID:             "wsl-main",
@@ -767,7 +783,7 @@ func TestRunRealCodexTaskBlocksWindowsWhenRuntimeIsNotWindows(t *testing.T) {
 func TestCodexRuntimeReadinessReportsPerEnvironmentCompatibility(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
-	projectRoot := t.TempDir()
+	projectRoot := "/tmp/devos-wsl-sidecar"
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
 		ID:             "windows-main",
@@ -817,7 +833,7 @@ func TestCodexRuntimeReadinessReportsPerEnvironmentCompatibility(t *testing.T) {
 func TestCodexRuntimeReadinessReportsToolchainBlockers(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
-	projectRoot := t.TempDir()
+	projectRoot := "/tmp/devos-wsl-main"
 	insertProject(t, db.SQL(), "PROJECT-001")
 	insertCodexEnvironment(t, db, "PROJECT-001", platform.ExecutionEnvironment{
 		ID:             "wsl-main",

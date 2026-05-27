@@ -19,6 +19,7 @@
 
 2026-05-27:
 
+- Artifact reviewのReview notesを常時入力可能にし、approved後やrevision操作時に入力欄がdisabledになる導線不備を修正しました。初期artifact生成テンプレートからDevOS / Orchestrator / Human Inbox前提の文言を除き、生成されるPRD / Architecture / Task YAMLがユーザーのアプリケーション仕様として読める表現へ変更しました。
 - Artifact review UIを追加改善しました。Markdown artifactはpre表示ではなく、heading/list/paragraph/codeをReact要素としてレンダリングして表示します。承認だけでなくReview notesを添えた `approved_with_notes` 承認、notes必須の `rejected` / Request changes、本文編集から新しい `proposed` versionを作るSave revisionをUIから実行できるようにしました。Playwright E2EでMarkdown heading表示、修正依頼、revision保存の動作を確認します。
 - Artifact承認導線を改善しました。dashboard/APIがlatest artifact versionのsnapshot本文をhash検証付きで返すようにし、React UIのArtifacts panelを右側下部から選択project dashboard上部へ移動しました。承認ボタンの直前にPRD / Architecture / Roadmap / Task YAML本文プレビューを表示し、Playwright E2Eで新規project作成直後にartifact本文を確認できることを検証対象へ追加しました。
 - 新規project作成後のUI遷移を改善しました。作成APIのdashboard応答を即時表示し、registry/dashboard再取得中に旧dashboardと新selected projectが混ざらないようにしました。作成フォーム表示中は既存dashboardを隠し、作成成功noticeを表示します。右側へProject Activityを追加し、選択project root、artifact、approved artifact、task、queue、worker run数を表示します。Playwright E2Eは一時registry/一時project rootで実際の作成、artifact承認、task materialize、fake worker実行まで検証するよう拡張しました。

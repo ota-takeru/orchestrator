@@ -200,7 +200,7 @@ export async function approveArtifact(
   version: number,
   projectID?: string,
   status: "approved" | "approved_with_notes" | "rejected" = "approved",
-  notes = "Approved from DevOS UI"
+  notes = "Approved from UI"
 ): Promise<void> {
   const path = projectID
     ? `/api/projects/${encodeURIComponent(projectID)}/artifacts/${encodeURIComponent(artifactID)}/approve`

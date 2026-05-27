@@ -51,6 +51,7 @@ test("artifact review supports requesting changes with notes", async ({ page }, 
 
   const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
   await expect(prdCard.locator(".markdown-preview").getByRole("heading", { name: "PRD" })).toBeVisible();
+  await expect(prdCard.getByLabel("Review notes")).toBeEnabled();
   await expect(prdCard.getByRole("button", { name: "Request changes" })).toBeDisabled();
   await prdCard.getByLabel("Review notes").fill("Add a clearer success metric before approval.");
   await prdCard.getByRole("button", { name: "Request changes" }).click();
@@ -63,6 +64,11 @@ test("artifact review supports requesting changes with notes", async ({ page }, 
   await expect(page.getByText("Artifact revision saved.")).toBeVisible();
   await expect(prdCard.getByText("proposed / latest v2 / approved v0")).toBeVisible();
   await expect(prdCard.locator(".markdown-preview")).toContainText("Second draft with a measurable success metric.");
+  await prdCard.getByLabel("Review notes").fill("Looks good with the metric.");
+  await prdCard.getByRole("button", { name: "Approve with notes" }).click();
+  await expect(page.getByText("Artifact approved.")).toBeVisible();
+  await expect(prdCard.getByText("approved_with_notes / latest v2 / approved v2")).toBeVisible();
+  await expect(prdCard.getByLabel("Review notes")).toBeEnabled();
 });
 
 test("project setup actions execute from the UI after creation", async ({ page }, testInfo) => {

@@ -1511,7 +1511,8 @@ function ArtifactsPanel({
       </div>
       <StackEmpty empty={artifacts.length === 0} label="No artifacts">
         {artifacts.map((artifact) => {
-          const canApprove = artifact.latest_version ? artifact.approved_version !== artifact.latest_version && artifact.status !== "approved" : false;
+          const canReview = artifact.latest_version ? artifact.approved_version !== artifact.latest_version && artifact.status !== "approved" : false;
+          const canRevise = Boolean(artifact.latest_version && artifact.content);
           const notes = reviewNotes[artifact.artifact_id] ?? "";
           const trimmedNotes = notes.trim();
           const approveStatus = trimmedNotes ? "approved_with_notes" : "approved";
@@ -1548,7 +1549,7 @@ function ArtifactsPanel({
                   onChange={(event) => setReviewNotes((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
                   placeholder="Approval notes or requested changes"
                   rows={3}
-                  disabled={!canApprove || actioning !== ""}
+                  disabled={actioning !== ""}
                 />
               </label>
               <div className="artifact-review-actions">
@@ -1559,7 +1560,7 @@ function ArtifactsPanel({
                     setRevisionContent((previous) => ({ ...previous, [artifact.artifact_id]: previous[artifact.artifact_id] ?? artifact.content ?? "" }));
                     setEditingArtifacts((previous) => ({ ...previous, [artifact.artifact_id]: !isEditing }));
                   }}
-                  disabled={!canApprove || actioning !== ""}
+                  disabled={!canRevise || actioning !== ""}
                 >
                   {isEditing ? "Close editor" : "Edit revision"}
                 </button>
@@ -1568,7 +1569,7 @@ function ArtifactsPanel({
                     className="secondary-button no-margin"
                     type="button"
                     onClick={() => onRevise(artifact.artifact_id, draftContent)}
-                    disabled={!canApprove || !draftContent.trim() || !hasRevisionChange || actioning !== ""}
+                    disabled={!canRevise || !draftContent.trim() || !hasRevisionChange || actioning !== ""}
                   >
                     {actioning === `revise:${artifact.artifact_id}` ? "Saving" : "Save revision"}
                   </button>
@@ -1576,8 +1577,8 @@ function ArtifactsPanel({
                 <button
                   className="secondary-button no-margin"
                   type="button"
-                  onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, approveStatus, trimmedNotes || "Approved from DevOS UI")}
-                  disabled={!canApprove || actioning !== ""}
+                  onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, approveStatus, trimmedNotes || "Approved from UI")}
+                  disabled={!canReview || actioning !== ""}
                 >
                   {actioning === `${approveStatus}:${artifact.artifact_id}` ? "Approving" : trimmedNotes ? "Approve with notes" : "Approve latest"}
                 </button>
@@ -1585,7 +1586,7 @@ function ArtifactsPanel({
                   className="secondary-button no-margin"
                   type="button"
                   onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, "rejected", trimmedNotes)}
-                  disabled={!canApprove || !trimmedNotes || actioning !== ""}
+                  disabled={!canReview || !trimmedNotes || actioning !== ""}
                 >
                   {actioning === `rejected:${artifact.artifact_id}` ? "Requesting" : "Request changes"}
                 </button>

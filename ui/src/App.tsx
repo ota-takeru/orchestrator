@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChecks, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
+import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChecks, MoreHorizontal, Pencil, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, requestDependencyApproval, reviseArtifact, reviseArtifactWithCodex, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
@@ -1512,6 +1512,8 @@ function ArtifactsPanel({
   onMaterialize: () => void;
 }) {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [revisionRequests, setRevisionRequests] = useState<Record<string, boolean>>({});
+  const [moreMenus, setMoreMenus] = useState<Record<string, boolean>>({});
   const [editingArtifacts, setEditingArtifacts] = useState<Record<string, boolean>>({});
   const [revisionContent, setRevisionContent] = useState<Record<string, string>>({});
   const pendingCount = artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved").length;
@@ -1539,86 +1541,134 @@ function ArtifactsPanel({
           const isEditing = editingArtifacts[artifact.artifact_id] ?? false;
           const draftContent = revisionContent[artifact.artifact_id] ?? artifact.content ?? "";
           const hasRevisionChange = draftContent !== (artifact.content ?? "");
+          const requestOpen = revisionRequests[artifact.artifact_id] ?? false;
+          const moreOpen = moreMenus[artifact.artifact_id] ?? false;
+          const isCodexRevising = actioning === `codex-revise:${artifact.artifact_id}`;
           return (
-            <div className="artifact-review-card" key={artifact.artifact_id}>
-              <div className="artifact-review-header">
-                <div>
-                  <span>{artifact.artifact_type}</span>
-                  <small>
-                    {artifact.status} / latest v{artifact.latest_version || 0} / approved v{artifact.approved_version || 0}
-                  </small>
-                  <small>{artifact.path}</small>
+            <div className={`artifact-review-card ${isCodexRevising ? "is-busy" : ""}`} key={artifact.artifact_id} aria-busy={isCodexRevising}>
+              <div className="artifact-review-body">
+                <div className="artifact-review-header">
+                  <div>
+                    <span>{artifact.artifact_type}</span>
+                    <small>
+                      {artifact.status} / latest v{artifact.latest_version || 0} / approved v{artifact.approved_version || 0}
+                    </small>
+                    <small>{artifact.path}</small>
+                  </div>
                 </div>
-              </div>
-              <ArtifactContentPreview artifact={artifact} />
-              {isEditing ? (
-                <label className="artifact-revision-editor">
-                  <span>Revision content</span>
-                  <textarea
-                    value={draftContent}
-                    onChange={(event) => setRevisionContent((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
-                    rows={10}
-                    disabled={actioning !== ""}
-                  />
-                </label>
-              ) : null}
-              <label className="artifact-review-notes">
-                <span>Review notes / Codex instruction</span>
-                <textarea
-                  value={notes}
-                  onChange={(event) => setReviewNotes((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
-                  placeholder="Approval notes, or tell Codex what to change"
-                  rows={3}
-                  disabled={actioning !== ""}
-                />
-              </label>
-              <div className="artifact-review-actions">
-                <button
-                  className="secondary-button no-margin"
-                  type="button"
-                  onClick={() => {
+                <ArtifactContentPreview
+                  artifact={artifact}
+                  canEdit={canRevise && actioning === ""}
+                  onEdit={() => {
                     setRevisionContent((previous) => ({ ...previous, [artifact.artifact_id]: previous[artifact.artifact_id] ?? artifact.content ?? "" }));
-                    setEditingArtifacts((previous) => ({ ...previous, [artifact.artifact_id]: !isEditing }));
+                    setEditingArtifacts((previous) => ({ ...previous, [artifact.artifact_id]: true }));
                   }}
-                  disabled={!canRevise || actioning !== ""}
-                >
-                  {isEditing ? "Close editor" : "Edit revision"}
-                </button>
+                />
                 {isEditing ? (
+                  <label className="artifact-revision-editor">
+                    <span>Revision content</span>
+                    <textarea
+                      value={draftContent}
+                      onChange={(event) => setRevisionContent((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
+                      rows={10}
+                      disabled={actioning !== ""}
+                    />
+                  </label>
+                ) : null}
+                {isEditing ? (
+                  <div className="artifact-review-actions">
+                    <button
+                      className="secondary-button no-margin"
+                      type="button"
+                      onClick={() => setEditingArtifacts((previous) => ({ ...previous, [artifact.artifact_id]: false }))}
+                      disabled={actioning !== ""}
+                    >
+                      Close editor
+                    </button>
+                    <button
+                      className="secondary-button no-margin"
+                      type="button"
+                      onClick={() => onRevise(artifact.artifact_id, draftContent)}
+                      disabled={!canRevise || !draftContent.trim() || !hasRevisionChange || actioning !== ""}
+                    >
+                      {actioning === `revise:${artifact.artifact_id}` ? "Saving" : "Save manual revision"}
+                    </button>
+                  </div>
+                ) : null}
+                {requestOpen ? (
+                  <label className="artifact-review-notes">
+                    <span>What should change?</span>
+                    <textarea
+                      value={notes}
+                      onChange={(event) => setReviewNotes((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
+                      placeholder="Tell Codex what to change before approval"
+                      rows={3}
+                      disabled={actioning !== ""}
+                    />
+                  </label>
+                ) : null}
+                <div className="artifact-review-actions">
                   <button
                     className="secondary-button no-margin"
                     type="button"
-                    onClick={() => onRevise(artifact.artifact_id, draftContent)}
-                    disabled={!canRevise || !draftContent.trim() || !hasRevisionChange || actioning !== ""}
+                    onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, approveStatus, trimmedNotes || "Approved from UI")}
+                    disabled={!canReview || actioning !== ""}
                   >
-                    {actioning === `revise:${artifact.artifact_id}` ? "Saving" : "Save revision"}
+                    {actioning === `${approveStatus}:${artifact.artifact_id}` ? "Approving" : trimmedNotes ? "Approve with notes" : "Approve latest"}
                   </button>
-                ) : null}
-                <button
-                  className="secondary-button no-margin"
-                  type="button"
-                  onClick={() => onCodexRevise(artifact.artifact_id, trimmedNotes)}
-                  disabled={!canRevise || !trimmedNotes || actioning !== ""}
-                >
-                  {actioning === `codex-revise:${artifact.artifact_id}` ? "Revising" : "Ask Codex to revise"}
-                </button>
-                <button
-                  className="secondary-button no-margin"
-                  type="button"
-                  onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, approveStatus, trimmedNotes || "Approved from UI")}
-                  disabled={!canReview || actioning !== ""}
-                >
-                  {actioning === `${approveStatus}:${artifact.artifact_id}` ? "Approving" : trimmedNotes ? "Approve with notes" : "Approve latest"}
-                </button>
-                <button
-                  className="secondary-button no-margin"
-                  type="button"
-                  onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, "rejected", trimmedNotes)}
-                  disabled={!canReview || !trimmedNotes || actioning !== ""}
-                >
-                  {actioning === `rejected:${artifact.artifact_id}` ? "Requesting" : "Request changes"}
-                </button>
+                  <button
+                    className="secondary-button no-margin"
+                    type="button"
+                    onClick={() => setRevisionRequests((previous) => ({ ...previous, [artifact.artifact_id]: !requestOpen }))}
+                    disabled={!canRevise || actioning !== ""}
+                    aria-expanded={requestOpen}
+                  >
+                    {requestOpen ? "Close revision request" : "Request revision"}
+                  </button>
+                  {requestOpen ? (
+                    <button
+                      className="secondary-button no-margin"
+                      type="button"
+                      onClick={() => onCodexRevise(artifact.artifact_id, trimmedNotes)}
+                      disabled={!canRevise || !trimmedNotes || actioning !== ""}
+                    >
+                      {isCodexRevising ? "Revising" : "Revise with Codex"}
+                    </button>
+                  ) : null}
+                  <div className="artifact-more">
+                    <button
+                      className="icon-button small"
+                      type="button"
+                      onClick={() => setMoreMenus((previous) => ({ ...previous, [artifact.artifact_id]: !moreOpen }))}
+                      disabled={actioning !== ""}
+                      title="More artifact actions"
+                      aria-label={`More actions for ${artifact.artifact_type}`}
+                      aria-expanded={moreOpen}
+                    >
+                      <MoreHorizontal size={16} />
+                    </button>
+                    {moreOpen ? (
+                      <div className="artifact-more-menu">
+                        <button
+                          className="secondary-button no-margin"
+                          type="button"
+                          onClick={() => onReview(artifact.artifact_id, artifact.latest_version || 1, "rejected", trimmedNotes)}
+                          disabled={!canReview || !trimmedNotes || actioning !== ""}
+                        >
+                          {actioning === `rejected:${artifact.artifact_id}` ? "Marking" : "Mark as rejected"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
+              {isCodexRevising ? (
+                <div className="artifact-busy-overlay" role="status" aria-live="polite">
+                  <div className="artifact-spinner" />
+                  <strong>Codex is revising {artifact.artifact_type}</strong>
+                  <span>The new version will appear here after it is saved.</span>
+                </div>
+              ) : null}
             </div>
           );
         })}
@@ -1627,15 +1677,30 @@ function ArtifactsPanel({
   );
 }
 
-function ArtifactContentPreview({ artifact }: { artifact: ArtifactRecord }) {
+function ArtifactContentPreview({ artifact, canEdit, onEdit }: { artifact: ArtifactRecord; canEdit: boolean; onEdit: () => void }) {
   if (!artifact.content) {
     return <div className="empty-stack">Content preview unavailable</div>;
   }
   const content = artifact.content.slice(0, 6000);
+  const editButton = (
+    <button className="artifact-edit-button" type="button" onClick={onEdit} disabled={!canEdit} title="Edit manually" aria-label={`Edit ${artifact.artifact_type} manually`}>
+      <Pencil size={14} />
+    </button>
+  );
   if (artifact.path?.toLowerCase().endsWith(".md")) {
-    return <div className="markdown-preview">{renderMarkdown(content)}</div>;
+    return (
+      <div className="artifact-preview-shell">
+        {editButton}
+        <div className="markdown-preview">{renderMarkdown(content)}</div>
+      </div>
+    );
   }
-  return <pre className="artifact-content artifact-content-review">{content}</pre>;
+  return (
+    <div className="artifact-preview-shell">
+      {editButton}
+      <pre className="artifact-content artifact-content-review">{content}</pre>
+    </div>
+  );
 }
 
 function renderMarkdown(content: string): ReactNode[] {

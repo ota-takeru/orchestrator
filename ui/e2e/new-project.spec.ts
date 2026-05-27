@@ -38,7 +38,7 @@ test("creating a project selects it and replaces the creation form with its dash
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 
-test("artifact review supports requesting changes with notes", async ({ page }, testInfo) => {
+test("artifact review supports revision requests and manual edits", async ({ page }, testInfo) => {
   const projectRoot = path.normalize(testInfo.outputPath("review-project"));
 
   await page.goto("/");
@@ -51,26 +51,47 @@ test("artifact review supports requesting changes with notes", async ({ page }, 
 
   const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
   await expect(prdCard.locator(".markdown-preview").getByRole("heading", { name: "PRD" })).toBeVisible();
-  await expect(prdCard.getByLabel("Review notes")).toBeEnabled();
-  await expect(prdCard.getByRole("button", { name: "Request changes" })).toBeDisabled();
-  await expect(prdCard.getByRole("button", { name: "Ask Codex to revise" })).toBeDisabled();
-  await prdCard.getByLabel("Review notes").fill("Add a clearer success metric before approval.");
-  await expect(prdCard.getByRole("button", { name: "Ask Codex to revise" })).toBeEnabled();
-  await prdCard.getByRole("button", { name: "Request changes" }).click();
+  await expect(prdCard.getByRole("button", { name: "Request revision" })).toBeEnabled();
+  await expect(prdCard.getByLabel("What should change?")).toHaveCount(0);
+  await prdCard.getByRole("button", { name: "Request revision" }).click();
+  await expect(prdCard.getByLabel("What should change?")).toBeEnabled();
+  await expect(prdCard.getByRole("button", { name: "Revise with Codex" })).toBeDisabled();
+  await prdCard.getByLabel("What should change?").fill("Add a clearer success metric before approval.");
+  await expect(prdCard.getByRole("button", { name: "Revise with Codex" })).toBeEnabled();
+  let finishRevision!: () => void;
+  await page.route("**/revise-with-codex", async (route) => {
+    await new Promise<void>((resolve) => {
+      finishRevision = resolve;
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ classification: "succeeded" })
+    });
+  });
+  const revisionResponse = page.waitForResponse((response) => response.url().includes("revise-with-codex") && response.request().method() === "POST");
+  await prdCard.getByRole("button", { name: "Revise with Codex" }).click();
+  await expect(prdCard.getByRole("status")).toContainText("Codex is revising prd");
+  finishRevision();
+  await revisionResponse;
+  await expect(page.getByText("Codex artifact revision saved.")).toBeVisible();
+  await page.unroute("**/revise-with-codex");
+  await prdCard.getByRole("button", { name: /More actions for prd/ }).click();
+  await prdCard.getByRole("button", { name: "Mark as rejected" }).click();
   await expect(page.getByText("Artifact changes requested.")).toBeVisible();
   await expect(prdCard.getByText("rejected / latest v1 / approved v0")).toBeVisible();
 
-  await prdCard.getByRole("button", { name: "Edit revision" }).click();
+  await prdCard.getByRole("button", { name: /Edit prd manually/ }).click();
   await prdCard.getByLabel("Revision content").fill("# PRD\n\nSecond draft with a measurable success metric.");
-  await prdCard.getByRole("button", { name: "Save revision" }).click();
+  await prdCard.getByRole("button", { name: "Save manual revision" }).click();
   await expect(page.getByText("Artifact revision saved.")).toBeVisible();
   await expect(prdCard.getByText("proposed / latest v2 / approved v0")).toBeVisible();
   await expect(prdCard.locator(".markdown-preview")).toContainText("Second draft with a measurable success metric.");
-  await prdCard.getByLabel("Review notes").fill("Looks good with the metric.");
+  await prdCard.getByLabel("What should change?").fill("Looks good with the metric.");
   await prdCard.getByRole("button", { name: "Approve with notes" }).click();
   await expect(page.getByText("Artifact approved.")).toBeVisible();
   await expect(prdCard.getByText("approved_with_notes / latest v2 / approved v2")).toBeVisible();
-  await expect(prdCard.getByLabel("Review notes")).toBeEnabled();
+  await expect(prdCard.getByLabel("What should change?")).toBeEnabled();
 });
 
 test("project setup actions execute from the UI after creation", async ({ page }, testInfo) => {

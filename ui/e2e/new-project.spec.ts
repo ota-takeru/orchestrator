@@ -120,9 +120,21 @@ test("project setup actions execute from the UI after creation", async ({ page }
   await expect(page.locator(".artifact-summary-panel")).toContainText("4 approved / 4 total");
   await expect(page.locator(".artifact-summary-panel").getByRole("button", { name: "View artifacts" })).toBeVisible();
 
+  let finishWork!: () => void;
+  await page.route("**/work/start", async (route) => {
+    await new Promise<void>((resolve) => {
+      finishWork = resolve;
+    });
+    await route.fallback();
+  }, { times: 1 });
+  const workResponse = page.waitForResponse((response) => response.url().includes("/work/start") && response.request().method() === "POST");
   await page.getByRole("button", { name: "Run fake worker" }).click();
+  await expect(page.locator(".ready-run-panel").getByRole("status")).toContainText("Running fake worker");
+  finishWork();
+  await workResponse;
   await expect(page.getByText("Fake worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("TASK-001 / ready_for_human_review")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run fake worker" })).toBeDisabled();
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 

@@ -283,7 +283,14 @@ function App() {
     try {
       const result = await startWork(selectedProjectID || undefined, adapter);
       await refresh();
-      setNotice(`${adapter === "fake" ? "Fake" : "Codex"} worker finished with ${result.execution?.length ?? 0} execution item(s).`);
+      const executionCount = result.execution?.length ?? 0;
+      const label = adapter === "fake" ? "Fake" : "Codex";
+      if (executionCount > 0) {
+        setNotice(`${label} worker finished with ${executionCount} execution item(s).`);
+      } else {
+        const reason = result.worker_run?.stop_reason ? ` Reason: ${result.worker_run.stop_reason}.` : "";
+        setNotice(`${label} worker checked the queue, but no ready execution work was found.${reason}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Work start failed");
     } finally {
@@ -900,21 +907,33 @@ function ReadyToRunPanel({
   actioning: string;
   onStartWork: (adapter: "fake" | "real-codex") => void;
 }) {
-  const implementationQueueCount = queueItems.filter((item) => item.item_type === "task_implementation" && item.status !== "completed").length;
+  const implementationQueueCount = queueItems.filter((item) => item.item_type === "task_implementation" && item.status === "queued").length;
   const taskLabel = tasks.length === 1 ? tasks[0]?.id : `${tasks.length} tasks`;
+  const isRunning = actioning !== "";
+  const canRun = implementationQueueCount > 0 && !isRunning;
   return (
-    <section className="ready-run-panel">
+    <section className={`ready-run-panel ${isRunning ? "is-busy" : ""}`} aria-busy={isRunning}>
       <div>
         <h2>Ready to run</h2>
         <p>
-          {taskLabel || "Task"} materialized. {implementationQueueCount > 0 ? `${implementationQueueCount} implementation item(s) are queued.` : "Start a worker when you are ready."}
+          {isRunning
+            ? "Worker is running. This can take a moment."
+            : implementationQueueCount > 0
+              ? `${taskLabel || "Task"} materialized. ${implementationQueueCount} implementation item(s) are queued.`
+              : "No implementation work is currently queued. Check Tasks for the next review or approval step."}
         </p>
       </div>
+      {isRunning ? (
+        <div className="ready-run-status" role="status" aria-live="polite">
+          <span className="ready-run-spinner" />
+          <span>{actioning === "real-codex" ? "Running Codex worker" : "Running fake worker"}</span>
+        </div>
+      ) : null}
       <div className="ready-run-actions">
-        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("real-codex")} disabled={actioning !== ""}>
+        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("real-codex")} disabled={!canRun}>
           {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
         </button>
-        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={actioning !== ""}>
+        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={!canRun}>
           {actioning === "fake" ? "Running fake" : "Run fake worker"}
         </button>
       </div>
@@ -933,6 +952,7 @@ function WorkPlanningPanel({
   onStartWork: (adapter: "fake" | "real-codex") => void;
   showActions?: boolean;
 }) {
+  const workerRuns = latestWorkerRuns(data.workStatus.worker_runs);
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -953,8 +973,8 @@ function WorkPlanningPanel({
         </div>
       ) : null}
       <div className="split-grid">
-        <StackEmpty empty={data.workStatus.worker_runs.length === 0} label="No worker runs">
-          {data.workStatus.worker_runs.slice(0, 5).map((run) => (
+        <StackEmpty empty={workerRuns.length === 0} label="No worker runs">
+          {workerRuns.slice(0, 5).map((run) => (
             <div className="stack-row" key={run.id}>
               <span>{run.lane}</span>
               <small>
@@ -1440,6 +1460,10 @@ function ProjectActivityPanel({ project, data }: { project?: RegisteredProject |
       )}
     </section>
   );
+}
+
+function latestWorkerRuns(workerRuns: DashboardData["workStatus"]["worker_runs"]) {
+  return [...workerRuns].sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
 }
 
 function DecisionPanel({ decisions }: { decisions: DashboardData["decisions"] }) {

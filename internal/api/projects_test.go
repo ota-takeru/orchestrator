@@ -481,6 +481,9 @@ func (a apiFakeAuthority) ApproveArtifact(context.Context, registry.RegisteredPr
 func (a apiFakeAuthority) ReviseArtifact(context.Context, registry.RegisteredProject, string, string) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }
+func (a apiFakeAuthority) ReviseArtifactWithCodex(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
 func (a apiFakeAuthority) MaterializeTasks(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"tasks": []any{a.name}}, nil
 }

@@ -138,6 +138,7 @@ func requiresLocalToken(r *http.Request) bool {
 		strings.HasSuffix(r.URL.Path, "/tasks/materialize") ||
 		strings.Contains(r.URL.Path, "/change-requests/") ||
 		strings.Contains(r.URL.Path, "/work/start") ||
+		strings.Contains(r.URL.Path, "/revise") ||
 		strings.Contains(r.URL.Path, "/merge") ||
 		strings.Contains(r.URL.Path, "/review/") ||
 		strings.HasSuffix(r.URL.Path, "/verify") ||
@@ -1357,6 +1358,21 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "artifacts" && parts[5] == "revise-with-codex":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		instruction, ok := decodeArtifactCodexRevisionBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.ReviseArtifactWithCodex(r.Context(), project, parts[4], instruction)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
 	case len(parts) == 5 && action == "tasks" && parts[4] == "materialize":
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
@@ -1705,6 +1721,23 @@ func (s *Server) handleArtifactRoute(w http.ResponseWriter, r *http.Request) {
 		writeAPIJSON(w, http.StatusOK, record)
 		return
 	}
+	if parts[3] == "revise-with-codex" {
+		instruction, ok := decodeArtifactCodexRevisionBody(w, r)
+		if !ok {
+			return
+		}
+		result, err := s.db.ReviseArtifactWithCodex(r.Context(), storage.ArtifactCodexRevisionInput{
+			ProjectID:   s.projectID,
+			ArtifactID:  parts[2],
+			Instruction: instruction,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "artifact_codex_revise_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, result)
+		return
+	}
 	if parts[3] != "approve" {
 		writeAPIError(w, http.StatusNotFound, "not_found", "unknown artifact route")
 		return
@@ -2042,6 +2075,21 @@ func decodeArtifactRevisionBody(w http.ResponseWriter, r *http.Request) (string,
 		return "", false
 	}
 	return input.Content, true
+}
+
+func decodeArtifactCodexRevisionBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var input struct {
+		Instruction string `json:"instruction"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return "", false
+	}
+	if strings.TrimSpace(input.Instruction) == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_instruction", "revision instruction is required")
+		return "", false
+	}
+	return input.Instruction, true
 }
 
 func decodeEnvBindingBody(w http.ResponseWriter, r *http.Request) (storage.EnvBindingInput, bool) {

@@ -19,6 +19,7 @@
 
 2026-05-27:
 
+- Artifact reviewで、Review notes欄に自然文の変更指示を書いて `Ask Codex to revise` からCodex改稿を実行できるようにしました。Codexはproject本体ではなくartifact専用の一時workspace内ファイルだけを編集し、成功時に既存のartifact revision保存処理で新しい `proposed` versionとして反映します。Local API、multi-project authority bridge、WSL command bridge、CLI、React UIを接続し、Playwright E2Eでは指示入力でCodex改稿ボタンが有効化されることを確認します。
 - Artifact reviewのReview notesを常時入力可能にし、approved後やrevision操作時に入力欄がdisabledになる導線不備を修正しました。初期artifact生成テンプレートからDevOS / Orchestrator / Human Inbox前提の文言を除き、生成されるPRD / Architecture / Task YAMLがユーザーのアプリケーション仕様として読める表現へ変更しました。
 - Artifact review UIを追加改善しました。Markdown artifactはpre表示ではなく、heading/list/paragraph/codeをReact要素としてレンダリングして表示します。承認だけでなくReview notesを添えた `approved_with_notes` 承認、notes必須の `rejected` / Request changes、本文編集から新しい `proposed` versionを作るSave revisionをUIから実行できるようにしました。Playwright E2EでMarkdown heading表示、修正依頼、revision保存の動作を確認します。
 - Artifact承認導線を改善しました。dashboard/APIがlatest artifact versionのsnapshot本文をhash検証付きで返すようにし、React UIのArtifacts panelを右側下部から選択project dashboard上部へ移動しました。承認ボタンの直前にPRD / Architecture / Roadmap / Task YAML本文プレビューを表示し、Playwright E2Eで新規project作成直後にartifact本文を確認できることを検証対象へ追加しました。

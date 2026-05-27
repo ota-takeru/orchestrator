@@ -1624,6 +1624,44 @@ func runArtifacts(ctx context.Context, args []string, stdout io.Writer, stderr i
 		}
 		fmt.Fprintf(stdout, "Artifact revision saved: %s v%d %s\n", record.ArtifactID, record.Version, record.Status)
 		return 0
+	case "revise-with-codex":
+		fs := flag.NewFlagSet("artifacts revise-with-codex", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		projectRoot := fs.String("project-root", "", "project root")
+		dataRoot := fs.String("data-root", "", "orchestrator data root")
+		instructionStdin := fs.Bool("instruction-stdin", false, "read Codex revision instruction from stdin")
+		jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+		if err := fs.Parse(args[1:]); err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+		}
+		if fs.NArg() != 1 {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("artifact id is required"))
+		}
+		if !*instructionStdin {
+			return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("--instruction-stdin is required"))
+		}
+		instruction, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "artifact_codex_revise_failed", err)
+		}
+		db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+		if err != nil {
+			return writeError(stdout, *jsonOut, errCode, "artifact_codex_revise_failed", err)
+		}
+		defer db.Close()
+		result, err := db.ReviseArtifactWithCodex(ctx, storage.ArtifactCodexRevisionInput{
+			ProjectID:   projectID,
+			ArtifactID:  fs.Arg(0),
+			Instruction: string(instruction),
+		})
+		if err != nil {
+			return writeError(stdout, *jsonOut, exitValidation, "artifact_codex_revise_failed", err)
+		}
+		if *jsonOut {
+			return writeJSON(stdout, result, 0)
+		}
+		fmt.Fprintf(stdout, "Codex artifact revision saved: %s v%d %s\n", result.Artifact.ArtifactID, result.Artifact.Version, result.Artifact.Status)
+		return 0
 	case "trusted":
 		return runArtifactsTrusted(ctx, args[1:], stdout)
 	case "check":
@@ -3962,6 +4000,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos artifacts check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos artifacts approve [--project-root PATH] [--data-root PATH] --version N [--status approved] [--notes TEXT] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos artifacts revise [--project-root PATH] [--data-root PATH] --content-stdin [--json] ARTIFACT_ID")
+	fmt.Fprintln(w, "  devos artifacts revise-with-codex [--project-root PATH] [--data-root PATH] --instruction-stdin [--json] ARTIFACT_ID")
 	fmt.Fprintln(w, "  devos check [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks materialize [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos tasks [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")

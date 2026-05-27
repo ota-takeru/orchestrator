@@ -215,6 +215,13 @@ export async function reviseArtifact(artifactID: string, content: string, projec
   await postJSON(path, { content });
 }
 
+export async function reviseArtifactWithCodex(artifactID: string, instruction: string, projectID?: string): Promise<void> {
+  const path = projectID
+    ? `/api/projects/${encodeURIComponent(projectID)}/artifacts/${encodeURIComponent(artifactID)}/revise-with-codex`
+    : `/api/artifacts/${encodeURIComponent(artifactID)}/revise-with-codex`;
+  await postJSON(path, { instruction });
+}
+
 export async function materializeTasks(projectID?: string): Promise<{ tasks?: TaskRecord[] }> {
   const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/tasks/materialize` : "/api/tasks/materialize";
   return postJSON<{ tasks?: TaskRecord[] }>(path, {});

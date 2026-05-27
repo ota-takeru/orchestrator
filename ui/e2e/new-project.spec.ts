@@ -53,7 +53,9 @@ test("artifact review supports requesting changes with notes", async ({ page }, 
   await expect(prdCard.locator(".markdown-preview").getByRole("heading", { name: "PRD" })).toBeVisible();
   await expect(prdCard.getByLabel("Review notes")).toBeEnabled();
   await expect(prdCard.getByRole("button", { name: "Request changes" })).toBeDisabled();
+  await expect(prdCard.getByRole("button", { name: "Ask Codex to revise" })).toBeDisabled();
   await prdCard.getByLabel("Review notes").fill("Add a clearer success metric before approval.");
+  await expect(prdCard.getByRole("button", { name: "Ask Codex to revise" })).toBeEnabled();
   await prdCard.getByRole("button", { name: "Request changes" }).click();
   await expect(page.getByText("Artifact changes requested.")).toBeVisible();
   await expect(prdCard.getByText("rejected / latest v1 / approved v0")).toBeVisible();

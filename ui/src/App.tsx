@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChecks, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, requestDependencyApproval, reviseArtifact, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
+import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, requestDependencyApproval, reviseArtifact, reviseArtifactWithCodex, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
 import type { ArtifactRecord, CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
@@ -321,6 +321,21 @@ function App() {
     }
   };
 
+  const submitCodexReviseArtifact = async (artifactID: string, instruction: string) => {
+    setArtifactActioning(`codex-revise:${artifactID}`);
+    setError("");
+    setNotice("");
+    try {
+      await reviseArtifactWithCodex(artifactID, instruction, selectedProjectID || undefined);
+      await refresh();
+      setNotice("Codex artifact revision saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Codex artifact revision failed");
+    } finally {
+      setArtifactActioning("");
+    }
+  };
+
   const submitMaterializeTasks = async () => {
     setArtifactActioning("materialize");
     setError("");
@@ -481,6 +496,7 @@ function App() {
               artifactActioning={artifactActioning}
               onReviewArtifact={submitReviewArtifact}
               onReviseArtifact={submitReviseArtifact}
+              onCodexReviseArtifact={submitCodexReviseArtifact}
               onMaterializeTasks={submitMaterializeTasks}
             />
           ) : (
@@ -640,6 +656,7 @@ function SelectedProjectDashboard({
   artifactActioning,
   onReviewArtifact,
   onReviseArtifact,
+  onCodexReviseArtifact,
   onMaterializeTasks
 }: {
   data: DashboardData;
@@ -655,12 +672,13 @@ function SelectedProjectDashboard({
   artifactActioning: string;
   onReviewArtifact: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
   onReviseArtifact: (artifactID: string, content: string) => void;
+  onCodexReviseArtifact: (artifactID: string, instruction: string) => void;
   onMaterializeTasks: () => void;
 }) {
   return (
     <>
       {selectedProject ? <ProjectStatusPanel project={selectedProject} /> : null}
-      <ArtifactsPanel artifacts={data.artifacts} actioning={artifactActioning} onReview={onReviewArtifact} onRevise={onReviseArtifact} onMaterialize={onMaterializeTasks} />
+      <ArtifactsPanel artifacts={data.artifacts} actioning={artifactActioning} onReview={onReviewArtifact} onRevise={onReviseArtifact} onCodexRevise={onCodexReviseArtifact} onMaterialize={onMaterializeTasks} />
       <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
       <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
@@ -1483,12 +1501,14 @@ function ArtifactsPanel({
   actioning,
   onReview,
   onRevise,
+  onCodexRevise,
   onMaterialize
 }: {
   artifacts: DashboardData["artifacts"];
   actioning: string;
   onReview: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
   onRevise: (artifactID: string, content: string) => void;
+  onCodexRevise: (artifactID: string, instruction: string) => void;
   onMaterialize: () => void;
 }) {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
@@ -1543,11 +1563,11 @@ function ArtifactsPanel({
                 </label>
               ) : null}
               <label className="artifact-review-notes">
-                <span>Review notes</span>
+                <span>Review notes / Codex instruction</span>
                 <textarea
                   value={notes}
                   onChange={(event) => setReviewNotes((previous) => ({ ...previous, [artifact.artifact_id]: event.target.value }))}
-                  placeholder="Approval notes or requested changes"
+                  placeholder="Approval notes, or tell Codex what to change"
                   rows={3}
                   disabled={actioning !== ""}
                 />
@@ -1574,6 +1594,14 @@ function ArtifactsPanel({
                     {actioning === `revise:${artifact.artifact_id}` ? "Saving" : "Save revision"}
                   </button>
                 ) : null}
+                <button
+                  className="secondary-button no-margin"
+                  type="button"
+                  onClick={() => onCodexRevise(artifact.artifact_id, trimmedNotes)}
+                  disabled={!canRevise || !trimmedNotes || actioning !== ""}
+                >
+                  {actioning === `codex-revise:${artifact.artifact_id}` ? "Revising" : "Ask Codex to revise"}
+                </button>
                 <button
                   className="secondary-button no-margin"
                   type="button"

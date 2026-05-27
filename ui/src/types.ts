@@ -366,7 +366,7 @@ export type ProjectCreateInput = {
 
 export type ProjectCreateResult = {
   project: RegisteredProject;
-  dashboard: DashboardWireData;
+  dashboard: DashboardData;
 };
 
 export type ProjectPathSuggestion = {

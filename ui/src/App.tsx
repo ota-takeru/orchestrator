@@ -26,9 +26,11 @@ function App() {
   const [currentProject, setCurrentProject] = useState<CurrentProject | undefined>();
   const [runtimeOptions, setRuntimeOptions] = useState<ProjectRuntimeOption[]>([]);
   const [defaultPathSuggestion, setDefaultPathSuggestion] = useState<ProjectPathSuggestion | undefined>();
+  const [lastCreatedProject, setLastCreatedProject] = useState<RegisteredProject | undefined>();
   const [selectedProjectID, setSelectedProjectID] = useState("");
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string>("");
+  const [notice, setNotice] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState(defaultNewProjectName);
@@ -61,11 +63,12 @@ function App() {
   const [changeActioning, setChangeActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
-  const selectedProjectSummary = selectedProjectID ? selectedProject : currentProject;
+  const selectedProjectSummary = selectedProjectID ? (selectedProject ?? (lastCreatedProject?.id === selectedProjectID ? lastCreatedProject : undefined)) : currentProject;
 
   const loadSelectedDashboard = async (projectID: string) => {
     setLoading(true);
     setError("");
+    setNotice("");
     try {
       setData(await loadDashboardData(projectID || undefined));
     } catch (err) {
@@ -136,6 +139,7 @@ function App() {
 
   const selectProject = (projectID: string) => {
     setCreatingProject(false);
+    setNotice("");
     setSelectedProjectID(projectID);
     void loadSelectedDashboard(projectID);
   };
@@ -156,6 +160,7 @@ function App() {
     setNewProjectRootTouched(false);
     setCreatingProject(true);
     setError("");
+    setNotice("");
   };
 
   const pickProjectRootParent = async () => {
@@ -176,6 +181,7 @@ function App() {
   const submitNewProject = async () => {
     setNewProjectActioning(true);
     setError("");
+    setNotice("");
     try {
       const result = await createProject({
         display_name: newProjectName,
@@ -185,19 +191,33 @@ function App() {
         wsl_distro: newProjectWslDistro,
         generate_initial_artifacts: true
       });
-      const projectData = await loadProjects();
-      setProjects(projectData.projects);
-      setCurrentProject(projectData.current_project);
-      setRuntimeOptions(projectData.runtime_options);
-      setDefaultPathSuggestion(projectData.project_path_suggestion);
+
+      setLastCreatedProject(result.project);
+      setProjects((previous) => upsertProject(previous, result.project));
       setSelectedProjectID(result.project.id);
+      setData(result.dashboard);
       setCreatingProject(false);
+      setNotice(`${result.project.display_name} was created and selected.`);
       setNewProjectName(defaultNewProjectName);
       setNewProjectRoot("");
       setNewProjectBase("");
       setNewProjectRootTouched(false);
       setNewProjectConcept("");
-      setData(await loadDashboardData(result.project.id));
+
+      try {
+        const projectData = await loadProjects();
+        setProjects(upsertProject(projectData.projects, result.project));
+        setCurrentProject(projectData.current_project);
+        setRuntimeOptions(projectData.runtime_options);
+        setDefaultPathSuggestion(projectData.project_path_suggestion);
+        setData(await loadDashboardData(result.project.id));
+      } catch (refreshErr) {
+        setNotice(
+          `${result.project.display_name} was created, but the live dashboard refresh failed: ${
+            refreshErr instanceof Error ? refreshErr.message : "Dashboard refresh failed"
+          }`
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Project creation failed");
     } finally {
@@ -259,9 +279,11 @@ function App() {
   const submitWorkStart = async (adapter: "fake" | "real-codex") => {
     setWorkActioning(adapter);
     setError("");
+    setNotice("");
     try {
-      await startWork(selectedProjectID || undefined, adapter);
+      const result = await startWork(selectedProjectID || undefined, adapter);
       await refresh();
+      setNotice(`${adapter === "fake" ? "Fake" : "Codex"} worker finished with ${result.execution?.length ?? 0} execution item(s).`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Work start failed");
     } finally {
@@ -272,9 +294,11 @@ function App() {
   const submitApproveArtifact = async (artifactID: string, version: number) => {
     setArtifactActioning(`approve:${artifactID}`);
     setError("");
+    setNotice("");
     try {
       await approveArtifact(artifactID, version, selectedProjectID || undefined);
       await refresh();
+      setNotice("Artifact approved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Artifact approval failed");
     } finally {
@@ -285,9 +309,11 @@ function App() {
   const submitMaterializeTasks = async () => {
     setArtifactActioning("materialize");
     setError("");
+    setNotice("");
     try {
-      await materializeTasks(selectedProjectID || undefined);
+      const result = await materializeTasks(selectedProjectID || undefined);
       await refresh();
+      setNotice(`${result.tasks?.length ?? 0} task(s) materialized and queued.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Task materialize failed");
     } finally {
@@ -397,6 +423,7 @@ function App() {
         />
         <section className="space-y-5">
           {error ? <ErrorBanner message={error} /> : null}
+          {notice ? <NoticeBanner message={notice} /> : null}
           {creatingProject ? (
             <NewProjectPanel
               name={newProjectName}
@@ -424,8 +451,7 @@ function App() {
                 setCreatingProject(false);
               }}
             />
-          ) : null}
-          {data ? (
+          ) : data ? (
             <SelectedProjectDashboard
               data={data}
               selectedProject={selectedProjectSummary}
@@ -445,6 +471,7 @@ function App() {
 
         <aside className="space-y-5">
           <CommandPanel command={nextCommand} />
+          <ProjectActivityPanel project={selectedProjectSummary} data={data} />
           <EnvironmentInputPanel
             envKey={envKey}
             envValue={envValue}
@@ -1266,6 +1293,52 @@ function CommandPanel({ command }: { command: string }) {
   );
 }
 
+function ProjectActivityPanel({ project, data }: { project?: RegisteredProject | CurrentProject; data: DashboardData | null }) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <h2>Project Activity</h2>
+        <Route size={18} className="text-zinc-500" />
+      </div>
+      {project ? (
+        <div className="stack">
+          <div className="stack-row">
+            <span>{project.display_name}</span>
+            <small>
+              {project.authority_runtime} / {project.status}
+            </small>
+            <small>{project.project_root}</small>
+          </div>
+          <div className="activity-grid">
+            <div>
+              <span>{data?.artifacts.length ?? 0}</span>
+              <small>Artifacts</small>
+            </div>
+            <div>
+              <span>{data?.trustedArtifacts.length ?? 0}</span>
+              <small>Approved</small>
+            </div>
+            <div>
+              <span>{data?.tasks.length ?? 0}</span>
+              <small>Tasks</small>
+            </div>
+            <div>
+              <span>{data?.queueItems.length ?? 0}</span>
+              <small>Queue</small>
+            </div>
+            <div>
+              <span>{data?.workStatus.worker_runs.length ?? 0}</span>
+              <small>Workers</small>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="empty-stack">No selected project</div>
+      )}
+    </section>
+  );
+}
+
 function DecisionPanel({ decisions }: { decisions: DashboardData["decisions"] }) {
   return (
     <section className="panel compact">
@@ -1493,6 +1566,15 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
+function NoticeBanner({ message }: { message: string }) {
+  return (
+    <div className="notice-banner">
+      <Check size={18} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
 function LoadingPanel() {
   return (
     <section className="panel">
@@ -1533,6 +1615,12 @@ function recommendedInboxAction(item: InboxItem, decisions: Decision[]) {
     return "complete setup and rerun doctor";
   }
   return "inspect the linked task/run artifact";
+}
+
+function upsertProject(projects: RegisteredProject[], project: RegisteredProject) {
+  const next = projects.filter((item) => item.id !== project.id);
+  next.unshift(project);
+  return next;
 }
 
 export default App;

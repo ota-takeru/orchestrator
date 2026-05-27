@@ -51,10 +51,10 @@ export async function loadProjects(): Promise<ProjectListData> {
 }
 
 export async function createProject(input: ProjectCreateInput): Promise<ProjectCreateResult> {
-  const body = await postJSON<ProjectCreateResult>("/api/projects", input);
+  const body = await postJSON<Omit<ProjectCreateResult, "dashboard"> & { dashboard: DashboardWireData }>("/api/projects", input);
   return {
     ...body,
-    dashboard: body.dashboard
+    dashboard: normalizeDashboard(body.dashboard)
   };
 }
 
@@ -177,9 +177,17 @@ export async function runChangeRequestAction(id: string, action: "analyze" | "ap
   await postJSON(`${base}/${encodeURIComponent(id)}/${action}`, action === "approve" ? { option: "approve" } : {});
 }
 
-export async function startWork(projectID?: string, adapter = "fake"): Promise<void> {
+type WorkStartAPIResult = {
+  execution?: unknown[];
+  worker_run?: {
+    status?: string;
+    stop_reason?: string;
+  };
+};
+
+export async function startWork(projectID?: string, adapter = "fake"): Promise<WorkStartAPIResult> {
   const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/work/start` : "/api/work/start";
-  await postJSON(path, {
+  return postJSON<WorkStartAPIResult>(path, {
     mode: "sequential",
     adapter,
     planning_concurrency: 3,
@@ -194,9 +202,9 @@ export async function approveArtifact(artifactID: string, version: number, proje
   await postJSON(path, { version, status: "approved", notes: "Approved from DevOS UI" });
 }
 
-export async function materializeTasks(projectID?: string): Promise<void> {
+export async function materializeTasks(projectID?: string): Promise<{ tasks?: TaskRecord[] }> {
   const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/tasks/materialize` : "/api/tasks/materialize";
-  await postJSON(path, {});
+  return postJSON<{ tasks?: TaskRecord[] }>(path, {});
 }
 
 export async function saveEnvBinding(key: string, value: string, scope = "project", environmentID = "", projectID?: string): Promise<void> {

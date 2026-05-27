@@ -23,7 +23,7 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: `go run ../cmd/devos serve --project-root .. --ui --ui-dir dist --addr 127.0.0.1:${port}`,
+    command: "node e2e/start-devos-server.mjs",
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000

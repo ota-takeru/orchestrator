@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, requestDependencyApproval, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
+import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, requestDependencyApproval, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
 import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
@@ -42,6 +42,7 @@ function App() {
   const [taskActioning, setTaskActioning] = useState("");
   const [setupActioning, setSetupActioning] = useState("");
   const [workActioning, setWorkActioning] = useState("");
+  const [artifactActioning, setArtifactActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
 
@@ -139,6 +140,32 @@ function App() {
       setError(err instanceof Error ? err.message : "Work start failed");
     } finally {
       setWorkActioning("");
+    }
+  };
+
+  const submitApproveArtifact = async (artifactID: string, version: number) => {
+    setArtifactActioning(`approve:${artifactID}`);
+    setError("");
+    try {
+      await approveArtifact(artifactID, version, selectedProjectID || undefined);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Artifact approval failed");
+    } finally {
+      setArtifactActioning("");
+    }
+  };
+
+  const submitMaterializeTasks = async () => {
+    setArtifactActioning("materialize");
+    setError("");
+    try {
+      await materializeTasks(selectedProjectID || undefined);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Task materialize failed");
+    } finally {
+      setArtifactActioning("");
     }
   };
 
@@ -295,6 +322,12 @@ function App() {
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
           <MergeGatePanel status={data?.mergeStatus} />
           <ProjectCheckPanel violations={data?.projectViolations ?? []} />
+          <ArtifactsPanel
+            artifacts={data?.artifacts ?? []}
+            actioning={artifactActioning}
+            onApprove={submitApproveArtifact}
+            onMaterialize={submitMaterializeTasks}
+          />
           <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
           <PathMappingsPanel mappings={data?.pathMappings ?? []} />
           <DecisionPanel decisions={data?.decisions ?? []} />
@@ -1041,6 +1074,57 @@ function TrustedArtifactsPanel({ artifacts }: { artifacts: DashboardData["truste
             <small>{artifact.path}</small>
           </div>
         ))}
+      </StackEmpty>
+    </section>
+  );
+}
+
+function ArtifactsPanel({
+  artifacts,
+  actioning,
+  onApprove,
+  onMaterialize
+}: {
+  artifacts: DashboardData["artifacts"];
+  actioning: string;
+  onApprove: (artifactID: string, version: number) => void;
+  onMaterialize: () => void;
+}) {
+  return (
+    <section className="panel compact">
+      <div className="panel-heading">
+        <div>
+          <h2>Artifacts</h2>
+          <p>{artifacts.length} drafts</p>
+        </div>
+        <FileCheck2 size={18} className="text-zinc-500" />
+      </div>
+      <div className="toolbar-row">
+        <button className="secondary-button" type="button" onClick={onMaterialize} disabled={actioning !== ""}>
+          {actioning === "materialize" ? "Materializing" : "Materialize tasks"}
+        </button>
+      </div>
+      <StackEmpty empty={artifacts.length === 0} label="No artifacts">
+        {artifacts.map((artifact) => {
+          const canApprove = artifact.latest_version ? artifact.approved_version !== artifact.latest_version && artifact.status !== "approved" : false;
+          return (
+            <div className="stack-row" key={artifact.artifact_id}>
+              <span>{artifact.artifact_type}</span>
+              <small>
+                {artifact.status} / latest v{artifact.latest_version || 0} / approved v{artifact.approved_version || 0}
+              </small>
+              <small>{artifact.path}</small>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => onApprove(artifact.artifact_id, artifact.latest_version || 1)}
+                disabled={!canApprove || actioning !== ""}
+              >
+                {actioning === `approve:${artifact.artifact_id}` ? "Approving" : "Approve latest"}
+              </button>
+            </div>
+          );
+        })}
       </StackEmpty>
     </section>
   );

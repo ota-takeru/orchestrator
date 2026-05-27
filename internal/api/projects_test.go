@@ -212,6 +212,15 @@ func (a apiFakeAuthority) CreateChangeRequest(context.Context, registry.Register
 func (a apiFakeAuthority) StartWork(context.Context, registry.RegisteredProject, storage.WorkStartInput) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }
+func (a apiFakeAuthority) Artifacts(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"artifacts": []any{a.name}}, nil
+}
+func (a apiFakeAuthority) ApproveArtifact(context.Context, registry.RegisteredProject, string, int, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) MaterializeTasks(context.Context, registry.RegisteredProject) (any, error) {
+	return map[string]any{"tasks": []any{a.name}}, nil
+}
 func (a apiFakeAuthority) ApproveInboxItem(context.Context, registry.RegisteredProject, string, string, string) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -150,6 +151,63 @@ func TestServerExposesTrustedArtifacts(t *testing.T) {
 	}
 	if len(body.Artifacts) != 1 || body.Artifacts[0].ArtifactID != record.ArtifactID || body.Artifacts[0].ApprovalNotes != "Keep scope." || body.Artifacts[0].Content != "# PRD" {
 		t.Fatalf("trusted artifacts = %#v", body.Artifacts)
+	}
+}
+
+func TestServerApprovesArtifactAndMaterializesTasks(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	if _, err := db.SQL().ExecContext(ctx, "UPDATE projects SET root_path = ? WHERE id = ?", root, projectID); err != nil {
+		t.Fatal(err)
+	}
+	inputs := []storage.ArtifactVersionInput{
+		{ProjectID: projectID, ArtifactType: storage.ArtifactPRD, Path: ".devagent/prd.md", Content: []byte("# PRD"), Status: "proposed"},
+		{ProjectID: projectID, ArtifactType: storage.ArtifactArchitecture, Path: ".devagent/architecture.md", Content: []byte("# Architecture"), Status: "proposed"},
+		{ProjectID: projectID, ArtifactType: storage.ArtifactRoadmap, Path: ".devagent/roadmap.yaml", Content: []byte("roadmap:\n  - TASK-001\n"), Status: "proposed"},
+		{ProjectID: projectID, ArtifactType: storage.ArtifactTaskYAML, Path: ".devagent/tasks/TASK-001.yaml", Content: []byte("id: TASK-001\ntitle: Test task\nbase_branch: main\nverification_commands:\n  - id: verify\n    environment: primary\n    runner: auto\n    required_for_merge: true\n    working_dir: project_root\n    command:\n      argv: [\"go\", \"test\", \"./...\"]\n"), Status: "proposed"},
+	}
+	records := make([]storage.ArtifactVersionRecord, 0, len(inputs))
+	for _, input := range inputs {
+		if err := writeProjectArtifact(root, input.Path, input.Content); err != nil {
+			t.Fatal(err)
+		}
+		record, err := db.SaveArtifactVersion(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, record)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/artifacts", nil)
+	listRec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", listRec.Code, listRec.Body.String())
+	}
+
+	for _, record := range records {
+		req := httptest.NewRequest(http.MethodPost, "/api/artifacts/"+record.ArtifactID+"/approve", bytes.NewBufferString(`{"version":1,"status":"approved"}`))
+		rec := httptest.NewRecorder()
+		NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("approve %s status = %d body = %s", record.ArtifactID, rec.Code, rec.Body.String())
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/materialize", bytes.NewBufferString(`{}`))
+	rec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Tasks []storage.TaskRecord `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Tasks) != 1 || body.Tasks[0].ID != "TASK-001" || body.Tasks[0].Status != "ready" {
+		t.Fatalf("tasks = %#v", body.Tasks)
 	}
 }
 
@@ -476,4 +534,12 @@ INSERT INTO projects(
 ) VALUES (?, 'Project', '/repo', 'concept', 'active', ?, ?)`, projectID, now, now); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeProjectArtifact(root string, relPath string, content []byte) error {
+	path := filepath.Join(root, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, content, 0o644)
 }

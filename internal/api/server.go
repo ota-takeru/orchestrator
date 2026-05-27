@@ -45,6 +45,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	mux.HandleFunc("/api/memory", s.handleMemory)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
+	mux.HandleFunc("/api/tasks/materialize", s.handleTasksMaterialize)
 	mux.HandleFunc("/api/tasks/", s.handleTaskRoute)
 	mux.HandleFunc("/api/requests", s.handleRequests)
 	mux.HandleFunc("/api/queue", s.handleQueue)
@@ -55,6 +56,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/dependency-risks", s.handleDependencyRisks)
 	mux.HandleFunc("/api/dependency-approvals", s.handleDependencyApprovals)
 	mux.HandleFunc("/api/env/bindings", s.handleEnvBindings)
+	mux.HandleFunc("/api/artifacts", s.handleArtifacts)
+	mux.HandleFunc("/api/artifacts/", s.handleArtifactRoute)
 	mux.HandleFunc("/api/artifacts/trusted", s.handleTrustedArtifacts)
 	mux.HandleFunc("/api/platform/path-mappings", s.handlePathMappings)
 	mux.HandleFunc("/api/platform/toolchain-setup", s.handleToolchainSetup)
@@ -113,6 +116,7 @@ func requiresLocalToken(r *http.Request) bool {
 	return r.URL.Path == "/api/env/bindings" ||
 		strings.HasSuffix(r.URL.Path, "/env/bindings") ||
 		strings.Contains(r.URL.Path, "/approve") ||
+		strings.HasSuffix(r.URL.Path, "/tasks/materialize") ||
 		strings.Contains(r.URL.Path, "/work/start") ||
 		strings.Contains(r.URL.Path, "/merge") ||
 		strings.Contains(r.URL.Path, "/review/") ||
@@ -147,6 +151,19 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := s.db.ListTasks(r.Context(), s.projectID, r.URL.Query().Get("status"))
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "tasks_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (s *Server) handleTasksMaterialize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	tasks, err := s.db.MaterializeApprovedTasks(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "tasks_materialize_failed", err.Error())
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
@@ -404,6 +421,43 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, err := authority.StartWork(r.Context(), project, input)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "artifacts":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.Artifacts(r.Context(), project, r.URL.Query().Get("type"))
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "artifacts" && parts[5] == "approve":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		input, ok := decodeArtifactApprovalBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.ApproveArtifact(r.Context(), project, parts[4], input.Version, input.Status, input.Notes)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 5 && action == "tasks" && parts[4] == "materialize":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		body, err := authority.MaterializeTasks(r.Context(), project)
 		if err != nil {
 			writeProjectHubError(w, err)
 			return
@@ -671,6 +725,41 @@ func (s *Server) handleEnvBindings(w http.ResponseWriter, r *http.Request) {
 	record, err := s.db.SaveEnvBinding(r.Context(), input)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "env_binding_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	artifacts, err := s.db.ListArtifacts(r.Context(), s.projectID, r.URL.Query().Get("type"))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "artifacts_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
+}
+
+func (s *Server) handleArtifactRoute(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "artifacts" || parts[3] != "approve" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown artifact route")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	input, ok := decodeArtifactApprovalBody(w, r)
+	if !ok {
+		return
+	}
+	record, err := s.db.ApproveArtifactVersion(r.Context(), s.projectID, parts[2], input.Version, input.Status, input.Notes)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "artifact_approve_failed", err.Error())
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, record)
@@ -945,6 +1034,27 @@ func decodeWorkStartBody(w http.ResponseWriter, r *http.Request) (storage.WorkSt
 		ImplementationConcurrency: input.ImplementationConcurrency,
 		Until:                     input.Until,
 	}, true
+}
+
+type artifactApprovalBody struct {
+	Version int    `json:"version"`
+	Status  string `json:"status"`
+	Notes   string `json:"notes"`
+}
+
+func decodeArtifactApprovalBody(w http.ResponseWriter, r *http.Request) (artifactApprovalBody, bool) {
+	var input artifactApprovalBody
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return artifactApprovalBody{}, false
+	}
+	if input.Version <= 0 {
+		input.Version = 1
+	}
+	if strings.TrimSpace(input.Status) == "" {
+		input.Status = "approved"
+	}
+	return input, true
 }
 
 func decodeEnvBindingBody(w http.ResponseWriter, r *http.Request) (storage.EnvBindingInput, bool) {

@@ -5,6 +5,7 @@ import type {
   Decision,
   DependencyRisk,
   FeatureRequest,
+  ArtifactRecord,
   HumanInboxSnapshot,
   InvariantViolation,
   MemoryRecord,
@@ -55,6 +56,7 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     dependencyRiskBody,
     decisionBody,
     memoryBody,
+    artifactsBody,
     artifactBody,
     pathMappingBody,
     setupBody,
@@ -72,6 +74,7 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     getJSON<{ risks: DependencyRisk[] }>("/api/dependency-risks"),
     getJSON<{ decisions: Decision[] }>("/api/decisions?status=open"),
     getJSON<{ memories: MemoryRecord[] }>("/api/memory?type=baseline_issue"),
+    getJSON<{ artifacts: ArtifactRecord[] }>("/api/artifacts"),
     getJSON<{ artifacts: TrustedArtifact[] }>("/api/artifacts/trusted"),
     getJSON<{ mappings: PathMapping[] }>("/api/platform/path-mappings"),
     getJSON<{ cards: ToolchainSetupCard[] }>("/api/platform/toolchain-setup"),
@@ -91,6 +94,7 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     dependencyRisks: dependencyRiskBody.risks,
     decisions: decisionBody.decisions,
     baselineIssues: memoryBody.memories,
+    artifacts: artifactsBody.artifacts,
     trustedArtifacts: artifactBody.artifacts,
     pathMappings: pathMappingBody.mappings,
     toolchainSetupCards: setupBody.cards,
@@ -140,6 +144,18 @@ export async function startWork(projectID?: string, adapter = "fake"): Promise<v
     planning_concurrency: 3,
     implementation_concurrency: 1
   });
+}
+
+export async function approveArtifact(artifactID: string, version: number, projectID?: string): Promise<void> {
+  const path = projectID
+    ? `/api/projects/${encodeURIComponent(projectID)}/artifacts/${encodeURIComponent(artifactID)}/approve`
+    : `/api/artifacts/${encodeURIComponent(artifactID)}/approve`;
+  await postJSON(path, { version, status: "approved", notes: "Approved from DevOS UI" });
+}
+
+export async function materializeTasks(projectID?: string): Promise<void> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/tasks/materialize` : "/api/tasks/materialize";
+  await postJSON(path, {});
 }
 
 export async function saveEnvBinding(key: string, value: string, scope = "project", environmentID = "", projectID?: string): Promise<void> {
@@ -247,6 +263,7 @@ function normalizeDashboard(data: DashboardWireData): DashboardData {
     dependencyRisks: data.dependency_risks ?? [],
     decisions: data.decisions ?? [],
     baselineIssues: data.baseline_issues ?? [],
+    artifacts: data.artifacts ?? [],
     trustedArtifacts: data.trusted_artifacts ?? [],
     pathMappings: data.path_mappings ?? [],
     toolchainSetupCards: data.toolchain_setup_cards ?? [],

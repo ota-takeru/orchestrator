@@ -75,6 +75,17 @@ export type TrustedArtifact = {
   content: string;
 };
 
+export type ArtifactRecord = {
+  artifact_id: string;
+  artifact_type: string;
+  status: string;
+  latest_version_id?: string;
+  approved_version_id?: string;
+  latest_version?: number;
+  approved_version?: number;
+  path?: string;
+};
+
 export type PathMapping = {
   id: string;
   from_environment_id: string;
@@ -284,6 +295,7 @@ export type DashboardWireData = {
   dependency_risks: DependencyRisk[];
   decisions: Decision[];
   baseline_issues: MemoryRecord[];
+  artifacts: ArtifactRecord[];
   trusted_artifacts: TrustedArtifact[];
   path_mappings: PathMapping[];
   toolchain_setup_cards: ToolchainSetupCard[];
@@ -303,6 +315,7 @@ export type DashboardData = {
   dependencyRisks: DependencyRisk[];
   decisions: Decision[];
   baselineIssues: MemoryRecord[];
+  artifacts: ArtifactRecord[];
   trustedArtifacts: TrustedArtifact[];
   pathMappings: PathMapping[];
   toolchainSetupCards: ToolchainSetupCard[];

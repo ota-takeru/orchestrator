@@ -24,6 +24,9 @@ type ProjectAuthority interface {
 	CreateFeatureRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
 	CreateChangeRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
 	StartWork(ctx context.Context, project registry.RegisteredProject, input storage.WorkStartInput) (any, error)
+	Artifacts(ctx context.Context, project registry.RegisteredProject, artifactType string) (any, error)
+	ApproveArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, version int, status string, notes string) (any, error)
+	MaterializeTasks(ctx context.Context, project registry.RegisteredProject) (any, error)
 	ApproveInboxItem(ctx context.Context, project registry.RegisteredProject, inboxID string, option string, notes string) (any, error)
 	SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error)
 	TaskArtifacts(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error)
@@ -171,6 +174,41 @@ func (WindowsLocalAuthority) StartWork(ctx context.Context, project registry.Reg
 	defer db.Close()
 	input.ProjectID = projectID
 	return db.StartWork(ctx, input)
+}
+
+func (WindowsLocalAuthority) Artifacts(ctx context.Context, project registry.RegisteredProject, artifactType string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	artifacts, err := db.ListArtifacts(ctx, projectID, artifactType)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"artifacts": artifacts}, nil
+}
+
+func (WindowsLocalAuthority) ApproveArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, version int, status string, notes string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.ApproveArtifactVersion(ctx, projectID, artifactID, version, status, notes)
+}
+
+func (WindowsLocalAuthority) MaterializeTasks(ctx context.Context, project registry.RegisteredProject) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	tasks, err := db.MaterializeApprovedTasks(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"tasks": tasks}, nil
 }
 
 func (WindowsLocalAuthority) ApproveInboxItem(ctx context.Context, project registry.RegisteredProject, inboxID string, option string, notes string) (any, error) {
@@ -438,6 +476,41 @@ func (a WslAuthority) StartWork(ctx context.Context, project registry.Registered
 		args = append(args, "--until", input.Until)
 	}
 	if err := a.runJSON(ctx, project, &body, args...); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) Artifacts(ctx context.Context, project registry.RegisteredProject, artifactType string) (any, error) {
+	var body map[string]any
+	args := []string{"artifacts"}
+	if strings.TrimSpace(artifactType) != "" {
+		args = append(args, "--type", artifactType)
+	}
+	if err := a.runJSON(ctx, project, &body, args...); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) ApproveArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, version int, status string, notes string) (any, error) {
+	var body map[string]any
+	args := []string{"artifacts", "approve", "--version", fmt.Sprintf("%d", version)}
+	if strings.TrimSpace(status) != "" {
+		args = append(args, "--status", status)
+	}
+	if strings.TrimSpace(notes) != "" {
+		args = append(args, "--notes", notes)
+	}
+	if err := a.runJSONWithTrailing(ctx, project, &body, args, artifactID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) MaterializeTasks(ctx context.Context, project registry.RegisteredProject) (any, error) {
+	var body map[string]any
+	if err := a.runJSON(ctx, project, &body, "tasks", "materialize"); err != nil {
 		return nil, err
 	}
 	return body, nil

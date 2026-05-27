@@ -54,6 +54,7 @@ type ProjectDashboardData struct {
 	DependencyRisks     []DependencyRiskRecord         `json:"dependency_risks"`
 	Decisions           []DecisionRecord               `json:"decisions"`
 	BaselineIssues      []MemoryRecord                 `json:"baseline_issues"`
+	Artifacts           []ArtifactRecord               `json:"artifacts"`
 	TrustedArtifacts    []TrustedArtifactContentRecord `json:"trusted_artifacts"`
 	PathMappings        []PathMappingRecord            `json:"path_mappings"`
 	ToolchainSetupCards []ToolchainSetupInstructions   `json:"toolchain_setup_cards"`
@@ -121,6 +122,10 @@ func (db *DB) LoadProjectDashboard(ctx context.Context, projectID string, limit 
 	if err != nil {
 		return ProjectDashboardData{}, err
 	}
+	artifacts, err := db.ListArtifacts(ctx, projectID, "")
+	if err != nil {
+		return ProjectDashboardData{}, err
+	}
 	trusted, err := db.TrustedArtifactContentBundle(ctx, projectID)
 	if err != nil {
 		return ProjectDashboardData{}, err
@@ -156,6 +161,7 @@ func (db *DB) LoadProjectDashboard(ctx context.Context, projectID string, limit 
 		DependencyRisks:     risks,
 		Decisions:           decisions,
 		BaselineIssues:      baseline,
+		Artifacts:           artifacts,
 		TrustedArtifacts:    trusted,
 		PathMappings:        mappings,
 		ToolchainSetupCards: cards,

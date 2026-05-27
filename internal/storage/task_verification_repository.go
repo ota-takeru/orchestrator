@@ -195,7 +195,7 @@ func (db *DB) verificationPlan(ctx context.Context, projectID string, taskID str
 		return []verifier.Command{command}, verifier.StaticRunnerRegistry{env.ID: fakeRunnerForEnvironment(env)}, nil
 	case "local":
 		if !localVerificationOSSupported(env.OSFamily) {
-			return nil, nil, fmt.Errorf("local verification v1 only supports linux/wsl current environment")
+			return nil, nil, fmt.Errorf("local verification is not supported for %s on %s runtime", env.OSFamily, localVerificationRuntimeGOOS)
 		}
 		commands := defaultLocalVerificationCommands(ctx, env)
 		return commands, verifier.StaticRunnerRegistry{env.ID: runners.NewLocalRunner(env)}, nil
@@ -365,7 +365,7 @@ func runnerForVerificationAdapter(adapter string, env platform.ExecutionEnvironm
 		return runner, fakeRunnerForEnvironment(env), nil
 	case "local":
 		if !localVerificationOSSupported(env.OSFamily) {
-			return "", nil, fmt.Errorf("local verification v1 only supports linux/wsl current environment")
+			return "", nil, fmt.Errorf("local verification is not supported for %s on %s runtime", env.OSFamily, localVerificationRuntimeGOOS)
 		}
 		if runner == "" || runner == "auto" {
 			runner = "direct"

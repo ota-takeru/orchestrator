@@ -30,6 +30,7 @@
 - Local API / multi-project authority bridge / UIへartifact list、latest artifact承認、approved artifactからのtask materialize経路を追加しました。WSL projectでは `devos artifacts`、`devos artifacts approve`、`devos tasks materialize` のcommand bridgeに閉じ込めています。
 - 手動適用patchの再検証を `fake` 専用から `local|fake` 対応へ拡張しました。`devos patch verify-applied` の既定はlocal verificationになり、Task YAML由来のrequired verification commandを実行し、`patch_application` reverify context、verified worktree、registered applied commitをevidenceへ保存します。
 - `.gitattributes`、`.gitignore`、Go moduleを持つ一時targetで、`devos init`、`spec`、`plan`、artifact承認、`tasks materialize`、`work start --adapter fake`、review/merge approval、merge queue fake reverifyまでを再実行し、`TASK-001` が `merged`、`devos check` violationsなし、open Inboxなしになることを確認しました。
+- Change Request一時target回帰として、`change request`、`change analyze`、`change approve`、`work start` によるFeature Request planning合流、scope Decision作成、`promote_task_group_proposal` 承認、execution queue投入、fake worker実行までを確認しました。最終taskは `ready_for_human_review`、`devos check` violationsなし、open Inboxなしです。
 - 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`、`git diff --check`。
 - 残る実機検証: この環境ではWindows native targetを直接実行できないため、real verification commandを持つWindows targetでの追加E2Eは継続確認として残ります。
 

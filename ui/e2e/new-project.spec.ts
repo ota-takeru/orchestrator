@@ -114,8 +114,11 @@ test("project setup actions execute from the UI after creation", async ({ page }
 
   await expect(page.locator('button:has-text("Approve latest"):not(:disabled)')).toHaveCount(0);
   await page.getByRole("button", { name: "Materialize tasks" }).click();
-  await expect(page.getByText("1 task(s) materialized and queued.")).toBeVisible();
+  await expect(page.getByText("1 task(s) materialized and queued. Next: run a worker.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ready to run" })).toBeVisible();
   await expect(page.getByText("TASK-001 / ready")).toBeVisible();
+  await expect(page.locator(".artifact-summary-panel")).toContainText("4 approved / 4 total");
+  await expect(page.locator(".artifact-summary-panel").getByRole("button", { name: "View artifacts" })).toBeVisible();
 
   await page.getByRole("button", { name: "Run fake worker" }).click();
   await expect(page.getByText("Fake worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });

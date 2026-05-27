@@ -343,7 +343,7 @@ function App() {
     try {
       const result = await materializeTasks(selectedProjectID || undefined);
       await refresh();
-      setNotice(`${result.tasks?.length ?? 0} task(s) materialized and queued.`);
+      setNotice(`${result.tasks?.length ?? 0} task(s) materialized and queued. Next: run a worker.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Task materialize failed");
     } finally {
@@ -675,15 +675,41 @@ function SelectedProjectDashboard({
   onCodexReviseArtifact: (artifactID: string, instruction: string) => void;
   onMaterializeTasks: () => void;
 }) {
+  const hasPendingArtifacts = data.artifacts.some((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
+  const hasMaterializedTasks = data.tasks.length > 0 || data.queueItems.some((item) => item.item_type === "task_implementation");
+  const compactArtifacts = hasMaterializedTasks && !hasPendingArtifacts;
+  const artifactsPanel = (
+    <ArtifactsPanel
+      artifacts={data.artifacts}
+      actioning={artifactActioning}
+      compact={compactArtifacts}
+      materializedTaskCount={data.tasks.length}
+      onReview={onReviewArtifact}
+      onRevise={onReviseArtifact}
+      onCodexRevise={onCodexReviseArtifact}
+      onMaterialize={onMaterializeTasks}
+    />
+  );
   return (
     <>
       {selectedProject ? <ProjectStatusPanel project={selectedProject} /> : null}
-      <ArtifactsPanel artifacts={data.artifacts} actioning={artifactActioning} onReview={onReviewArtifact} onRevise={onReviseArtifact} onCodexRevise={onCodexReviseArtifact} onMaterialize={onMaterializeTasks} />
+      {hasMaterializedTasks ? (
+        <>
+          <ReadyToRunPanel tasks={data.tasks} queueItems={data.queueItems} actioning={workActioning} onStartWork={onStartWork} />
+          <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} showActions={false} />
+          <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
+          {artifactsPanel}
+        </>
+      ) : (
+        <>
+          {artifactsPanel}
+          <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} />
+          <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
+        </>
+      )}
       <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
       <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
-      <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} />
-      <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
     </>
   );
 }
@@ -863,14 +889,49 @@ function RequestQueuePanel({
   );
 }
 
+function ReadyToRunPanel({
+  tasks,
+  queueItems,
+  actioning,
+  onStartWork
+}: {
+  tasks: DashboardData["tasks"];
+  queueItems: WorkQueueItem[];
+  actioning: string;
+  onStartWork: (adapter: "fake" | "real-codex") => void;
+}) {
+  const implementationQueueCount = queueItems.filter((item) => item.item_type === "task_implementation" && item.status !== "completed").length;
+  const taskLabel = tasks.length === 1 ? tasks[0]?.id : `${tasks.length} tasks`;
+  return (
+    <section className="ready-run-panel">
+      <div>
+        <h2>Ready to run</h2>
+        <p>
+          {taskLabel || "Task"} materialized. {implementationQueueCount > 0 ? `${implementationQueueCount} implementation item(s) are queued.` : "Start a worker when you are ready."}
+        </p>
+      </div>
+      <div className="ready-run-actions">
+        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("real-codex")} disabled={actioning !== ""}>
+          {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
+        </button>
+        <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={actioning !== ""}>
+          {actioning === "fake" ? "Running fake" : "Run fake worker"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function WorkPlanningPanel({
   data,
   actioning,
-  onStartWork
+  onStartWork,
+  showActions = true
 }: {
   data: DashboardData;
   actioning: string;
   onStartWork: (adapter: "fake" | "real-codex") => void;
+  showActions?: boolean;
 }) {
   return (
     <section className="panel">
@@ -881,14 +942,16 @@ function WorkPlanningPanel({
         </div>
         <Wrench size={20} className="text-zinc-500" />
       </div>
-      <div className="toolbar-row">
-        <button className="secondary-button" type="button" onClick={() => onStartWork("fake")} disabled={actioning !== ""}>
-          {actioning === "fake" ? "Running fake" : "Run fake worker"}
-        </button>
-        <button className="secondary-button" type="button" onClick={() => onStartWork("real-codex")} disabled={actioning !== ""}>
-          {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
-        </button>
-      </div>
+      {showActions ? (
+        <div className="toolbar-row">
+          <button className="secondary-button" type="button" onClick={() => onStartWork("fake")} disabled={actioning !== ""}>
+            {actioning === "fake" ? "Running fake" : "Run fake worker"}
+          </button>
+          <button className="secondary-button" type="button" onClick={() => onStartWork("real-codex")} disabled={actioning !== ""}>
+            {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
+          </button>
+        </div>
+      ) : null}
       <div className="split-grid">
         <StackEmpty empty={data.workStatus.worker_runs.length === 0} label="No worker runs">
           {data.workStatus.worker_runs.slice(0, 5).map((run) => (
@@ -1499,6 +1562,8 @@ function TrustedArtifactsPanel({ artifacts }: { artifacts: DashboardData["truste
 function ArtifactsPanel({
   artifacts,
   actioning,
+  compact,
+  materializedTaskCount,
   onReview,
   onRevise,
   onCodexRevise,
@@ -1506,17 +1571,43 @@ function ArtifactsPanel({
 }: {
   artifacts: DashboardData["artifacts"];
   actioning: string;
+  compact: boolean;
+  materializedTaskCount: number;
   onReview: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
   onRevise: (artifactID: string, content: string) => void;
   onCodexRevise: (artifactID: string, instruction: string) => void;
   onMaterialize: () => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [revisionRequests, setRevisionRequests] = useState<Record<string, boolean>>({});
   const [moreMenus, setMoreMenus] = useState<Record<string, boolean>>({});
   const [editingArtifacts, setEditingArtifacts] = useState<Record<string, boolean>>({});
   const [revisionContent, setRevisionContent] = useState<Record<string, string>>({});
   const pendingCount = artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved").length;
+  const approvedCount = artifacts.filter((artifact) => artifact.approved_version && artifact.approved_version === artifact.latest_version).length;
+  const showDetails = !compact || detailsOpen;
+  if (compact && !showDetails) {
+    return (
+      <section className="panel compact artifact-summary-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Artifacts</h2>
+            <p>
+              {approvedCount} approved / {artifacts.length} total
+            </p>
+          </div>
+          <FileCheck2 size={18} className="text-zinc-500" />
+        </div>
+        <div className="artifact-summary-row">
+          <span>{materializedTaskCount > 0 ? `${materializedTaskCount} task(s) materialized` : "Tasks materialized"}</span>
+          <button className="secondary-button no-margin" type="button" onClick={() => setDetailsOpen(true)}>
+            View artifacts
+          </button>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -1527,9 +1618,15 @@ function ArtifactsPanel({
         <FileCheck2 size={18} className="text-zinc-500" />
       </div>
       <div className="toolbar-row">
-        <button className="secondary-button" type="button" onClick={onMaterialize} disabled={actioning !== ""}>
-          {actioning === "materialize" ? "Materializing" : "Materialize tasks"}
-        </button>
+        {compact ? (
+          <button className="secondary-button no-margin" type="button" onClick={() => setDetailsOpen(false)}>
+            Hide artifacts
+          </button>
+        ) : (
+          <button className="secondary-button" type="button" onClick={onMaterialize} disabled={actioning !== ""}>
+            {actioning === "materialize" ? "Materializing" : "Materialize tasks"}
+          </button>
+        )}
       </div>
       <StackEmpty empty={artifacts.length === 0} label="No artifacts">
         {artifacts.map((artifact) => {

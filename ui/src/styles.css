@@ -96,6 +96,38 @@ select {
   font-weight: 650;
 }
 
+.ready-run-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #9bd6bb;
+  border-radius: 8px;
+  background: #eefaf4;
+  padding: 16px 18px;
+}
+
+.ready-run-panel h2 {
+  margin: 0;
+  color: #14543b;
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.ready-run-panel p {
+  margin: 5px 0 0;
+  color: #236a48;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ready-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .activity-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -605,6 +637,23 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.artifact-summary-panel .panel-heading {
+  margin-bottom: 10px;
+}
+
+.artifact-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.artifact-summary-row span {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .artifact-review-card {
   position: relative;
   display: grid;
@@ -883,6 +932,15 @@ button:disabled {
 @media (max-width: 820px) {
   .project-status {
     display: grid;
+  }
+
+  .ready-run-panel,
+  .artifact-summary-row {
+    display: grid;
+  }
+
+  .ready-run-actions {
+    justify-content: flex-start;
   }
 
   .badge-row {

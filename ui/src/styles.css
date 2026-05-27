@@ -372,6 +372,13 @@ td:nth-child(5) {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
 .compact-form {
   grid-template-columns: 1fr;
 }

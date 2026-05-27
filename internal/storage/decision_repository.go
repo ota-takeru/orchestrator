@@ -180,6 +180,11 @@ WHERE project_id = ? AND source_type = 'decision' AND source_id = ? AND status =
 	if err := db.recordApprovedDependencyDecision(ctx, tx, input, evidenceJSON, option, now); err != nil {
 		return DecisionRecord{}, err
 	}
+	if option == "promote_task_group_proposal" {
+		if err := promoteTaskGroupProposal(ctx, tx, input.ProjectID, input.DecisionID, evidenceJSON, now); err != nil {
+			return DecisionRecord{}, err
+		}
+	}
 	if err := rememberApprovedDecision(ctx, tx, input.ProjectID, decision, input, now); err != nil {
 		return DecisionRecord{}, err
 	}
@@ -198,6 +203,54 @@ WHERE project_id = ? AND source_type = 'decision' AND source_id = ? AND status =
 	decision.UpdatedAt = now
 	decision.ResolvedAt = now
 	return decision, nil
+}
+
+func promoteTaskGroupProposal(ctx context.Context, tx *sql.Tx, projectID string, decisionID string, evidenceJSON string, now string) error {
+	var evidence struct {
+		TaskGroupID string `json:"task_group_id"`
+		TaskID      string `json:"task_id"`
+	}
+	if err := json.Unmarshal([]byte(evidenceJSON), &evidence); err != nil {
+		return fmt.Errorf("planning decision evidence must be JSON: %w", err)
+	}
+	if strings.TrimSpace(evidence.TaskGroupID) == "" || strings.TrimSpace(evidence.TaskID) == "" {
+		return fmt.Errorf("planning decision evidence requires task_group_id and task_id")
+	}
+	if err := statemachine.Task.ValidateTransition("proposed", "ready"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE task_groups
+SET status = 'ready', updated_at = ?
+WHERE project_id = ? AND id = ? AND status = 'proposed'`,
+		now, projectID, evidence.TaskGroupID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE tasks
+SET status = 'ready', updated_at = ?
+WHERE project_id = ? AND id = ? AND task_group_id = ? AND status = 'proposed'`,
+		now, projectID, evidence.TaskID, evidence.TaskGroupID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("proposed task not found for planning decision: %s", evidence.TaskID)
+	}
+	queueID, err := enqueueTaskImplementationWorkItem(ctx, tx, projectID, evidence.TaskID, now)
+	if err != nil {
+		return err
+	}
+	return insertWorkflowEvent(ctx, tx, projectID, "task_group_proposal_promoted", map[string]any{
+		"decision_id":        decisionID,
+		"task_group_id":      evidence.TaskGroupID,
+		"task_id":            evidence.TaskID,
+		"work_queue_item_id": queueID,
+	}, now)
 }
 
 func resumeTaskAfterDecisionApproval(ctx context.Context, tx *sql.Tx, projectID string, taskID string, decisionID string, now string) error {

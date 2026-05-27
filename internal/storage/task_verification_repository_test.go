@@ -160,6 +160,35 @@ WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"wsl-smoke","envi
 	}
 }
 
+func TestVerifyTaskLocalSupportsWindowsWhenRunningOnWindows(t *testing.T) {
+	previous := localVerificationRuntimeGOOS
+	localVerificationRuntimeGOOS = "windows"
+	t.Cleanup(func() { localVerificationRuntimeGOOS = previous })
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "verify.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	insertProject(t, db.SQL(), "PROJECT-001")
+	insertEnvironmentWithOSRoot(t, db, "windows-main", "PROJECT-001", "primary", "windows", root)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "verifying")
+	if _, err := db.SQL().ExecContext(ctx, `
+UPDATE tasks
+SET verification_commands_json = ?
+WHERE project_id = 'PROJECT-001' AND id = 'TASK-001'`, `[{"id":"windows-smoke","environment":"primary","runner":"auto","required_for_merge":true,"working_dir":"project_root","command":{"argv":["sh","./verify.sh"]},"network":false}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.VerifyTask(ctx, "PROJECT-001", "TASK-001", VerifyTaskInput{Adapter: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.EnvironmentID != "windows-main" || result.TaskStatus != "ready_for_human_review" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestOptionalSidecarVerificationFailureIsReportOnlyByDefault(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
@@ -248,6 +277,29 @@ INSERT INTO execution_environments(
   ?, ?, 'wsl', ?, 'bash', ?, 'linux-git',
   'codex-wsl', 'linux-bubblewrap', 'detected', ?, ?
 )`, id, projectID, role, root, now(), now())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertEnvironmentWithOSRoot(t *testing.T, db *DB, id string, projectID string, role string, osFamily string, root string) {
+	t.Helper()
+	shell := "bash"
+	gitProvider := "linux-git"
+	codexAdapter := "codex-linux"
+	sandboxProfile := "linux-bubblewrap"
+	if osFamily == "windows" {
+		shell = "powershell"
+		gitProvider = "git-for-windows"
+		codexAdapter = "codex-windows"
+		sandboxProfile = "windows-native"
+	}
+	_, err := db.SQL().ExecContext(context.Background(), `
+INSERT INTO execution_environments(
+  id, project_id, os_family, role, shell, project_root, git_provider,
+  codex_adapter, sandbox_profile, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'detected', ?, ?)`,
+		id, projectID, osFamily, role, shell, root, gitProvider, codexAdapter, sandboxProfile, now(), now())
 	if err != nil {
 		t.Fatal(err)
 	}

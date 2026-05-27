@@ -132,6 +132,16 @@ export async function createChangeRequest(text: string, projectID?: string): Pro
   await postJSON(path, { text });
 }
 
+export async function startWork(projectID?: string, adapter = "fake"): Promise<void> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/work/start` : "/api/work/start";
+  await postJSON(path, {
+    mode: "sequential",
+    adapter,
+    planning_concurrency: 3,
+    implementation_concurrency: 1
+  });
+}
+
 export async function saveEnvBinding(key: string, value: string, scope = "project", environmentID = "", projectID?: string): Promise<void> {
   const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/env/bindings` : "/api/env/bindings";
   await postJSON(path, { key, value, scope, environment_id: environmentID });

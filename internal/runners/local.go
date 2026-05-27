@@ -24,6 +24,10 @@ func (r LocalRunner) EnvironmentID() string {
 
 func (r LocalRunner) Capabilities(ctx context.Context) (Capabilities, error) {
 	_ = ctx
+	pathStyle := "posix"
+	if r.environment.OSFamily == platform.OSFamilyWindows || r.environment.OSFamily == platform.OSFamilyRemoteWindows {
+		pathStyle = "windows"
+	}
 	return Capabilities{
 		EnvironmentID:              r.environment.ID,
 		Shells:                     []platform.Shell{r.environment.Shell},
@@ -33,7 +37,7 @@ func (r LocalRunner) Capabilities(ctx context.Context) (Capabilities, error) {
 		SupportsProcessGroupCancel: true,
 		SupportsRedaction:          false,
 		SupportsNetworkPolicy:      true,
-		PathStyle:                  "posix",
+		PathStyle:                  pathStyle,
 		SandboxProfiles:            []platform.SandboxProfile{r.environment.SandboxProfile},
 		GitProviders:               []platform.GitProvider{r.environment.GitProvider},
 	}, nil

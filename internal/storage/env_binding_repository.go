@@ -108,6 +108,9 @@ INSERT INTO environment_audit_events(
 	); err != nil {
 		return EnvBindingRecord{}, err
 	}
+	if err := resolveEnvironmentInputAfterBinding(ctx, tx, input.ProjectID, environmentID, key, scope, scopeID, bindingID, now); err != nil {
+		return EnvBindingRecord{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return EnvBindingRecord{}, err
 	}
@@ -127,6 +130,101 @@ INSERT INTO environment_audit_events(
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}, nil
+}
+
+func resolveEnvironmentInputAfterBinding(ctx context.Context, tx *sql.Tx, projectID string, environmentID string, key string, scope string, scopeID string, bindingID string, now string) error {
+	rows, err := tx.QueryContext(ctx, `
+SELECT id
+FROM environment_requirements
+WHERE project_id = ?
+  AND key = ?
+  AND status IN ('missing', 'requested', 'invalid')
+  AND (environment_id IS NULL OR environment_id = NULLIF(?, ''))`,
+		projectID, key, environmentID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	requirementIDs := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		requirementIDs = append(requirementIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, requirementID := range requirementIDs {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE environment_requirements
+SET status = 'configured'
+WHERE project_id = ? AND id = ?`,
+			projectID, requirementID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE inbox_items
+SET status = 'resolved', updated_at = ?, resolved_at = ?
+WHERE project_id = ? AND source_type = 'environment_requirement' AND source_id = ? AND status = 'open'`,
+			now, now, projectID, requirementID); err != nil {
+			return err
+		}
+	}
+	taskIDs, err := environmentResumeTaskIDs(ctx, tx, projectID, scope, scopeID)
+	if err != nil {
+		return err
+	}
+	for _, taskID := range taskIDs {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE tasks
+SET status = 'ready', updated_at = ?
+WHERE project_id = ? AND id = ? AND status IN ('needs_input', 'blocked_on_environment')`,
+			now, projectID, taskID); err != nil {
+			return err
+		}
+		if _, err := enqueueTaskImplementationWorkItem(ctx, tx, projectID, taskID, now); err != nil {
+			return err
+		}
+		if err := insertWorkflowEvent(ctx, tx, projectID, "task_resumed_after_environment_input", map[string]any{
+			"task_id":           taskID,
+			"binding_id":        bindingID,
+			"environment_key":   key,
+			"environment_id":    environmentID,
+			"environment_scope": scope,
+		}, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func environmentResumeTaskIDs(ctx context.Context, tx *sql.Tx, projectID string, scope string, scopeID string) ([]string, error) {
+	query := `
+SELECT id
+FROM tasks
+WHERE project_id = ?
+  AND status IN ('needs_input', 'blocked_on_environment')`
+	args := []any{projectID}
+	if scope == "task" && strings.TrimSpace(scopeID) != "" {
+		query += " AND id = ?"
+		args = append(args, scopeID)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	taskIDs := []string{}
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			return nil, err
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	return taskIDs, rows.Err()
 }
 
 func (db *DB) ListEnvBindings(ctx context.Context, projectID string) ([]EnvBindingRecord, error) {

@@ -802,6 +802,14 @@ func (db *DB) consolidatePlanningArtifact(ctx context.Context, projectID string,
 			_ = tx.Rollback()
 		}
 	}()
+	verificationCommands, err := detectedVerificationCommandsForProject(ctx, tx, projectID)
+	if err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	verificationCommandsJSON, err := json.Marshal(verificationCommands)
+	if err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO task_groups(
   id, project_id, feature_request_id, status, title,
@@ -815,8 +823,8 @@ INSERT INTO task_groups(
 INSERT INTO tasks(
   id, project_id, task_group_id, status, title, base_branch,
   verification_commands_json, created_at, updated_at
-) VALUES (?, ?, ?, 'proposed', ?, 'main', '[]', ?, ?)`,
-		taskID, projectID, groupID, taskTitle, now, now,
+) VALUES (?, ?, ?, 'proposed', ?, 'main', ?, ?, ?)`,
+		taskID, projectID, groupID, taskTitle, string(verificationCommandsJSON), now, now,
 	); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
@@ -843,6 +851,54 @@ SET status = 'batched', updated_at = ?
 WHERE project_id = ? AND feature_request_id = ? AND status = 'draft'`,
 		now, projectID, candidate.FeatureRequest.ID,
 	); err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	decisionID := "DEC-" + stableShortHash(projectID+"|planning_scope|"+candidate.FeatureRequest.ID)
+	optionsJSON, err := json.Marshal([]DecisionOption{
+		{ID: "promote_task_group_proposal", Label: "Promote task group proposal"},
+		{ID: "request_changes", Label: "Request planning changes"},
+		{ID: "cancel", Label: "Cancel request"},
+	})
+	if err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"feature_request_id":         candidate.FeatureRequest.ID,
+		"task_group_id":              groupID,
+		"task_id":                    taskID,
+		"planning_artifact_id":       candidate.Artifact.ID,
+		"recommended_option":         "promote_task_group_proposal",
+		"verification_command_count": len(verificationCommands),
+	})
+	if err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO decisions(
+  id, project_id, task_id, status, title, options_json, evidence_json, created_at, updated_at
+) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  status = 'open',
+  options_json = excluded.options_json,
+  evidence_json = excluded.evidence_json,
+  updated_at = excluded.updated_at,
+  resolved_at = NULL,
+  selected_option = NULL`,
+		decisionID, projectID, taskID, "Confirm task group scope for "+candidate.FeatureRequest.Title, string(optionsJSON), string(evidenceJSON), now, now); err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	inboxID := "INBOX-" + stableShortHash(projectID+"|decision|"+decisionID)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id,
+  dedupe_key, batch_key, priority, title, body, created_at, updated_at
+) VALUES (?, ?, ?, 'human_decision', 'open', 'decision', ?, ?, ?, 70, ?, ?, ?, ?)
+ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
+  title = excluded.title,
+  body = excluded.body,
+  updated_at = excluded.updated_at`,
+		inboxID, projectID, taskID, decisionID, "decision:"+decisionID, projectID+":planning_scope",
+		"Confirm task group scope", "Review the proposed feature chunk before it becomes ready work.", now, now); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	canonicalCommitQueueID := "WQ-" + stableShortHash(projectID+"|canonical_commit|"+candidate.FeatureRequest.ID+"|"+groupID)

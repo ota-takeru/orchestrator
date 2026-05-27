@@ -23,6 +23,7 @@ type ProjectAuthority interface {
 	Inbox(ctx context.Context, project registry.RegisteredProject, status string) (any, error)
 	CreateFeatureRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
 	CreateChangeRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
+	StartWork(ctx context.Context, project registry.RegisteredProject, input storage.WorkStartInput) (any, error)
 	ApproveInboxItem(ctx context.Context, project registry.RegisteredProject, inboxID string, option string, notes string) (any, error)
 	SaveEnvBinding(ctx context.Context, project registry.RegisteredProject, input storage.EnvBindingInput) (any, error)
 	TaskArtifacts(ctx context.Context, project registry.RegisteredProject, taskID string) (any, error)
@@ -160,6 +161,16 @@ func (WindowsLocalAuthority) CreateChangeRequest(ctx context.Context, project re
 	}
 	defer db.Close()
 	return db.CreateChangeRequest(ctx, projectID, text)
+}
+
+func (WindowsLocalAuthority) StartWork(ctx context.Context, project registry.RegisteredProject, input storage.WorkStartInput) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	input.ProjectID = projectID
+	return db.StartWork(ctx, input)
 }
 
 func (WindowsLocalAuthority) ApproveInboxItem(ctx context.Context, project registry.RegisteredProject, inboxID string, option string, notes string) (any, error) {
@@ -409,6 +420,24 @@ func (a WslAuthority) CreateFeatureRequest(ctx context.Context, project registry
 func (a WslAuthority) CreateChangeRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error) {
 	var body map[string]any
 	if err := a.runJSONWithTrailing(ctx, project, &body, []string{"change", "request"}, text); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) StartWork(ctx context.Context, project registry.RegisteredProject, input storage.WorkStartInput) (any, error) {
+	var body map[string]any
+	args := []string{"work", "start", "--mode", "sequential", "--implementation-concurrency", "1"}
+	if strings.TrimSpace(input.ImplementationAdapter) != "" {
+		args = append(args, "--adapter", input.ImplementationAdapter)
+	}
+	if input.PlanningConcurrency > 0 {
+		args = append(args, "--planning-concurrency", fmt.Sprintf("%d", input.PlanningConcurrency))
+	}
+	if strings.TrimSpace(input.Until) != "" {
+		args = append(args, "--until", input.Until)
+	}
+	if err := a.runJSON(ctx, project, &body, args...); err != nil {
 		return nil, err
 	}
 	return body, nil

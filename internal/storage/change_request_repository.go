@@ -315,9 +315,35 @@ WHERE project_id = ? AND id = ? AND status = 'impact_analyzed'`,
 	); err != nil {
 		return ChangeRequestRecord{}, err
 	}
+	featureRequestID := "FR-" + shortID(input.ProjectID, record.ID, option)
+	queueID := "WQ-" + shortID(input.ProjectID, featureRequestID, "change-approved")
+	featureTitle := "Apply change: " + record.Body
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO feature_requests(
+  id, project_id, change_request_id, status, body, title, description,
+  source, priority, tier, task_group_id, resolved_at, created_at, updated_at
+) VALUES (?, ?, ?, 'queued', ?, ?, ?, 'change_request', 'medium', NULL, NULL, NULL, ?, ?)
+ON CONFLICT(id) DO NOTHING`,
+		featureRequestID, input.ProjectID, record.ID, record.Body, featureTitle, record.Body, now, now); err != nil {
+		return ChangeRequestRecord{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO work_queue_items(
+  id, project_id, lane, item_type, item_id, status, priority,
+  attempt_no, max_attempts, idempotency_key, created_at, updated_at
+) VALUES (?, ?, 'planning', 'feature_request_analysis', ?, 'queued', 'medium', 0, 3, ?, ?, ?)
+ON CONFLICT(id) DO NOTHING`,
+		queueID, input.ProjectID, featureRequestID, "feature_request:"+featureRequestID, now, now); err != nil {
+		return ChangeRequestRecord{}, err
+	}
+	if err := insertTraceLink(ctx, tx, input.ProjectID, "change_request", record.ID, "feature_request", featureRequestID, "expanded_to", map[string]any{"option": option}, now); err != nil {
+		return ChangeRequestRecord{}, err
+	}
 	if err := insertWorkflowEvent(ctx, tx, input.ProjectID, "change_request_approved", map[string]any{
-		"change_request_id": record.ID,
-		"option":            option,
+		"change_request_id":  record.ID,
+		"option":             option,
+		"feature_request_id": featureRequestID,
+		"work_queue_item_id": queueID,
 	}, now); err != nil {
 		return ChangeRequestRecord{}, err
 	}

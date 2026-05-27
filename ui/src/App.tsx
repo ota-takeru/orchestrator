@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, requestDependencyApproval, runSetupAction, runTaskAction, saveEnvBinding } from "./api";
+import { approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, requestDependencyApproval, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
 import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
@@ -41,6 +41,7 @@ function App() {
   const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[]>([]);
   const [taskActioning, setTaskActioning] = useState("");
   const [setupActioning, setSetupActioning] = useState("");
+  const [workActioning, setWorkActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
 
@@ -125,6 +126,19 @@ function App() {
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Change request failed");
+    }
+  };
+
+  const submitWorkStart = async (adapter: "fake" | "real-codex") => {
+    setWorkActioning(adapter);
+    setError("");
+    try {
+      await startWork(selectedProjectID || undefined, adapter);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Work start failed");
+    } finally {
+      setWorkActioning("");
     }
   };
 
@@ -234,6 +248,8 @@ function App() {
               onSubmitFeature={submitFeatureRequest}
               onApprove={approve}
               onOpenTaskArtifacts={openTaskArtifacts}
+              workActioning={workActioning}
+              onStartWork={submitWorkStart}
             />
           ) : (
             <LoadingPanel />
@@ -358,7 +374,9 @@ function SelectedProjectDashboard({
   setFeatureText,
   onSubmitFeature,
   onApprove,
-  onOpenTaskArtifacts
+  onOpenTaskArtifacts,
+  workActioning,
+  onStartWork
 }: {
   data: DashboardData;
   selectedProject?: RegisteredProject;
@@ -368,6 +386,8 @@ function SelectedProjectDashboard({
   onSubmitFeature: () => void;
   onApprove: (item: InboxItem) => void;
   onOpenTaskArtifacts: (taskID: string) => void;
+  workActioning: string;
+  onStartWork: (adapter: "fake" | "real-codex") => void;
 }) {
   return (
     <>
@@ -375,7 +395,7 @@ function SelectedProjectDashboard({
       <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
       <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
-      <WorkPlanningPanel data={data} />
+      <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} />
       <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
     </>
   );
@@ -451,7 +471,15 @@ function RequestQueuePanel({
   );
 }
 
-function WorkPlanningPanel({ data }: { data: DashboardData }) {
+function WorkPlanningPanel({
+  data,
+  actioning,
+  onStartWork
+}: {
+  data: DashboardData;
+  actioning: string;
+  onStartWork: (adapter: "fake" | "real-codex") => void;
+}) {
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -460,6 +488,14 @@ function WorkPlanningPanel({ data }: { data: DashboardData }) {
           <p>{data.workStatus.worker_runs.length} worker runs</p>
         </div>
         <Wrench size={20} className="text-zinc-500" />
+      </div>
+      <div className="toolbar-row">
+        <button className="secondary-button" type="button" onClick={() => onStartWork("fake")} disabled={actioning !== ""}>
+          {actioning === "fake" ? "Running fake" : "Run fake worker"}
+        </button>
+        <button className="secondary-button" type="button" onClick={() => onStartWork("real-codex")} disabled={actioning !== ""}>
+          {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
+        </button>
       </div>
       <div className="split-grid">
         <StackEmpty empty={data.workStatus.worker_runs.length === 0} label="No worker runs">

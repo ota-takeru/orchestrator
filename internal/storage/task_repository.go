@@ -126,6 +126,38 @@ INSERT OR IGNORE INTO work_queue_items(
 	return queueID, nil
 }
 
+func detectedVerificationCommandsForProject(ctx context.Context, tx *sql.Tx, projectID string) ([]TaskVerificationCommand, error) {
+	root, err := projectRoot(ctx, tx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	commands := []TaskVerificationCommand{}
+	if regularFileExists(filepath.Join(root, "go.mod")) {
+		commands = append(commands, TaskVerificationCommand{
+			ID:               "go-test",
+			Environment:      "primary",
+			Runner:           "auto",
+			RequiredForMerge: true,
+			WorkingDir:       "project_root",
+			Command:          TaskVerificationCommandCommand{Argv: []string{"go", "test", "./..."}},
+			Network:          false,
+		})
+	}
+	if regularFileExists(filepath.Join(root, "ui", "package.json")) {
+		commands = append(commands,
+			TaskVerificationCommand{ID: "ui-test", Environment: "primary", Runner: "auto", RequiredForMerge: true, WorkingDir: "project_root", Command: TaskVerificationCommandCommand{Argv: []string{"corepack", "pnpm", "--dir", "ui", "test"}}},
+			TaskVerificationCommand{ID: "ui-lint", Environment: "primary", Runner: "auto", RequiredForMerge: true, WorkingDir: "project_root", Command: TaskVerificationCommandCommand{Argv: []string{"corepack", "pnpm", "--dir", "ui", "lint"}}},
+			TaskVerificationCommand{ID: "ui-build", Environment: "primary", Runner: "auto", RequiredForMerge: true, WorkingDir: "project_root", Command: TaskVerificationCommandCommand{Argv: []string{"corepack", "pnpm", "--dir", "ui", "build"}}},
+		)
+	}
+	return commands, nil
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 func (db *DB) EnqueueTaskRepair(ctx context.Context, projectID string, taskID string, causeRunID string) (WorkQueueItemRecord, error) {
 	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(taskID) == "" {
 		return WorkQueueItemRecord{}, fmt.Errorf("project id and task id are required")

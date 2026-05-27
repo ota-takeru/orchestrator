@@ -11,9 +11,11 @@ import (
 type WorkStartInput struct {
 	ProjectID                 string
 	Mode                      string
+	ImplementationAdapter     string
 	PlanningConcurrency       int
 	ImplementationConcurrency int
 	Until                     string
+	CodexExecutor             CodexExecutor
 }
 
 type WorkerRunRecord struct {
@@ -43,10 +45,12 @@ type WorkStatus struct {
 }
 
 type ExecutionWorkResult struct {
-	TaskID     string              `json:"task_id"`
-	TaskStatus string              `json:"task_status"`
-	QueueItem  WorkQueueItemRecord `json:"queue_item"`
-	Run        FakeRunResult       `json:"run"`
+	TaskID       string              `json:"task_id"`
+	TaskStatus   string              `json:"task_status"`
+	QueueItem    WorkQueueItemRecord `json:"queue_item"`
+	Run          FakeRunResult       `json:"run,omitempty"`
+	RealRun      *RealCodexRunResult `json:"real_run,omitempty"`
+	Verification *VerifyTaskResult   `json:"verification,omitempty"`
 }
 
 type WorkQueueRecoveryResult struct {
@@ -71,6 +75,10 @@ func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartRes
 	if input.ImplementationConcurrency != 1 {
 		return WorkStartResult{}, fmt.Errorf("implementation concurrency must be 1")
 	}
+	implementationAdapter := strings.TrimSpace(input.ImplementationAdapter)
+	if implementationAdapter == "" {
+		implementationAdapter = "fake"
+	}
 	planningConcurrency := input.PlanningConcurrency
 	if planningConcurrency <= 0 {
 		planningConcurrency = 3
@@ -93,7 +101,14 @@ func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartRes
 	}
 	var execution []ExecutionWorkResult
 	if workErr == nil {
-		execution, workErr = db.ProcessExecutionQueueFake(ctx, input.ProjectID, 1)
+		switch implementationAdapter {
+		case "fake":
+			execution, workErr = db.ProcessExecutionQueueFake(ctx, input.ProjectID, 1)
+		case "real-codex", "codex":
+			execution, workErr = db.ProcessExecutionQueueRealCodex(ctx, input.ProjectID, 1, input.CodexExecutor)
+		default:
+			workErr = fmt.Errorf("unsupported implementation adapter: %s", implementationAdapter)
+		}
 	}
 	stopReason := "no_ready_work"
 	if len(planning.StartedRuns) > 0 || len(consolidation.TaskGroups) > 0 || len(execution) > 0 {
@@ -198,6 +213,56 @@ ORDER BY started_at ASC`, projectID)
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func (db *DB) ProcessExecutionQueueRealCodex(ctx context.Context, projectID string, limit int, executor CodexExecutor) ([]ExecutionWorkResult, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	items, err := db.listExecutionQueueItems(ctx, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ExecutionWorkResult, 0, len(items))
+	for _, item := range items {
+		claimed, err := db.markWorkQueueItemRunning(ctx, projectID, item.ID, "devos-work-start")
+		if err != nil {
+			return nil, err
+		}
+		if item.ItemType != "task_implementation" {
+			err := fmt.Errorf("real Codex worker does not support execution item type yet: %s", item.ItemType)
+			_ = db.markWorkQueueItemFailed(ctx, projectID, item.ID, err)
+			return nil, err
+		}
+		run, err := db.RunRealCodexTask(ctx, projectID, item.ItemID, executor)
+		if err != nil {
+			_ = db.markWorkQueueItemFailed(ctx, projectID, item.ID, err)
+			return nil, err
+		}
+		var verification *VerifyTaskResult
+		taskStatus := run.TaskStatus
+		if run.TaskStatus == "verifying" {
+			verifyResult, err := db.VerifyTask(ctx, projectID, item.ItemID, VerifyTaskInput{Adapter: "local"})
+			if err != nil {
+				_ = db.markWorkQueueItemFailed(ctx, projectID, item.ID, err)
+				return nil, err
+			}
+			verification = &verifyResult
+			taskStatus = verifyResult.TaskStatus
+		}
+		completed, err := db.markWorkQueueItemCompleted(ctx, projectID, item.ID, claimed)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, ExecutionWorkResult{
+			TaskID:       item.ItemID,
+			TaskStatus:   taskStatus,
+			QueueItem:    completed,
+			RealRun:      &run,
+			Verification: verification,
+		})
+	}
+	return results, nil
 }
 
 func (db *DB) ProcessExecutionQueueFake(ctx context.Context, projectID string, limit int) ([]ExecutionWorkResult, error) {

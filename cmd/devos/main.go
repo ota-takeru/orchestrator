@@ -240,16 +240,7 @@ func generateBootstrapArtifacts(ctx context.Context, db *storage.DB, projectID s
 	if err != nil {
 		return nil, err
 	}
-	artifacts := []struct {
-		path    string
-		typ     storage.ArtifactType
-		content []byte
-	}{
-		{".devagent/prd.md", storage.ArtifactPRD, []byte("# PRD\n\n" + strings.TrimSpace(string(concept)) + "\n\n## Acceptance Criteria\n\n- Bootstrap workflow evidence is saved.\n")},
-		{".devagent/architecture.md", storage.ArtifactArchitecture, []byte("# Architecture\n\nLocal-first Go CLI/Core with SQLite evidence store.\n")},
-		{".devagent/roadmap.yaml", storage.ArtifactRoadmap, []byte("slices:\n  - id: TASK-001\n    title: Bootstrap fake workflow\n")},
-		{".devagent/tasks/TASK-001.yaml", storage.ArtifactTaskYAML, []byte("id: TASK-001\ntitle: Bootstrap fake workflow\nstatus: proposed\nbase_branch: main\n")},
-	}
+	artifacts := buildInitialArtifacts(root, string(concept), true)
 	records := make([]storage.ArtifactVersionRecord, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		record, err := writeArtifactAndSave(ctx, db, projectID, root, artifact.path, artifact.typ, artifact.content)
@@ -259,6 +250,225 @@ func generateBootstrapArtifacts(ctx context.Context, db *storage.DB, projectID s
 		records = append(records, record)
 	}
 	return records, nil
+}
+
+type generatedArtifact struct {
+	path    string
+	typ     storage.ArtifactType
+	content []byte
+}
+
+type generatedVerificationCommand struct {
+	ID               string
+	WorkingDir       string
+	Argv             []string
+	RequiredForMerge bool
+}
+
+func buildInitialArtifacts(root string, concept string, includePRD bool) []generatedArtifact {
+	commands := detectVerificationCommands(root)
+	artifacts := make([]generatedArtifact, 0, 4)
+	if includePRD {
+		artifacts = append(artifacts, generatedArtifact{
+			path:    ".devagent/prd.md",
+			typ:     storage.ArtifactPRD,
+			content: buildPRDArtifact(concept, commands),
+		})
+	}
+	artifacts = append(artifacts, buildPlanArtifactsWithCommands(concept, commands)...)
+	return artifacts
+}
+
+func buildPlanArtifacts(root string, concept string) []generatedArtifact {
+	return buildPlanArtifactsWithCommands(concept, detectVerificationCommands(root))
+}
+
+func buildPlanArtifactsWithCommands(concept string, commands []generatedVerificationCommand) []generatedArtifact {
+	return []generatedArtifact{
+		{path: ".devagent/architecture.md", typ: storage.ArtifactArchitecture, content: buildArchitectureArtifact(concept, commands)},
+		{path: ".devagent/roadmap.yaml", typ: storage.ArtifactRoadmap, content: buildRoadmapArtifact(concept, commands)},
+		{path: ".devagent/tasks/TASK-001.yaml", typ: storage.ArtifactTaskYAML, content: buildTaskYAMLArtifact(concept, commands)},
+	}
+}
+
+func buildPRDArtifact(concept string, commands []generatedVerificationCommand) []byte {
+	title := conceptTitle(concept)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# PRD\n\n## Product Concept\n\n%s\n\n", markdownParagraph(concept))
+	fmt.Fprintf(&b, "## Goal\n\nDeliver a functional local-first application increment for: %s.\n\n", title)
+	b.WriteString("## Users\n\n- Primary user: local developer operating DevOS from CLI or the local web UI.\n")
+	b.WriteString("- Reviewer: human approver who needs concise evidence, diffs, and merge readiness.\n\n")
+	b.WriteString("## Core Workflow\n\n")
+	b.WriteString("1. Capture the concept as canonical project context.\n")
+	b.WriteString("2. Generate approved PRD, architecture, roadmap, and task artifacts.\n")
+	b.WriteString("3. Materialize implementation tasks only from approved artifacts.\n")
+	b.WriteString("4. Run implementation in an isolated task worktree.\n")
+	b.WriteString("5. Verify with Orchestrator-owned commands and evidence.\n")
+	b.WriteString("6. Require Human Inbox approval before merge or manual application.\n\n")
+	b.WriteString("## Acceptance Criteria\n\n")
+	b.WriteString("- The generated task can be materialized only after PRD, architecture, roadmap, and task YAML approval.\n")
+	b.WriteString("- Implementation evidence includes run logs, diff, summary, verification results, and gate results.\n")
+	b.WriteString("- Required verification commands are recorded in Task YAML and reused for merge reverify.\n")
+	b.WriteString("- Human approval is blocked when required verification or gate evidence is missing.\n")
+	for _, command := range commands {
+		fmt.Fprintf(&b, "- Verification `%s` passes: `%s`.\n", command.ID, strings.Join(command.Argv, " "))
+	}
+	return []byte(b.String())
+}
+
+func buildArchitectureArtifact(concept string, commands []generatedVerificationCommand) []byte {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Architecture\n\n## Scope\n\n%s\n\n", markdownParagraph(concept))
+	b.WriteString("## Runtime Shape\n\n")
+	b.WriteString("- Backend, CLI, worker, state machine, and evidence storage are implemented in Go.\n")
+	b.WriteString("- UI is implemented in React and TypeScript, served by the local DevOS API when requested.\n")
+	b.WriteString("- SQLite stores canonical state, approvals, runs, command events, verification results, and merge queue records.\n")
+	b.WriteString("- Markdown/YAML artifacts remain human-readable project context and are versioned through the artifact repository.\n\n")
+	b.WriteString("## Execution Boundaries\n\n")
+	b.WriteString("- Coding runs execute in task worktrees, not directly in the canonical worktree.\n")
+	b.WriteString("- Verification commands are executed by Orchestrator runners and are the source of truth for test results.\n")
+	b.WriteString("- Human Inbox items are projections; decisions, approvals, and patch applications remain the source of truth.\n\n")
+	b.WriteString("## Verification Plan\n\n")
+	for _, command := range commands {
+		fmt.Fprintf(&b, "- `%s`: `%s` from `%s`, required_for_merge=%t.\n", command.ID, strings.Join(command.Argv, " "), command.WorkingDir, command.RequiredForMerge)
+	}
+	if len(commands) == 0 {
+		b.WriteString("- Required verification is not configured yet; setup must block real merge until commands are added.\n")
+	}
+	return []byte(b.String())
+}
+
+func buildRoadmapArtifact(concept string, commands []generatedVerificationCommand) []byte {
+	title := yamlQuote(conceptTitle(concept))
+	var b strings.Builder
+	b.WriteString("roadmap:\n")
+	fmt.Fprintf(&b, "  title: %s\n", title)
+	b.WriteString("  planning_unit: feature_chunk\n")
+	b.WriteString("  slices:\n")
+	b.WriteString("    - id: TASK-001\n")
+	fmt.Fprintf(&b, "      title: %s\n", yamlQuote("Implement "+conceptTitle(concept)))
+	b.WriteString("      status: proposed\n")
+	b.WriteString("      depends_on: []\n")
+	b.WriteString("      verification:\n")
+	for _, command := range commands {
+		fmt.Fprintf(&b, "        - %s\n", yamlQuote(command.ID))
+	}
+	if len(commands) == 0 {
+		b.WriteString("        - add-required-verification\n")
+	}
+	return []byte(b.String())
+}
+
+func buildTaskYAMLArtifact(concept string, commands []generatedVerificationCommand) []byte {
+	var b strings.Builder
+	b.WriteString("id: TASK-001\n")
+	fmt.Fprintf(&b, "title: %s\n", yamlQuote("Implement "+conceptTitle(concept)))
+	b.WriteString("status: proposed\n")
+	b.WriteString("base_branch: main\n")
+	b.WriteString("planning_unit: feature_chunk\n")
+	b.WriteString("description: ")
+	b.WriteString(yamlQuote(conceptSummary(concept)))
+	b.WriteString("\n")
+	b.WriteString("acceptance_criteria:\n")
+	b.WriteString("  - Implementation diff is captured as an Orchestrator-owned artifact.\n")
+	b.WriteString("  - Required verification commands pass before human review or merge.\n")
+	b.WriteString("  - Decision Gate results are stored before approval.\n")
+	b.WriteString("verification_commands:\n")
+	if len(commands) == 0 {
+		b.WriteString("  - id: add-required-verification\n")
+		b.WriteString("    environment: primary\n")
+		b.WriteString("    runner: auto\n")
+		b.WriteString("    required_for_merge: true\n")
+		b.WriteString("    working_dir: project_root\n")
+		b.WriteString("    command:\n")
+		b.WriteString("      argv: [\"sh\", \"-c\", \"echo 'configure required verification' && exit 1\"]\n")
+		b.WriteString("    network: false\n")
+		return []byte(b.String())
+	}
+	for _, command := range commands {
+		fmt.Fprintf(&b, "  - id: %s\n", yamlQuote(command.ID))
+		b.WriteString("    environment: primary\n")
+		b.WriteString("    runner: auto\n")
+		fmt.Fprintf(&b, "    required_for_merge: %t\n", command.RequiredForMerge)
+		fmt.Fprintf(&b, "    working_dir: %s\n", yamlQuote(command.WorkingDir))
+		b.WriteString("    command:\n")
+		fmt.Fprintf(&b, "      argv: %s\n", jsonArgv(command.Argv))
+		b.WriteString("    network: false\n")
+	}
+	return []byte(b.String())
+}
+
+func detectVerificationCommands(root string) []generatedVerificationCommand {
+	commands := []generatedVerificationCommand{}
+	if fileExists(filepath.Join(root, "go.mod")) {
+		commands = append(commands, generatedVerificationCommand{ID: "go-test", WorkingDir: "project_root", Argv: []string{"go", "test", "./..."}, RequiredForMerge: true})
+	}
+	if fileExists(filepath.Join(root, "ui", "package.json")) {
+		commands = append(commands,
+			generatedVerificationCommand{ID: "ui-test", WorkingDir: "project_root", Argv: []string{"corepack", "pnpm", "--dir", "ui", "test"}, RequiredForMerge: true},
+			generatedVerificationCommand{ID: "ui-lint", WorkingDir: "project_root", Argv: []string{"corepack", "pnpm", "--dir", "ui", "lint"}, RequiredForMerge: true},
+			generatedVerificationCommand{ID: "ui-build", WorkingDir: "project_root", Argv: []string{"corepack", "pnpm", "--dir", "ui", "build"}, RequiredForMerge: true},
+		)
+	}
+	return commands
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func conceptTitle(concept string) string {
+	summary := conceptSummary(concept)
+	if summary == "" {
+		return "Initial Application Workflow"
+	}
+	words := strings.Fields(summary)
+	if len(words) > 12 {
+		words = words[:12]
+	}
+	return strings.Join(words, " ")
+}
+
+func conceptSummary(concept string) string {
+	trimmed := strings.TrimSpace(concept)
+	trimmed = strings.TrimPrefix(trimmed, "# Concept")
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" {
+		return "Build the initial local-first application workflow."
+	}
+	lines := strings.Split(trimmed, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		if line != "" {
+			return line
+		}
+	}
+	return "Build the initial local-first application workflow."
+}
+
+func markdownParagraph(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Build the initial local-first application workflow."
+	}
+	return value
+}
+
+func yamlQuote(value string) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(raw)
+}
+
+func jsonArgv(argv []string) string {
+	raw, err := json.Marshal(argv)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
 }
 
 func runTaskCommand(ctx context.Context, args []string, stdout io.Writer) int {
@@ -918,6 +1128,7 @@ func runWorkStart(ctx context.Context, args []string, stdout io.Writer) int {
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
 	mode := fs.String("mode", "sequential", "worker mode")
+	adapter := fs.String("adapter", "fake", "implementation adapter: fake or real-codex")
 	planningConcurrency := fs.Int("planning-concurrency", 3, "planning concurrency")
 	implementationConcurrency := fs.Int("implementation-concurrency", 1, "implementation concurrency")
 	until := fs.String("until", "", "stop condition")
@@ -939,6 +1150,7 @@ func runWorkStart(ctx context.Context, args []string, stdout io.Writer) int {
 	result, err := db.StartWork(ctx, storage.WorkStartInput{
 		ProjectID:                 projectID,
 		Mode:                      *mode,
+		ImplementationAdapter:     *adapter,
 		PlanningConcurrency:       *planningConcurrency,
 		ImplementationConcurrency: *implementationConcurrency,
 		Until:                     *until,
@@ -1162,7 +1374,7 @@ func runSpec(ctx context.Context, args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "spec_failed", err)
 	}
-	content := []byte("# PRD\n\n" + strings.TrimSpace(string(concept)) + "\n\n## Acceptance Criteria\n\n- Bootstrap workflow evidence is saved.\n")
+	content := buildPRDArtifact(string(concept), detectVerificationCommands(root))
 	record, err := writeArtifactAndSave(ctx, db, projectID, root, ".devagent/prd.md", storage.ArtifactPRD, content)
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitStorage, "spec_failed", err)
@@ -1201,16 +1413,12 @@ func runPlan(ctx context.Context, args []string, stdout io.Writer) int {
 		return writeError(stdout, *jsonOut, errCode, "plan_failed", err)
 	}
 	defer db.Close()
-	records := make([]storage.ArtifactVersionRecord, 0, 3)
-	artifacts := []struct {
-		path    string
-		typ     storage.ArtifactType
-		content []byte
-	}{
-		{".devagent/architecture.md", storage.ArtifactArchitecture, []byte("# Architecture\n\nLocal-first Go CLI/Core with SQLite evidence store.\n")},
-		{".devagent/roadmap.yaml", storage.ArtifactRoadmap, []byte("slices:\n  - id: TASK-001\n    title: Bootstrap fake workflow\n")},
-		{".devagent/tasks/TASK-001.yaml", storage.ArtifactTaskYAML, []byte("id: TASK-001\ntitle: Bootstrap fake workflow\nstatus: proposed\nbase_branch: main\n")},
+	concept, err := os.ReadFile(filepath.Join(root, ".devagent", "concept.md"))
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "plan_failed", err)
 	}
+	records := make([]storage.ArtifactVersionRecord, 0, 3)
+	artifacts := buildPlanArtifacts(root, string(concept))
 	for _, artifact := range artifacts {
 		record, err := writeArtifactAndSave(ctx, db, projectID, root, artifact.path, artifact.typ, artifact.content)
 		if err != nil {
@@ -3731,7 +3939,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos project remove [--registry PATH] [--json] PROJECT_ID")
 	fmt.Fprintln(w, "  devos project refresh [--registry PATH] [--json] PROJECT_ID")
 	fmt.Fprintln(w, "  devos queue [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
-	fmt.Fprintln(w, "  devos work start [--project-root PATH] [--data-root PATH] [--mode sequential] [--planning-concurrency N] [--implementation-concurrency 1] [--until inbox] [--budget DURATION] [--json]")
+	fmt.Fprintln(w, "  devos work start [--project-root PATH] [--data-root PATH] [--mode sequential] [--adapter fake|real-codex] [--planning-concurrency N] [--implementation-concurrency 1] [--until inbox] [--budget DURATION] [--json]")
 	fmt.Fprintln(w, "  devos work status [--project-root PATH] [--data-root PATH] [--json]")
 	fmt.Fprintln(w, "  devos work pause [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")
 	fmt.Fprintln(w, "  devos work resume [--project-root PATH] [--data-root PATH] [--json] WORKER_RUN_ID")

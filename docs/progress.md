@@ -6,7 +6,7 @@
 
 ## Summary
 
-最終更新: 2026-05-25
+最終更新: 2026-05-27
 
 | Area | Progress | Status |
 | --- | ---: | --- |
@@ -16,6 +16,18 @@
 | Initial Complete Scope end-to-end workflow | 99% | 進行中 |
 
 ## Latest Implementation Update
+
+2026-05-27:
+
+- `devos spec` / `devos plan` / `devos bootstrap` の固定テンプレート生成を、concept内容とrepository構成を反映する生成へ更新しました。Go moduleとUI packageを検出し、Task YAMLへ `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build` のrequired verification commandを自動生成します。
+- sequential workerに `--adapter real-codex` を追加し、execution queueの `task_implementation` をReal Codex実装へ流した後、`verifying` に進んだtaskをOrchestrator local verificationまで進められるようにしました。既定は後方互換の `fake` です。
+- Windows local verificationは、Windows native runtime上でだけ許可するガード付きで対応しました。Linux/WSLからWindows environmentを直接local verificationしない境界を維持します。
+- Planning ConsolidatorがTask Group proposalを作った後、scope確認DecisionとHuman Inbox itemを開くようにしました。`promote_task_group_proposal` 承認時にTask Group / Taskをready化し、execution queueへ投入します。
+- Change Request承認後にChange Request由来のFeature Requestとplanning queue itemを作成し、通常のbounded planning laneへ合流できるようにしました。
+- Environment Input保存後、対応するenvironment requirement / Inbox itemを解決し、`needs_input` / `blocked_on_environment` taskをreadyへ戻してexecution queueへ再投入する復帰処理を追加しました。secret値は引き続きSQLite/API応答へ返しません。
+- Local APIとmulti-project authority bridgeに `/api/work/start` / `/api/projects/{id}/work/start` を追加し、UIのWork And Planning panelからfake worker / Codex workerを起動できるようにしました。WSL authorityでは `wsl.exe -d <distro> -- devos work start ... --json` 経由に閉じ込めています。
+- 追加・更新検証: `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`、`git diff --check`。
+- 残る実機検証: この環境ではWindows native targetを直接実行できないため、real verification commandを持つWindows targetでの追加E2Eは継続確認として残ります。
 
 2026-05-25:
 

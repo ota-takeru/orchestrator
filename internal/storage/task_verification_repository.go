@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -34,6 +35,8 @@ type VerifyTaskResult struct {
 	Gates           []decisions.GateResult `json:"gates"`
 	Report          verifier.Report        `json:"report"`
 }
+
+var localVerificationRuntimeGOOS = runtime.GOOS
 
 func (db *DB) VerifyTask(ctx context.Context, projectID string, taskID string, input VerifyTaskInput) (VerifyTaskResult, error) {
 	adapter := strings.TrimSpace(input.Adapter)
@@ -377,7 +380,14 @@ func runnerForVerificationAdapter(adapter string, env platform.ExecutionEnvironm
 }
 
 func localVerificationOSSupported(osFamily platform.OSFamily) bool {
-	return osFamily == platform.OSFamilyLinux || osFamily == platform.OSFamilyWSL
+	switch osFamily {
+	case platform.OSFamilyLinux, platform.OSFamilyWSL:
+		return true
+	case platform.OSFamilyWindows, platform.OSFamilyRemoteWindows:
+		return localVerificationRuntimeGOOS == "windows"
+	default:
+		return false
+	}
 }
 
 func verificationWorkingDir(env platform.ExecutionEnvironment, workingDir string) string {

@@ -32,7 +32,7 @@ devos queue
 devos plan start --concurrency 3
 devos plan status
 devos plan consolidate
-devos work start --planning-concurrency 3 --implementation-concurrency 1
+devos work start --adapter real-codex --planning-concurrency 3 --implementation-concurrency 1
 devos work start --mode sequential
 devos work start --until inbox
 devos work start --budget 30m
@@ -146,7 +146,7 @@ DB変更を伴うcommandは、1つのuser actionにつき1 transactionを基本�
 | `devos plan status` | `--json` | なし | read-only |
 | `devos plan consolidate` | `--json` | consolidation result、必要なinbox_items、canonical commit候補 | 同じsnapshotなら再利用可 |
 | `devos plan checkpoint` | `--task TASK_ID`, `--json` | rolling_checkpoint planning_run、rolling_checkpoint_report | 同じtask状態snapshotなら再利用可 |
-| `devos work start` | `--mode sequential`, `--planning-concurrency N`, `--implementation-concurrency 1`, `--until inbox`, `--budget DURATION`, `--json` | worker_run、work_queue_items、runs | 同じlaneのrunning worker制約に従う |
+| `devos work start` | `--mode sequential`, `--adapter fake\|real-codex`, `--planning-concurrency N`, `--implementation-concurrency 1`, `--until inbox`, `--budget DURATION`, `--json` | worker_run、work_queue_items、runs | implementation concurrencyは1。`real-codex` は実装後にOrchestrator verificationへ進む |
 | `devos work status` | `--json` | なし | read-only |
 | `devos work pause` | `WORKER_RUN_ID`, `--json` | worker_run status | paused workerへの再pauseはno-op |
 | `devos work resume` | `WORKER_RUN_ID`, `--json` | worker_run status | running workerへのresumeはno-op |

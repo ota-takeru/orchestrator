@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tasks/", s.handleTaskRoute)
 	mux.HandleFunc("/api/requests", s.handleRequests)
 	mux.HandleFunc("/api/queue", s.handleQueue)
+	mux.HandleFunc("/api/work/start", s.handleWorkStart)
 	mux.HandleFunc("/api/work/status", s.handleWorkStatus)
 	mux.HandleFunc("/api/planning/status", s.handlePlanningStatus)
 	mux.HandleFunc("/api/change-requests", s.handleChangeRequests)
@@ -112,6 +113,7 @@ func requiresLocalToken(r *http.Request) bool {
 	return r.URL.Path == "/api/env/bindings" ||
 		strings.HasSuffix(r.URL.Path, "/env/bindings") ||
 		strings.Contains(r.URL.Path, "/approve") ||
+		strings.Contains(r.URL.Path, "/work/start") ||
 		strings.Contains(r.URL.Path, "/merge") ||
 		strings.Contains(r.URL.Path, "/review/") ||
 		strings.HasSuffix(r.URL.Path, "/verify") ||
@@ -392,6 +394,21 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 5 && action == "work" && parts[4] == "start":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		input, ok := decodeWorkStartBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.StartWork(r.Context(), project, input)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
 	case len(parts) == 4 && action == "dependency-approvals":
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
@@ -544,6 +561,24 @@ func (s *Server) handleWorkStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleWorkStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	input, ok := decodeWorkStartBody(w, r)
+	if !ok {
+		return
+	}
+	input.ProjectID = s.projectID
+	result, err := s.db.StartWork(r.Context(), input)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "work_start_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handlePlanningStatus(w http.ResponseWriter, r *http.Request) {
@@ -875,6 +910,41 @@ func decodeNotesBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return input.Notes, true
+}
+
+func decodeWorkStartBody(w http.ResponseWriter, r *http.Request) (storage.WorkStartInput, bool) {
+	var input struct {
+		Mode                      string `json:"mode"`
+		Adapter                   string `json:"adapter"`
+		PlanningConcurrency       int    `json:"planning_concurrency"`
+		ImplementationConcurrency int    `json:"implementation_concurrency"`
+		Until                     string `json:"until"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return storage.WorkStartInput{}, false
+		}
+	}
+	if input.Mode == "" {
+		input.Mode = "sequential"
+	}
+	if input.Adapter == "" {
+		input.Adapter = "fake"
+	}
+	if input.PlanningConcurrency == 0 {
+		input.PlanningConcurrency = 3
+	}
+	if input.ImplementationConcurrency == 0 {
+		input.ImplementationConcurrency = 1
+	}
+	return storage.WorkStartInput{
+		Mode:                      input.Mode,
+		ImplementationAdapter:     input.Adapter,
+		PlanningConcurrency:       input.PlanningConcurrency,
+		ImplementationConcurrency: input.ImplementationConcurrency,
+		Until:                     input.Until,
+	}, true
 }
 
 func decodeEnvBindingBody(w http.ResponseWriter, r *http.Request) (storage.EnvBindingInput, bool) {

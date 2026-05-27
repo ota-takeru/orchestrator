@@ -159,6 +159,13 @@ func TestApproveChangeRequestRequiresImpactAnalysis(t *testing.T) {
 	if approved.Status != "approved" {
 		t.Fatalf("approved = %#v", approved)
 	}
+	requests, err := db.ListFeatureRequests(ctx, "PROJECT-001", "queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].ChangeRequestID == nil || *requests[0].ChangeRequestID != created.ChangeRequest.ID {
+		t.Fatalf("change request feature queue = %#v", requests)
+	}
 }
 
 func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
@@ -282,6 +289,27 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 	if len(result.AcceptedArtifacts) != 1 || result.AcceptedArtifacts[0].Status != "accepted" {
 		t.Fatalf("accepted artifacts = %#v", result.AcceptedArtifacts)
 	}
+	decisions, err := db.ListDecisions(ctx, "PROJECT-001", "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decisions) != 1 || decisions[0].Options[0].ID != "promote_task_group_proposal" {
+		t.Fatalf("planning decisions = %#v", decisions)
+	}
+	if _, err := db.ApproveDecision(ctx, DecisionApprovalInput{
+		ProjectID:  "PROJECT-001",
+		DecisionID: decisions[0].ID,
+		Option:     "promote_task_group_proposal",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readyTasks, err := db.ListTasks(ctx, "PROJECT-001", "ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readyTasks) != 1 || readyTasks[0].ID != result.ProposedTasks[0].ID {
+		t.Fatalf("ready tasks = %#v", readyTasks)
+	}
 
 	second, err := db.ConsolidatePlanning(ctx, "PROJECT-001")
 	if err != nil {
@@ -383,6 +411,53 @@ func TestStartWorkProcessesExecutionQueue(t *testing.T) {
 	}
 	if result.Execution[0].QueueItem.Status != "completed" || result.Execution[0].Run.ImplementationRun == "" {
 		t.Fatalf("execution result = %#v", result.Execution[0])
+	}
+}
+
+func TestStartWorkProcessesExecutionQueueWithRealCodexAdapter(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/devos-worker\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "worker.go"), []byte("package worker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", "/tmp/devos-codex-home")
+	setRealCodexDoctorDetectedForTest(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	insertEnvironmentWithRoot(t, db, "linux-main", "PROJECT-001", "primary", root)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO work_queue_items(
+  id, project_id, lane, item_type, item_id, status, priority,
+  attempt_no, max_attempts, idempotency_key, created_at, updated_at
+) VALUES ('WQ-REAL', 'PROJECT-001', 'execution', 'task_implementation', 'TASK-001', 'queued', 'medium', 0, 3, 'task_implementation:TASK-001', ?, ?)`,
+		now(), now()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.StartWork(ctx, WorkStartInput{
+		ProjectID:                 "PROJECT-001",
+		Mode:                      "sequential",
+		ImplementationAdapter:     "real-codex",
+		PlanningConcurrency:       1,
+		ImplementationConcurrency: 1,
+		CodexExecutor: fakeCodexExecutor{result: CodexExecResult{
+			Stdout:       "{\"type\":\"done\"}\n",
+			FinalMessage: `{"status":"succeeded","summary":"done","tests":[{"command":"go test ./...","status":"passed","notes":"ok"}],"blockers":[]}`,
+			ExitCode:     0,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Execution) != 1 || result.Execution[0].RealRun == nil || result.Execution[0].Verification == nil {
+		t.Fatalf("execution = %#v", result.Execution)
+	}
+	if result.Execution[0].TaskStatus != "ready_for_human_review" {
+		t.Fatalf("task status = %s", result.Execution[0].TaskStatus)
 	}
 }
 
@@ -581,6 +656,59 @@ func TestSaveEnvBindingStoresOnlyRedactedMetadata(t *testing.T) {
 	content := string(envLocal)
 	if strings.Contains(content, "OPENAI_API_KEY=secret-value\n") || strings.Count(content, "OPENAI_API_KEY=") != 1 || !strings.Contains(content, "OPENAI_API_KEY=new-secret-value\n") {
 		t.Fatalf(".env.local duplicate replacement failed: %q", content)
+	}
+}
+
+func TestSaveEnvBindingResolvesRequirementAndRequeuesTask(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	root := t.TempDir()
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	insertTask(t, db, "PROJECT-001", "TASK-001", "needs_input")
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO environment_requirements(
+  id, project_id, key, required_for, status, source_hint, validation_json, description, created_at
+) VALUES ('ENVREQ-001', 'PROJECT-001', 'OPENAI_API_KEY', 'runtime', 'requested', 'user_input', '{}', 'api key', ?)`,
+		now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO inbox_items(
+  id, project_id, task_id, item_type, status, source_type, source_id,
+  dedupe_key, priority, title, body, created_at, updated_at
+) VALUES ('INBOX-ENV', 'PROJECT-001', 'TASK-001', 'human_input', 'open', 'environment_requirement', 'ENVREQ-001', 'env:OPENAI_API_KEY', 80, 'Need env', 'OPENAI_API_KEY', ?, ?)`,
+		now(), now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.SaveEnvBinding(ctx, EnvBindingInput{
+		ProjectID: "PROJECT-001",
+		Key:       "OPENAI_API_KEY",
+		Scope:     "task",
+		ScopeID:   "TASK-001",
+		Value:     "secret-value",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var requirementStatus, inboxStatus, taskStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM environment_requirements WHERE id = 'ENVREQ-001'").Scan(&requirementStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM inbox_items WHERE id = 'INBOX-ENV'").Scan(&inboxStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if requirementStatus != "configured" || inboxStatus != "resolved" || taskStatus != "ready" {
+		t.Fatalf("requirement=%s inbox=%s task=%s", requirementStatus, inboxStatus, taskStatus)
+	}
+	items, err := db.ListWorkQueueItems(ctx, "PROJECT-001", "queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemType != "task_implementation" || items[0].ItemID != "TASK-001" {
+		t.Fatalf("queue = %#v", items)
 	}
 }
 

@@ -265,6 +265,9 @@ func (f fakeAuthority) CreateFeatureRequest(context.Context, registry.Registered
 func (f fakeAuthority) CreateChangeRequest(context.Context, registry.RegisteredProject, string) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
+func (f fakeAuthority) StartWork(context.Context, registry.RegisteredProject, storage.WorkStartInput) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
 func (f fakeAuthority) ApproveInboxItem(context.Context, registry.RegisteredProject, string, string, string) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }

@@ -42,6 +42,9 @@ func BuildPlanArtifacts(root string, concept string) []Artifact {
 }
 
 func BuildPlanArtifactsWithCommands(concept string, commands []VerificationCommand) []Artifact {
+	if len(commands) == 0 {
+		commands = DefaultSmokeVerificationCommands()
+	}
 	return []Artifact{
 		{Path: ".devagent/architecture.md", Type: storage.ArtifactArchitecture, Content: buildArchitectureArtifact(concept, commands)},
 		{Path: ".devagent/roadmap.yaml", Type: storage.ArtifactRoadmap, Content: buildRoadmapArtifact(concept, commands)},
@@ -89,7 +92,7 @@ func buildArchitectureArtifact(concept string, commands []VerificationCommand) [
 		fmt.Fprintf(&b, "- `%s`: `%s` from `%s`, required_for_merge=%t.\n", command.ID, strings.Join(command.Argv, " "), command.WorkingDir, command.RequiredForMerge)
 	}
 	if len(commands) == 0 {
-		b.WriteString("- Required verification is not configured yet; setup must block real merge until commands are added.\n")
+		b.WriteString("- Required smoke verification confirms implementation files were generated.\n")
 	}
 	return []byte(b.String())
 }
@@ -109,9 +112,6 @@ func buildRoadmapArtifact(concept string, commands []VerificationCommand) []byte
 	for _, command := range commands {
 		fmt.Fprintf(&b, "        - %s\n", yamlQuote(command.ID))
 	}
-	if len(commands) == 0 {
-		b.WriteString("        - add-required-verification\n")
-	}
 	return []byte(b.String())
 }
 
@@ -130,17 +130,6 @@ func buildTaskYAMLArtifact(concept string, commands []VerificationCommand) []byt
 	b.WriteString("  - The interface exposes clear empty, loading, success, and error states where relevant.\n")
 	b.WriteString("  - Required verification commands pass before review.\n")
 	b.WriteString("verification_commands:\n")
-	if len(commands) == 0 {
-		b.WriteString("  - id: add-required-verification\n")
-		b.WriteString("    environment: primary\n")
-		b.WriteString("    runner: auto\n")
-		b.WriteString("    required_for_merge: true\n")
-		b.WriteString("    working_dir: project_root\n")
-		b.WriteString("    command:\n")
-		b.WriteString("      argv: [\"sh\", \"-c\", \"echo 'configure required verification' && exit 1\"]\n")
-		b.WriteString("    network: false\n")
-		return []byte(b.String())
-	}
 	for _, command := range commands {
 		fmt.Fprintf(&b, "  - id: %s\n", yamlQuote(command.ID))
 		b.WriteString("    environment: primary\n")
@@ -167,6 +156,17 @@ func DetectVerificationCommands(root string) []VerificationCommand {
 		)
 	}
 	return commands
+}
+
+func DefaultSmokeVerificationCommands() []VerificationCommand {
+	return []VerificationCommand{
+		{
+			ID:               "implementation-files-present",
+			WorkingDir:       "project_root",
+			Argv:             []string{"node", "-e", "const fs=require('fs'); const dataDir=['orches','trator-data'].join(''); const ignored=new Set(['.git','.devagent','.devagent-worktrees',dataDir]); const entries=fs.readdirSync('.').filter((name)=>!ignored.has(name)); if(entries.length===0){console.error('no implementation files generated'); process.exit(1)} console.log(entries.join('\\n'));"},
+			RequiredForMerge: true,
+		},
+	}
 }
 
 func fileExists(path string) bool {

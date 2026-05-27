@@ -125,9 +125,10 @@ func TestWslAuthorityBuildsTaskActionCommands(t *testing.T) {
 		WSLProjectRoot:   "/home/user/app",
 	}
 	tests := []struct {
-		name string
-		call func(WslAuthority) error
-		want []string
+		name      string
+		call      func(WslAuthority) error
+		want      []string
+		wantCalls [][]string
 	}{
 		{
 			name: "verify",
@@ -160,6 +161,10 @@ func TestWslAuthorityBuildsTaskActionCommands(t *testing.T) {
 				return err
 			},
 			want: []string{"-d", "Ubuntu", "--", "devos", "merge", "approve", "--notes", "merge ok", "--project-root", "/home/user/app", "--json", "TASK-001"},
+			wantCalls: [][]string{
+				{"-d", "Ubuntu", "--", "devos", "merge", "approve", "--notes", "merge ok", "--project-root", "/home/user/app", "--json", "TASK-001"},
+				{"-d", "Ubuntu", "--", "devos", "merge", "TASK-001", "--project-root", "/home/user/app", "--json"},
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -167,6 +172,17 @@ func TestWslAuthorityBuildsTaskActionCommands(t *testing.T) {
 			exec := &capturingExecutor{stdout: []byte(`{"ok":true}`)}
 			if err := tt.call(NewWslAuthority(exec, time.Second)); err != nil {
 				t.Fatal(err)
+			}
+			if len(tt.wantCalls) > 0 {
+				if len(exec.calls) != len(tt.wantCalls) {
+					t.Fatalf("calls = %#v want %#v", exec.calls, tt.wantCalls)
+				}
+				for i := range tt.wantCalls {
+					if strings.Join(exec.calls[i], "\x00") != strings.Join(tt.wantCalls[i], "\x00") {
+						t.Fatalf("call %d = %#v want %#v", i, exec.calls[i], tt.wantCalls[i])
+					}
+				}
+				return
 			}
 			if strings.Join(exec.args, "\x00") != strings.Join(tt.want, "\x00") {
 				t.Fatalf("args = %#v want %#v", exec.args, tt.want)
@@ -316,6 +332,9 @@ func (f fakeAuthority) RejectTaskReview(context.Context, registry.RegisteredProj
 func (f fakeAuthority) ApproveTaskMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
+func (f fakeAuthority) ProcessRealGitMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
 func (f fakeAuthority) RequestDependencyApproval(context.Context, registry.RegisteredProject, storage.DependencyApprovalRequestInput) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }
@@ -323,6 +342,7 @@ func (f fakeAuthority) RequestDependencyApproval(context.Context, registry.Regis
 type capturingExecutor struct {
 	name   string
 	args   []string
+	calls  [][]string
 	stdout []byte
 	stderr []byte
 	code   int
@@ -333,6 +353,7 @@ type capturingExecutor struct {
 func (e *capturingExecutor) Run(_ context.Context, name string, args ...string) ([]byte, []byte, int, error) {
 	e.name = name
 	e.args = append([]string(nil), args...)
+	e.calls = append(e.calls, append([]string(nil), args...))
 	return e.stdout, e.stderr, e.code, e.err
 }
 

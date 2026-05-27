@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChecks, MoreHorizontal, Pencil, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, requestDependencyApproval, reviseArtifact, reviseArtifactWithCodex, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
+import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, processRealGitMerge, requestDependencyApproval, reviseArtifact, reviseArtifactWithCodex, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
 import type { ArtifactRecord, CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
@@ -62,6 +62,7 @@ function App() {
   const [workActioning, setWorkActioning] = useState("");
   const [artifactActioning, setArtifactActioning] = useState("");
   const [changeActioning, setChangeActioning] = useState("");
+  const [mergeActioning, setMergeActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
   const selectedProjectSummary = selectedProjectID ? (selectedProject ?? (lastCreatedProject?.id === selectedProjectID ? lastCreatedProject : undefined)) : currentProject;
@@ -440,13 +441,31 @@ function App() {
   const submitSetupAction = async (actionID: string) => {
     setSetupActioning(actionID);
     setError("");
+    setNotice("");
     try {
-      await runSetupAction(actionID, selectedProjectID || undefined);
+      const result = await runSetupAction(actionID, selectedProjectID || undefined);
       await refresh();
+      setNotice(result.message || "Setup action finished.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Setup action failed");
     } finally {
       setSetupActioning("");
+    }
+  };
+
+  const submitProcessMerge = async (entryID: string) => {
+    setMergeActioning(entryID || "next");
+    setError("");
+    setNotice("");
+    try {
+      const result = await processRealGitMerge(entryID, "main", selectedProjectID || undefined);
+      await refresh();
+      const blockers = result.blockers?.length ? ` Blockers: ${result.blockers.join("; ")}` : "";
+      setNotice(`Merge ${result.status} for ${result.task_id}.${blockers}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Merge processing failed");
+    } finally {
+      setMergeActioning("");
     }
   };
 
@@ -568,7 +587,7 @@ function App() {
             onSubmit={submitDependencyApproval}
           />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
-          <MergeGatePanel status={data?.mergeStatus} />
+          <MergeGatePanel status={data?.mergeStatus} actioning={mergeActioning} onProcess={submitProcessMerge} />
           <ProjectCheckPanel violations={data?.projectViolations ?? []} />
           <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
           <PathMappingsPanel mappings={data?.pathMappings ?? []} />
@@ -1577,9 +1596,19 @@ function ToolchainSetupPanel({ cards }: { cards: DashboardData["toolchainSetupCa
   );
 }
 
-function MergeGatePanel({ status }: { status?: DashboardData["mergeStatus"] }) {
+function MergeGatePanel({
+  status,
+  actioning,
+  onProcess
+}: {
+  status?: DashboardData["mergeStatus"];
+  actioning: string;
+  onProcess: (entryID: string) => void;
+}) {
   const blockers = status?.blockers ?? [];
   const inboxItems = status?.blocking_inbox_items ?? [];
+  const queue = status?.queue ?? [];
+  const canProcess = status?.ready && queue.length > 0 && !actioning;
   return (
     <section className="panel compact">
       <div className="panel-heading">
@@ -1589,8 +1618,17 @@ function MergeGatePanel({ status }: { status?: DashboardData["mergeStatus"] }) {
       <div className="stack">
         <div className="stack-row">
           <span>{status?.ready ? "Ready" : "Blocked"}</span>
-          <small>{status?.queue.length ?? 0} queued tasks</small>
+          <small>{queue.length} queued tasks</small>
         </div>
+        {queue.map((entry) => (
+          <div className="stack-row" key={entry.id}>
+            <span>{entry.task_id}</span>
+            <small>{entry.status}</small>
+            <button className="secondary-button" type="button" onClick={() => onProcess(entry.id)} disabled={!canProcess || actioning === entry.id}>
+              {actioning === entry.id ? "Merging" : "Process merge"}
+            </button>
+          </div>
+        ))}
         {blockers.map((blocker) => (
           <div className="stack-row" key={blocker}>
             <span>{blocker}</span>

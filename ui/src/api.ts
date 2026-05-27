@@ -17,6 +17,7 @@ import type {
   ProjectPathSuggestion,
   ProjectListData,
   RegisteredProject,
+  RealGitMergeResult,
   SetupActionResult,
   SetupStatus,
   TaskArtifact,
@@ -271,6 +272,11 @@ export async function runTaskAction(taskID: string, action: "verify" | "review-a
           ? "/review/reject"
           : "/merge/approve";
   await postJSON(`${taskPath}${suffix}`, { notes: "Submitted from DevOS UI" });
+}
+
+export async function processRealGitMerge(entryID = "", target = "main", projectID?: string): Promise<RealGitMergeResult> {
+  const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/merge/process-real-git` : "/api/merge/process-real-git";
+  return postJSON<RealGitMergeResult>(path, { entry_id: entryID, target });
 }
 
 async function postJSON<T = void>(path: string, body: unknown): Promise<T> {

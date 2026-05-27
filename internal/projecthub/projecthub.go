@@ -41,6 +41,7 @@ type ProjectAuthority interface {
 	ApproveTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
 	RejectTaskReview(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
 	ApproveTaskMerge(ctx context.Context, project registry.RegisteredProject, taskID string, notes string) (any, error)
+	ProcessRealGitMerge(ctx context.Context, project registry.RegisteredProject, entryID string, target string) (any, error)
 	RequestDependencyApproval(ctx context.Context, project registry.RegisteredProject, input storage.DependencyApprovalRequestInput) (any, error)
 }
 
@@ -344,7 +345,30 @@ func (WindowsLocalAuthority) ApproveTaskMerge(ctx context.Context, project regis
 		return nil, err
 	}
 	defer db.Close()
-	return db.ApproveTaskEvidence(ctx, storage.ApprovalInput{ProjectID: projectID, TaskID: taskID, ApprovalType: storage.ApprovalMerge, Notes: notes})
+	approval, err := db.ApproveTaskEvidence(ctx, storage.ApprovalInput{ProjectID: projectID, TaskID: taskID, ApprovalType: storage.ApprovalMerge, Notes: notes})
+	if err != nil {
+		return nil, err
+	}
+	if approval.ApprovedForMerge || approval.TaskStatus == "approved_for_merge" {
+		entry, err := db.QueueTaskForMerge(ctx, projectID, taskID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"approval": approval, "merge_queue_entry": entry}, nil
+	}
+	return approval, nil
+}
+
+func (WindowsLocalAuthority) ProcessRealGitMerge(ctx context.Context, project registry.RegisteredProject, entryID string, target string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	if strings.TrimSpace(target) == "" {
+		target = "main"
+	}
+	return db.ProcessRealGitMerge(ctx, projectID, storage.RealGitMergeInput{EntryID: entryID, Target: target, Execute: true, FFOnly: true, NoPush: true})
 }
 
 func (WindowsLocalAuthority) RequestDependencyApproval(ctx context.Context, project registry.RegisteredProject, input storage.DependencyApprovalRequestInput) (any, error) {
@@ -753,6 +777,25 @@ func (a WslAuthority) ApproveTaskMerge(ctx context.Context, project registry.Reg
 		args = append(args, "--notes", notes)
 	}
 	if err := a.runJSONWithTrailing(ctx, project, &body, args, taskID); err != nil {
+		return nil, err
+	}
+	var queued map[string]any
+	if err := a.runJSON(ctx, project, &queued, "merge", taskID); err != nil {
+		return nil, err
+	}
+	return map[string]any{"approval": body, "merge_queue_entry": queued}, nil
+}
+
+func (a WslAuthority) ProcessRealGitMerge(ctx context.Context, project registry.RegisteredProject, entryID string, target string) (any, error) {
+	var body map[string]any
+	args := []string{"merge", "queue", "--process-real-git", "--execute", "--ff-only", "--no-push"}
+	if strings.TrimSpace(target) != "" {
+		args = append(args, "--target", target)
+	}
+	if strings.TrimSpace(entryID) != "" {
+		args = append(args, "--entry", entryID)
+	}
+	if err := a.runJSON(ctx, project, &body, args...); err != nil {
 		return nil, err
 	}
 	return body, nil

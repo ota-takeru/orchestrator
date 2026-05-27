@@ -13,12 +13,13 @@
 | Documentation baseline | 100% | 完了 |
 | Codex implementation operating docs | 100% | 完了 |
 | Product implementation code | 99% | 着手 |
-| Initial Complete Scope end-to-end workflow | 99% | 進行中 |
+| Initial Complete Scope end-to-end workflow | 100% | 完了 |
 
 ## Latest Implementation Update
 
 2026-05-27:
 
+- UIだけで新規project作成から簡単な静的アプリ生成、review承認、merge承認、real git merge処理まで通る導線を確認しました。新規project作成時にDevOS初期artifactを初期コミットし、git branchを `main` に揃えることでReal Codex実行前の `worktree_required` を解消しました。空project向けTask YAMLの初期required verificationは失敗固定placeholderではなく、実装ファイル生成を確認するsmoke verificationに変更しました。Merge approveはmerge queue投入まで行い、Merge Gateから `Process merge` をUI実行できるようにしました。実機確認では `Final UI Counter App` が `TASK-001 / merged` となり、`README.md`、`app.js`、`index.html`、`styles.css` がproject rootのHEADに入り、git status cleanでした。
 - Worker実行後のdashboard状態表示を改善しました。完了済みwork queue itemをactive queueとして数えないようにし、実装完了後はReady cardを `Ready for review` に切り替えて `Open artifacts` からDiff & Artifacts確認へ進める導線にしました。
 - Task artifact表示導線を修正しました。`Open artifacts` / Task欄の `Open task artifacts` は右下asideではなくメインdashboard内にDiff & Artifacts panelを表示し、読み込み中表示と自動スクロールでクリック後の反応が分かるようにしました。
 - Worker起動ボタンの反応が分かりにくい問題を改善しました。Ready to run cardに実行中status / spinnerを表示し、実行queueが空の場合はRun workerボタンをdisabledにします。worker実行結果が0件の場合は「ready execution workがなかった」ことをnoticeで明示し、Work And Planningでは最新worker runを上に表示するようにしました。

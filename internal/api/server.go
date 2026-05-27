@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/platform/path-mappings", s.handlePathMappings)
 	mux.HandleFunc("/api/platform/toolchain-setup", s.handleToolchainSetup)
 	mux.HandleFunc("/api/merge/status", s.handleMergeStatus)
+	mux.HandleFunc("/api/merge/process-real-git", s.handleMergeProcessRealGit)
 	mux.HandleFunc("/api/check", s.handleProjectCheck)
 	mux.HandleFunc("/api/setup", s.handleSetupStatus)
 	mux.HandleFunc("/api/setup/actions/", s.handleSetupAction)
@@ -255,6 +256,15 @@ func (s *Server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 	}
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "task_approval_failed", err.Error())
+		return
+	}
+	if approvalType == storage.ApprovalMerge && !reject && (result.ApprovedForMerge || result.TaskStatus == "approved_for_merge") {
+		entry, err := s.db.QueueTaskForMerge(r.Context(), s.projectID, taskID)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "merge_queue_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, map[string]any{"approval": result, "merge_queue_entry": entry})
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, result)
@@ -489,6 +499,9 @@ func (s *Server) createProject(ctx context.Context, input projectCreateRequest) 
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := commitInitialProjectState(ctx, initResult.ProjectRoot); err != nil {
+		return nil, err
 	}
 	add := registry.AddProjectInput{
 		DisplayName:      name,
@@ -935,6 +948,10 @@ func prepareProjectRoot(ctx context.Context, projectRoot string) (string, error)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("git init failed: %s: %w", strings.TrimSpace(string(out)), err)
 		}
+		branch := exec.CommandContext(ctx, "git", "-C", abs, "checkout", "-B", "main")
+		if out, err := branch.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git checkout main failed: %s: %w", strings.TrimSpace(string(out)), err)
+		}
 	} else if err != nil {
 		return "", err
 	}
@@ -995,6 +1012,29 @@ func ensureGitattributesDefault(root string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte("* text=auto eol=lf\n"), 0o644)
+}
+
+func commitInitialProjectState(ctx context.Context, root string) error {
+	add := exec.CommandContext(ctx, "git", "-C", root, "add", "--", ".devagent", ".gitattributes", ".gitignore")
+	if out, err := add.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add initial project state failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	diff := exec.CommandContext(ctx, "git", "-C", root, "diff", "--cached", "--quiet")
+	if err := diff.Run(); err == nil {
+		return nil
+	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		return fmt.Errorf("git diff initial project state failed: %w", err)
+	}
+	commit := exec.CommandContext(ctx,
+		"git", "-C", root,
+		"-c", "user.name=DevOS",
+		"-c", "user.email=devos@example.invalid",
+		"commit", "-m", "devos: initialize project",
+	)
+	if out, err := commit.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit initial project state failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 func saveGeneratedArtifacts(ctx context.Context, db *storage.DB, projectID string, root string, artifacts []artifactgen.Artifact) ([]storage.ArtifactVersionRecord, error) {
@@ -1230,6 +1270,27 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, err := authority.ApproveTaskMerge(r.Context(), project, parts[4], notes)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 5 && action == "merge" && parts[4] == "process-real-git":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		var input struct {
+			EntryID string `json:"entry_id"`
+			Target  string `json:"target"`
+		}
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+				return
+			}
+		}
+		body, err := authority.ProcessRealGitMerge(r.Context(), project, input.EntryID, input.Target)
 		if err != nil {
 			writeProjectHubError(w, err)
 			return
@@ -1907,6 +1968,38 @@ func (s *Server) handleMergeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleMergeProcessRealGit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	var input struct {
+		EntryID string `json:"entry_id"`
+		Target  string `json:"target"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return
+		}
+	}
+	if strings.TrimSpace(input.Target) == "" {
+		input.Target = "main"
+	}
+	result, err := s.db.ProcessRealGitMerge(r.Context(), s.projectID, storage.RealGitMergeInput{
+		EntryID: input.EntryID,
+		Target:  input.Target,
+		Execute: true,
+		FFOnly:  true,
+		NoPush:  true,
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "real_git_merge_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleProjectCheck(w http.ResponseWriter, r *http.Request) {

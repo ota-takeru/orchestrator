@@ -239,6 +239,9 @@ func TestProjectsAPICreatesProjectWithSuggestedRoot(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(created.Project.ProjectRoot, ".git")); err != nil {
 		t.Fatalf("suggested project root was not initialized: %v", err)
 	}
+	if status := gitStatusShort(t, created.Project.ProjectRoot); status != "" {
+		t.Fatalf("created project should be git clean, status:\n%s", status)
+	}
 }
 
 func TestProjectsAPICreatesProjectFromUI(t *testing.T) {
@@ -291,6 +294,9 @@ func TestProjectsAPICreatesProjectFromUI(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
+	}
+	if status := gitStatusShort(t, root); status != "" {
+		t.Fatalf("created project should be git clean, status:\n%s", status)
 	}
 	projects, err := regDB.ListProjects(context.Background())
 	if err != nil {
@@ -375,6 +381,42 @@ func TestProjectsAPIRoutesSetupActionToAuthority(t *testing.T) {
 	}
 }
 
+func TestSetupActionCommitsInitialStateFromUI(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for setup action")
+	}
+	db, projectID := openAPITestDB(t)
+	root := t.TempDir()
+	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, string(out))
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".devagent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".devagent", "prd.md"), []byte("# PRD\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".env.local\n.env.*\norchestrator-data/\n.devagent-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitattributes"), []byte("* text=auto eol=lf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(context.Background(), "UPDATE projects SET root_path = ? WHERE id = ?", root, projectID); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/actions/commit_initial_state", nil)
+	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if status := gitStatusShort(t, root); status != "" {
+		t.Fatalf("setup action should make project git clean, status:\n%s", status)
+	}
+}
+
 func TestProjectsAPIUnknownProjectReturns404(t *testing.T) {
 	db, projectID := openAPITestDB(t)
 	regDB := openAPIRegistry(t)
@@ -439,6 +481,15 @@ func openAPIRegistry(t *testing.T) *registry.DB {
 func quoteJSON(value string) string {
 	raw, _ := json.Marshal(value)
 	return string(raw)
+}
+
+func gitStatusShort(t *testing.T, root string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all").Output()
+	if err != nil {
+		t.Fatalf("git status failed: %v", err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 type apiFakeAuthority struct {
@@ -512,6 +563,9 @@ func (a apiFakeAuthority) RejectTaskReview(context.Context, registry.RegisteredP
 	return map[string]any{"ok": a.name}, nil
 }
 func (a apiFakeAuthority) ApproveTaskMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
+}
+func (a apiFakeAuthority) ProcessRealGitMerge(context.Context, registry.RegisteredProject, string, string) (any, error) {
 	return map[string]any{"ok": a.name}, nil
 }
 func (a apiFakeAuthority) RequestDependencyApproval(context.Context, registry.RegisteredProject, storage.DependencyApprovalRequestInput) (any, error) {

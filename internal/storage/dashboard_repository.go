@@ -229,6 +229,13 @@ func setupActions(root string, status SetupStatus) []SetupAction {
 			Reason:  disabledReason(status.GitRepository, "git repository is required"),
 		},
 		{
+			ID:      "commit_initial_state",
+			Label:   "Commit initial state",
+			Command: "git add -- .devagent .gitattributes .gitignore && git commit -m 'devos: initialize project'",
+			Enabled: status.GitRepository && !status.GitClean,
+			Reason:  disabledReason(status.GitRepository && !status.GitClean, "git repository with pending DevOS files is required"),
+		},
+		{
 			ID:      "fake_workflow",
 			Label:   "Run fake workflow",
 			Command: "devos bootstrap --adapter fake --project-root " + quotedRoot + " --json \"Fake setup workflow\"",
@@ -269,6 +276,19 @@ func (db *DB) RunSetupAction(ctx context.Context, projectID string, actionID str
 			return SetupActionResult{}, err
 		}
 		return SetupActionResult{ActionID: actionID, Status: "succeeded", Message: "codex readiness saved", Result: map[string]any{"report": report, "inbox_items": items}}, nil
+	case "commit_initial_state":
+		var root string
+		if err := db.sql.QueryRowContext(ctx, "SELECT root_path FROM projects WHERE id = ?", projectID).Scan(&root); err != nil {
+			return SetupActionResult{}, err
+		}
+		committed, err := commitDevOSInitialState(ctx, root)
+		if err != nil {
+			return SetupActionResult{}, err
+		}
+		if committed {
+			return SetupActionResult{ActionID: actionID, Status: "succeeded", Message: "initial DevOS project state committed"}, nil
+		}
+		return SetupActionResult{ActionID: actionID, Status: "succeeded", Message: "initial DevOS project state already clean"}, nil
 	case "fake_workflow", "real_dry_run":
 		return SetupActionResult{ActionID: actionID, Status: "manual_required", Message: "run the displayed command from the project root"}, nil
 	default:
@@ -403,4 +423,27 @@ func gitDirtyFiles(ctx context.Context, root string) []string {
 		files = append(files, strings.TrimSpace(line[3:]))
 	}
 	return files
+}
+
+func commitDevOSInitialState(ctx context.Context, root string) (bool, error) {
+	add := exec.CommandContext(ctx, "git", "-C", root, "add", "--", ".devagent", ".gitattributes", ".gitignore")
+	if out, err := add.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git add initial project state failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	diff := exec.CommandContext(ctx, "git", "-C", root, "diff", "--cached", "--quiet")
+	if err := diff.Run(); err == nil {
+		return false, nil
+	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		return false, fmt.Errorf("git diff initial project state failed: %w", err)
+	}
+	commit := exec.CommandContext(ctx,
+		"git", "-C", root,
+		"-c", "user.name=DevOS",
+		"-c", "user.email=devos@example.invalid",
+		"commit", "-m", "devos: initialize project",
+	)
+	if out, err := commit.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git commit initial project state failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return true, nil
 }

@@ -128,6 +128,15 @@ export type MergeGateStatus = {
   ready: boolean;
 };
 
+export type RealGitMergeResult = {
+  merge_queue_entry_id: string;
+  task_id: string;
+  status: string;
+  target: string;
+  blockers?: string[];
+  failure_class?: string;
+};
+
 export type InvariantViolation = {
   scope: string;
   id: string;

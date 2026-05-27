@@ -351,6 +351,7 @@ export type ProjectListData = {
   projects: RegisteredProject[];
   current_project?: CurrentProject;
   runtime_options: ProjectRuntimeOption[];
+  project_path_suggestion?: ProjectPathSuggestion;
 };
 
 export type ProjectCreateInput = {
@@ -366,6 +367,14 @@ export type ProjectCreateInput = {
 export type ProjectCreateResult = {
   project: RegisteredProject;
   dashboard: DashboardWireData;
+};
+
+export type ProjectPathSuggestion = {
+  display_name: string;
+  slug: string;
+  authority_runtime: "windows" | "wsl";
+  base_path: string;
+  project_root: string;
 };
 
 export type RegisteredProject = {

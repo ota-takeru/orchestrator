@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ota-takeru/orchestrator/internal/projecthub"
@@ -76,6 +78,166 @@ func TestProjectsAPIListsEmptyProjectsAsArray(t *testing.T) {
 	}
 	if len(body.Projects) != 0 {
 		t.Fatalf("projects = %#v", body.Projects)
+	}
+}
+
+func TestProjectPathSuggestInfersRootFromName(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/project-paths/suggest?name=My%20Cool%20App&runtime=windows", nil)
+	NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"})).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var suggestion struct {
+		Slug        string `json:"slug"`
+		ProjectRoot string `json:"project_root"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &suggestion); err != nil {
+		t.Fatal(err)
+	}
+	if suggestion.Slug != "my-cool-app" || filepath.Base(suggestion.ProjectRoot) != "my-cool-app" {
+		t.Fatalf("suggestion = %#v", suggestion)
+	}
+}
+
+func TestProjectPathSuggestUsesDefaultProjectName(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/project-paths/suggest?runtime=windows", nil)
+	NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"})).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var suggestion struct {
+		DisplayName string `json:"display_name"`
+		ProjectRoot string `json:"project_root"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &suggestion); err != nil {
+		t.Fatal(err)
+	}
+	if suggestion.DisplayName != "New Project" || filepath.Base(suggestion.ProjectRoot) != "new-project" {
+		t.Fatalf("suggestion = %#v", suggestion)
+	}
+}
+
+func TestProjectPathBrowseAliasListsDirectories(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/path-browse?path="+url.QueryEscape(root), nil)
+	NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"})).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var browse struct {
+		Entries []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &browse); err != nil {
+		t.Fatal(err)
+	}
+	if len(browse.Entries) != 1 || browse.Entries[0].Name != "child" {
+		t.Fatalf("browse = %#v", browse)
+	}
+}
+
+func TestExistingDirectoryForExplorerFallsBackToParent(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "new-project")
+	got, err := existingDirectoryForExplorer(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != root {
+		t.Fatalf("got %s want %s", got, root)
+	}
+}
+
+func TestProjectPathPickUsesSelectedBaseAndName(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+	base := t.TempDir()
+	original := projectPathPicker
+	projectPathPicker = func(path string) (string, error) {
+		if strings.TrimSpace(path) == "" {
+			t.Fatal("path was empty")
+		}
+		return base, nil
+	}
+	t.Cleanup(func() { projectPathPicker = original })
+	body := []byte(`{"path":` + quoteJSON(filepath.Join(base, "old")) + `,"name":"Picked App","runtime":"windows"}`)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/project-paths/pick", bytes.NewReader(body))
+	NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"})).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var suggestion struct {
+		BasePath    string `json:"base_path"`
+		ProjectRoot string `json:"project_root"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &suggestion); err != nil {
+		t.Fatal(err)
+	}
+	if suggestion.BasePath != base || filepath.Base(suggestion.ProjectRoot) != "picked-app" {
+		t.Fatalf("suggestion = %#v", suggestion)
+	}
+}
+
+func TestProjectsAPICreatesProjectWithSuggestedRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for project creation")
+	}
+	db, projectID := openAPITestDB(t)
+	regDB := openAPIRegistry(t)
+	currentRoot := filepath.Join(t.TempDir(), "current")
+	if err := os.MkdirAll(currentRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(context.Background(), "UPDATE projects SET root_path = ? WHERE id = ?", currentRoot, projectID); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{
+		"display_name":"Suggested App",
+		"project_root":"",
+		"concept":"Build a small local project from the UI.",
+		"authority_runtime":"windows",
+		"generate_initial_artifacts":true
+	}`)
+	server := NewServerWithHub(db, projectID, projecthub.NewHub(regDB, apiFakeAuthority{name: "windows"}, apiFakeAuthority{name: "wsl"}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(body))
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Project struct {
+			ProjectRoot string `json:"project_root"`
+		} `json:"project"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(created.Project.ProjectRoot) != "suggested-app" {
+		t.Fatalf("project root = %s", created.Project.ProjectRoot)
+	}
+	if _, err := os.Stat(filepath.Join(created.Project.ProjectRoot, ".git")); err != nil {
+		t.Fatalf("suggested project root was not initialized: %v", err)
 	}
 }
 

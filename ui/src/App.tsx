@@ -1,8 +1,8 @@
-import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
+import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChecks, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, requestDependencyApproval, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
-import type { CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
+import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, requestDependencyApproval, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
+import type { CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -19,20 +19,26 @@ const countRows: Array<{
   { key: "running_workers", label: "Workers", tone: "ready" }
 ];
 
+const defaultNewProjectName = "New Project";
+
 function App() {
   const [projects, setProjects] = useState<RegisteredProject[]>([]);
   const [currentProject, setCurrentProject] = useState<CurrentProject | undefined>();
   const [runtimeOptions, setRuntimeOptions] = useState<ProjectRuntimeOption[]>([]);
+  const [defaultPathSuggestion, setDefaultPathSuggestion] = useState<ProjectPathSuggestion | undefined>();
   const [selectedProjectID, setSelectedProjectID] = useState("");
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [creatingProject, setCreatingProject] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectName, setNewProjectName] = useState(defaultNewProjectName);
   const [newProjectRoot, setNewProjectRoot] = useState("");
+  const [newProjectBase, setNewProjectBase] = useState("");
+  const [newProjectRootTouched, setNewProjectRootTouched] = useState(false);
   const [newProjectConcept, setNewProjectConcept] = useState("");
   const [newProjectRuntime, setNewProjectRuntime] = useState<"windows" | "wsl">("wsl");
   const [newProjectWslDistro, setNewProjectWslDistro] = useState("");
+  const [openingProjectPath, setOpeningProjectPath] = useState(false);
   const [newProjectActioning, setNewProjectActioning] = useState(false);
   const [approving, setApproving] = useState<string>("");
   const [featureText, setFeatureText] = useState("");
@@ -82,10 +88,15 @@ function App() {
         setProjects(projectData.projects);
         setCurrentProject(projectData.current_project);
         setRuntimeOptions(projectData.runtime_options);
+        setDefaultPathSuggestion(projectData.project_path_suggestion);
         const recommended = projectData.runtime_options.find((option) => option.recommended && option.available) ?? projectData.runtime_options.find((option) => option.available);
         if (recommended) {
           setNewProjectRuntime(recommended.authority_runtime);
           setNewProjectWslDistro(recommended.wsl_distro ?? "");
+        }
+        if (projectData.project_path_suggestion) {
+          setNewProjectRoot(projectData.project_path_suggestion.project_root);
+          setNewProjectBase(projectData.project_path_suggestion.base_path);
         }
         const initialProjectID = projectData.current_project ? "" : (projectData.projects[0]?.id ?? "");
         setSelectedProjectID(initialProjectID);
@@ -103,6 +114,24 @@ function App() {
     void loadInitial();
   }, []);
 
+  useEffect(() => {
+    if (!creatingProject || newProjectRootTouched) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void suggestProjectPath(newProjectName, newProjectRuntime, newProjectBase || undefined)
+        .then((suggestion) => {
+          if (!active) return;
+          setNewProjectRoot(suggestion.project_root);
+          setNewProjectBase(suggestion.base_path);
+        })
+        .catch(() => undefined);
+    }, 120);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [creatingProject, newProjectName, newProjectRuntime, newProjectBase, newProjectRootTouched]);
+
   const nextCommand = useMemo(() => data?.snapshot.recommended_next_commands?.[0] ?? "devos request --json <TEXT>", [data]);
 
   const selectProject = (projectID: string) => {
@@ -117,8 +146,31 @@ function App() {
       setNewProjectRuntime(recommended.authority_runtime);
       setNewProjectWslDistro(recommended.wsl_distro ?? "");
     }
+    if (defaultPathSuggestion) {
+      setNewProjectRoot(defaultPathSuggestion.project_root);
+      setNewProjectBase(defaultPathSuggestion.base_path);
+    }
+    if (!newProjectName.trim()) {
+      setNewProjectName(defaultNewProjectName);
+    }
+    setNewProjectRootTouched(false);
     setCreatingProject(true);
     setError("");
+  };
+
+  const pickProjectRootParent = async () => {
+    setOpeningProjectPath(true);
+    setError("");
+    try {
+      const suggestion = await pickProjectPath(newProjectRoot || newProjectBase, newProjectName, newProjectRuntime);
+      setNewProjectBase(suggestion.base_path);
+      setNewProjectRoot(suggestion.project_root);
+      setNewProjectRootTouched(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Path selection failed");
+    } finally {
+      setOpeningProjectPath(false);
+    }
   };
 
   const submitNewProject = async () => {
@@ -137,10 +189,13 @@ function App() {
       setProjects(projectData.projects);
       setCurrentProject(projectData.current_project);
       setRuntimeOptions(projectData.runtime_options);
+      setDefaultPathSuggestion(projectData.project_path_suggestion);
       setSelectedProjectID(result.project.id);
       setCreatingProject(false);
-      setNewProjectName("");
+      setNewProjectName(defaultNewProjectName);
       setNewProjectRoot("");
+      setNewProjectBase("");
+      setNewProjectRootTouched(false);
       setNewProjectConcept("");
       setData(await loadDashboardData(result.project.id));
     } catch (err) {
@@ -352,12 +407,22 @@ function App() {
               runtimeOptions={runtimeOptions}
               actioning={newProjectActioning}
               setName={setNewProjectName}
-              setRoot={setNewProjectRoot}
+              setRoot={(value) => {
+                setNewProjectRoot(value);
+                setNewProjectRootTouched(true);
+              }}
               setConcept={setNewProjectConcept}
-              setRuntime={setNewProjectRuntime}
+              setRuntime={(value) => {
+                setNewProjectRuntime(value);
+                setNewProjectRootTouched(false);
+              }}
               setWslDistro={setNewProjectWslDistro}
+              openingProjectPath={openingProjectPath}
+              onBrowse={() => void pickProjectRootParent()}
               onSubmit={submitNewProject}
-              onCancel={() => setCreatingProject(false)}
+              onCancel={() => {
+                setCreatingProject(false);
+              }}
             />
           ) : null}
           {data ? (
@@ -569,6 +634,8 @@ function NewProjectPanel({
   setConcept,
   setRuntime,
   setWslDistro,
+  openingProjectPath,
+  onBrowse,
   onSubmit,
   onCancel
 }: {
@@ -584,6 +651,8 @@ function NewProjectPanel({
   setConcept: (value: string) => void;
   setRuntime: (value: "windows" | "wsl") => void;
   setWslDistro: (value: string) => void;
+  openingProjectPath: boolean;
+  onBrowse: () => void;
   onSubmit: () => void;
   onCancel: () => void;
 }) {
@@ -599,16 +668,22 @@ function NewProjectPanel({
         </div>
         <Plus size={20} className="text-zinc-500" />
       </div>
-      <div className="new-project-grid">
+      <div className="new-project-name-row">
         <label>
           <span>Name</span>
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Project name" disabled={actioning} />
         </label>
-        <label>
-          <span>Project root</span>
-          <input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="/path/to/new-project" disabled={actioning} />
-        </label>
       </div>
+      <label className="project-root-label">
+        <span>Project root</span>
+        <div className="path-input-row">
+          <textarea className="project-root-field" value={root} onChange={(event) => setRoot(event.target.value)} placeholder="Project root" disabled={actioning} rows={2} />
+          <button className="icon-text-button" type="button" onClick={onBrowse} disabled={actioning || openingProjectPath}>
+            <FolderOpen size={16} />
+            {openingProjectPath ? "Selecting" : "Browse"}
+          </button>
+        </div>
+      </label>
       <div className="runtime-choice-row">
         {runtimeOptions.map((option) => (
           <button

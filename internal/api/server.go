@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/ota-takeru/orchestrator/internal/artifactgen"
 	"github.com/ota-takeru/orchestrator/internal/preflight"
@@ -46,7 +47,15 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("/api/projects/path-suggest", s.handleProjectPathSuggest)
+	mux.HandleFunc("/api/projects/path-browse", s.handleProjectPathBrowse)
+	mux.HandleFunc("/api/projects/path-open", s.handleProjectPathOpen)
+	mux.HandleFunc("/api/projects/path-pick", s.handleProjectPathPick)
 	mux.HandleFunc("/api/projects/", s.handleProjectRoute)
+	mux.HandleFunc("/api/project-paths/suggest", s.handleProjectPathSuggest)
+	mux.HandleFunc("/api/project-paths/browse", s.handleProjectPathBrowse)
+	mux.HandleFunc("/api/project-paths/open", s.handleProjectPathOpen)
+	mux.HandleFunc("/api/project-paths/pick", s.handleProjectPathPick)
 	mux.HandleFunc("/api/ui/snapshot", s.handleUISnapshot)
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/", s.handleInboxItem)
@@ -132,6 +141,10 @@ func requiresLocalToken(r *http.Request) bool {
 		strings.Contains(r.URL.Path, "/merge") ||
 		strings.Contains(r.URL.Path, "/review/") ||
 		strings.HasSuffix(r.URL.Path, "/verify") ||
+		strings.Contains(r.URL.Path, "/path-open") ||
+		strings.Contains(r.URL.Path, "/path-pick") ||
+		strings.Contains(r.URL.Path, "/project-paths/open") ||
+		strings.Contains(r.URL.Path, "/project-paths/pick") ||
 		strings.Contains(r.URL.Path, "/dependency-approvals") ||
 		strings.Contains(r.URL.Path, "/setup/actions/")
 }
@@ -279,9 +292,10 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]any{
-		"projects":        projects,
-		"current_project": current,
-		"runtime_options": detectRuntimeOptions(),
+		"projects":                projects,
+		"current_project":         current,
+		"runtime_options":         detectRuntimeOptions(),
+		"project_path_suggestion": s.suggestProjectPath("", "", ""),
 	})
 }
 
@@ -303,6 +317,40 @@ type projectRuntimeOption struct {
 	Available        bool                      `json:"available"`
 	Recommended      bool                      `json:"recommended"`
 	WSLDistro        string                    `json:"wsl_distro,omitempty"`
+}
+
+type projectPathSuggestion struct {
+	DisplayName string                    `json:"display_name"`
+	Slug        string                    `json:"slug"`
+	Runtime     registry.AuthorityRuntime `json:"authority_runtime"`
+	BasePath    string                    `json:"base_path"`
+	ProjectRoot string                    `json:"project_root"`
+}
+
+type projectPathBrowseEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+type projectPathBrowseResult struct {
+	Path    string                   `json:"path"`
+	Parent  string                   `json:"parent,omitempty"`
+	Roots   []projectPathBrowseEntry `json:"roots,omitempty"`
+	Entries []projectPathBrowseEntry `json:"entries"`
+}
+
+type projectPathOpenRequest struct {
+	Path string `json:"path"`
+}
+
+type projectPathOpenResult struct {
+	OpenedPath string `json:"opened_path"`
+}
+
+type projectPathPickRequest struct {
+	Path    string                    `json:"path"`
+	Name    string                    `json:"name"`
+	Runtime registry.AuthorityRuntime `json:"runtime"`
 }
 
 type currentProjectSummary struct {
@@ -329,6 +377,64 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusCreated, result)
 }
 
+func (s *Server) handleProjectPathSuggest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	suggestion := s.suggestProjectPath(r.URL.Query().Get("name"), registry.AuthorityRuntime(r.URL.Query().Get("runtime")), r.URL.Query().Get("base"))
+	writeAPIJSON(w, http.StatusOK, suggestion)
+}
+
+func (s *Server) handleProjectPathBrowse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	result, err := browseProjectPath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "project_path_browse_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleProjectPathOpen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	var input projectPathOpenRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	opened, err := openProjectPath(input.Path)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "project_path_open_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, projectPathOpenResult{OpenedPath: opened})
+}
+
+func (s *Server) handleProjectPathPick(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	var input projectPathPickRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	base, err := projectPathPicker(input.Path)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "project_path_pick_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, s.suggestProjectPath(input.Name, input.Runtime, base))
+}
+
 func (s *Server) createProject(ctx context.Context, input projectCreateRequest) (map[string]any, error) {
 	name := strings.TrimSpace(input.DisplayName)
 	if name == "" {
@@ -338,7 +444,11 @@ func (s *Server) createProject(ctx context.Context, input projectCreateRequest) 
 	if concept == "" {
 		return nil, fmt.Errorf("concept is required")
 	}
-	root, err := prepareProjectRoot(ctx, input.ProjectRoot)
+	projectRoot := strings.TrimSpace(input.ProjectRoot)
+	if projectRoot == "" {
+		projectRoot = s.suggestProjectPath(name, input.AuthorityRuntime, "").ProjectRoot
+	}
+	root, err := prepareProjectRoot(ctx, projectRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -435,6 +545,368 @@ func openProjectDataDB(ctx context.Context, projectRoot string, dataRoot string)
 		return nil, "", err
 	}
 	return db, dbPath, nil
+}
+
+func (s *Server) suggestProjectPath(name string, runtimeValue registry.AuthorityRuntime, baseOverride string) projectPathSuggestion {
+	displayName := strings.TrimSpace(name)
+	if displayName == "" {
+		displayName = "New Project"
+	}
+	slug := projectSlug(displayName)
+	if slug == "" {
+		slug = "new-project"
+	}
+	if runtimeValue == "" {
+		for _, option := range detectRuntimeOptions() {
+			if option.Recommended && option.Available {
+				runtimeValue = option.AuthorityRuntime
+				break
+			}
+		}
+		if runtimeValue == "" {
+			runtimeValue = registry.AuthorityWindows
+		}
+	}
+	base := strings.TrimSpace(baseOverride)
+	if base == "" {
+		base = s.defaultProjectBase(runtimeValue)
+	}
+	return projectPathSuggestion{
+		DisplayName: displayName,
+		Slug:        slug,
+		Runtime:     runtimeValue,
+		BasePath:    base,
+		ProjectRoot: filepath.Join(base, slug),
+	}
+}
+
+func (s *Server) defaultProjectBase(runtimeValue registry.AuthorityRuntime) string {
+	if runtimeValue == registry.AuthorityWSL && runtime.GOOS != "windows" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, "programming")
+		}
+		return "/home/projects"
+	}
+	if s != nil {
+		if current := s.currentProjectSummary(context.Background()); current != nil && strings.TrimSpace(current.ProjectRoot) != "" {
+			return filepath.Dir(current.ProjectRoot)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		for _, candidate := range []string{
+			filepath.Join(home, "Desktop", "programming"),
+			filepath.Join(home, "programming"),
+			filepath.Join(home, "dev"),
+		} {
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				return candidate
+			}
+		}
+		return filepath.Join(home, "Desktop", "programming")
+	}
+	return filepath.Join(".", "projects")
+}
+
+func projectSlug(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range name {
+		switch {
+		case unicode.IsLetter(r):
+			b.WriteRune(unicode.ToLower(r))
+			lastDash = false
+		case unicode.IsDigit(r):
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+var projectPathPicker = defaultProjectPathPicker
+
+func defaultProjectPathPicker(pathValue string) (string, error) {
+	initial, err := existingDirectoryForExplorer(pathValue)
+	if err != nil {
+		return "", err
+	}
+	switch runtime.GOOS {
+	case "windows":
+		script := fmt.Sprintf(`
+Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+[ComImport]
+[Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+internal class FileOpenDialog
+{
+}
+
+[ComImport]
+[Guid("42f85136-db7e-439c-85f1-e4075d135fc8")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IFileDialog
+{
+    [PreserveSig]
+    int Show(IntPtr parent);
+    void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+    void SetFileTypeIndex(uint iFileType);
+    void GetFileTypeIndex(out uint piFileType);
+    void Advise(IntPtr pfde, out uint pdwCookie);
+    void Unadvise(uint dwCookie);
+    void SetOptions(uint fos);
+    void GetOptions(out uint pfos);
+    void SetDefaultFolder(IShellItem psi);
+    void SetFolder(IShellItem psi);
+    void GetFolder(out IShellItem ppsi);
+    void GetCurrentSelection(out IShellItem ppsi);
+    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+    void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
+    void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+    void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+    void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
+    void GetResult(out IShellItem ppsi);
+    void AddPlace(IShellItem psi, uint fdap);
+    void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
+    void Close(int hr);
+    void SetClientGuid(ref Guid guid);
+    void ClearClientData();
+    void SetFilter(IntPtr pFilter);
+}
+
+[ComImport]
+[Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IShellItem
+{
+    void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+    void GetParent(out IShellItem ppsi);
+    void GetDisplayName(uint sigdnName, out IntPtr ppszName);
+    void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+    void Compare(IShellItem psi, uint hint, out int piOrder);
+}
+
+internal static class NativeMethods
+{
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    internal static extern void SHCreateItemFromParsingName(string pszPath, IntPtr pbc, ref Guid riid, out IShellItem ppv);
+
+    [DllImport("ole32.dll")]
+    internal static extern void CoTaskMemFree(IntPtr pv);
+}
+
+public static class FolderPicker
+{
+    private const uint FOS_PICKFOLDERS = 0x20;
+    private const uint FOS_FORCEFILESYSTEM = 0x40;
+    private const uint FOS_PATHMUSTEXIST = 0x800;
+    private const uint SIGDN_FILESYSPATH = 0x80058000;
+
+    public static string Pick(string initial)
+    {
+        IFileDialog dialog = (IFileDialog)new FileOpenDialog();
+        uint options;
+        dialog.GetOptions(out options);
+        dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        dialog.SetTitle("Select project parent folder");
+        dialog.SetOkButtonLabel("Select Folder");
+
+        if (!string.IsNullOrWhiteSpace(initial))
+        {
+            try
+            {
+                Guid shellItemID = typeof(IShellItem).GUID;
+                IShellItem folder;
+                NativeMethods.SHCreateItemFromParsingName(initial, IntPtr.Zero, ref shellItemID, out folder);
+                dialog.SetFolder(folder);
+            }
+            catch
+            {
+            }
+        }
+
+        int hr = dialog.Show(IntPtr.Zero);
+        if (hr != 0)
+        {
+            Environment.Exit(2);
+        }
+
+        IShellItem result;
+        dialog.GetResult(out result);
+        IntPtr pathPtr;
+        result.GetDisplayName(SIGDN_FILESYSPATH, out pathPtr);
+        try
+        {
+            return Marshal.PtrToStringUni(pathPtr);
+        }
+        finally
+        {
+            NativeMethods.CoTaskMemFree(pathPtr);
+        }
+    }
+}
+'@
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$selected = [FolderPicker]::Pick('%s')
+if ([string]::IsNullOrWhiteSpace($selected)) {
+  exit 2
+}
+Write-Output $selected
+`, strings.ReplaceAll(initial, `'`, `''`))
+		cmd := exec.Command("powershell.exe", "-NoProfile", "-STA", "-Command", script)
+		out, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("folder selection was cancelled")
+		}
+		selected := strings.TrimSpace(string(out))
+		if selected == "" {
+			return "", fmt.Errorf("folder selection was cancelled")
+		}
+		return selected, nil
+	default:
+		return "", fmt.Errorf("folder picker is not supported on %s", runtime.GOOS)
+	}
+}
+
+func openProjectPath(pathValue string) (string, error) {
+	pathValue = strings.TrimSpace(pathValue)
+	if pathValue == "" {
+		pathValue = projectBrowseRoots()[0].Path
+	}
+	target, err := existingDirectoryForExplorer(pathValue)
+	if err != nil {
+		return "", err
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer.exe", target)
+	case "darwin":
+		cmd = exec.Command("open", target)
+	default:
+		cmd = exec.Command("xdg-open", target)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func existingDirectoryForExplorer(pathValue string) (string, error) {
+	abs, err := filepath.Abs(pathValue)
+	if err != nil {
+		return "", err
+	}
+	if info, err := os.Stat(abs); err == nil {
+		if info.IsDir() {
+			return abs, nil
+		}
+		return filepath.Dir(abs), nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent := filepath.Dir(abs)
+	for parent != "" && parent != "." {
+		if info, err := os.Stat(parent); err == nil && info.IsDir() {
+			return parent, nil
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			break
+		}
+		parent = next
+	}
+	return "", fmt.Errorf("no existing parent directory for %s", abs)
+}
+
+func browseProjectPath(pathValue string) (projectPathBrowseResult, error) {
+	pathValue = strings.TrimSpace(pathValue)
+	if pathValue == "" {
+		roots := projectBrowseRoots()
+		pathValue = roots[0].Path
+	}
+	abs, err := filepath.Abs(pathValue)
+	if err != nil {
+		return projectPathBrowseResult{}, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return projectPathBrowseResult{}, err
+	}
+	if !info.IsDir() {
+		return projectPathBrowseResult{}, fmt.Errorf("path is not a directory: %s", abs)
+	}
+	dirEntries, err := os.ReadDir(abs)
+	if err != nil {
+		return projectPathBrowseResult{}, err
+	}
+	entries := make([]projectPathBrowseEntry, 0, len(dirEntries))
+	for _, entry := range dirEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		entries = append(entries, projectPathBrowseEntry{Name: name, Path: filepath.Join(abs, name)})
+	}
+	return projectPathBrowseResult{
+		Path:    abs,
+		Parent:  projectBrowseParent(abs),
+		Roots:   projectBrowseRoots(),
+		Entries: entries,
+	}, nil
+}
+
+func projectBrowseRoots() []projectPathBrowseEntry {
+	seen := map[string]bool{}
+	var roots []projectPathBrowseEntry
+	add := func(name string, path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return
+		}
+		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+			return
+		}
+		key := filepath.Clean(abs)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		roots = append(roots, projectPathBrowseEntry{Name: name, Path: abs})
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		add("Home", home)
+		add("Desktop", filepath.Join(home, "Desktop"))
+		add("Programming", filepath.Join(home, "Desktop", "programming"))
+		add("Dev", filepath.Join(home, "dev"))
+	}
+	add("Current", ".")
+	if len(roots) == 0 {
+		roots = append(roots, projectPathBrowseEntry{Name: "Current", Path: "."})
+	}
+	return roots
+}
+
+func projectBrowseParent(pathValue string) string {
+	parent := filepath.Dir(pathValue)
+	if parent == pathValue || parent == "." {
+		return ""
+	}
+	return parent
 }
 
 func prepareProjectRoot(ctx context.Context, projectRoot string) (string, error) {

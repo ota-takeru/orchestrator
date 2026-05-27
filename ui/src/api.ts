@@ -14,6 +14,7 @@ import type {
   PlanningStatus,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectPathSuggestion,
   ProjectListData,
   RegisteredProject,
   SetupActionResult,
@@ -44,7 +45,8 @@ export async function loadProjects(): Promise<ProjectListData> {
   return {
     projects: body.projects ?? [],
     current_project: body.current_project,
-    runtime_options: body.runtime_options ?? []
+    runtime_options: body.runtime_options ?? [],
+    project_path_suggestion: body.project_path_suggestion
   };
 }
 
@@ -54,6 +56,25 @@ export async function createProject(input: ProjectCreateInput): Promise<ProjectC
     ...body,
     dashboard: body.dashboard
   };
+}
+
+export async function suggestProjectPath(name: string, runtime: "windows" | "wsl", base?: string): Promise<ProjectPathSuggestion> {
+  const params = new URLSearchParams({ name, runtime });
+  if (base) params.set("base", base);
+  const query = params.toString();
+  try {
+    return await getJSON<ProjectPathSuggestion>(`/api/project-paths/suggest?${query}`);
+  } catch {
+    return getJSON<ProjectPathSuggestion>(`/api/projects/path-suggest?${query}`);
+  }
+}
+
+export async function pickProjectPath(path: string, name: string, runtime: "windows" | "wsl"): Promise<ProjectPathSuggestion> {
+  try {
+    return await postJSON<ProjectPathSuggestion>("/api/project-paths/pick", { path, name, runtime });
+  } catch {
+    return postJSON<ProjectPathSuggestion>("/api/projects/path-pick", { path, name, runtime });
+  }
 }
 
 export async function loadDashboardData(projectID?: string): Promise<DashboardData> {

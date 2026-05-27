@@ -436,14 +436,15 @@ button:disabled {
   margin-top: 0;
 }
 
-.new-project-grid {
+.new-project-name-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin-bottom: 14px;
 }
 
-.new-project-grid label,
+.new-project-name-row label,
+.project-root-label,
 .compact-label {
   display: grid;
   gap: 6px;
@@ -454,6 +455,34 @@ button:disabled {
 
 .compact-label {
   margin-bottom: 14px;
+}
+
+.project-root-label {
+  margin-bottom: 14px;
+}
+
+.path-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.project-root-field {
+  width: 100%;
+  min-height: 66px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.icon-text-button {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .runtime-choice-row {
@@ -589,7 +618,8 @@ button:disabled {
 
   .split-grid,
   .form-row,
-  .new-project-grid,
+  .new-project-name-row,
+  .path-input-row,
   .runtime-choice-row {
     grid-template-columns: 1fr;
   }

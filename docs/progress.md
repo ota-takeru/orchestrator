@@ -19,6 +19,7 @@
 
 2026-05-27:
 
+- 新規project作成時にproject名とruntimeから推奨project rootを生成するAPIを追加し、UIのProject rootを自動補完するようにしました。デフォルト名は `New Project` とし、Project rootにも `new-project` として反映します。Project rootは横幅いっぱいの複数行入力にし、BrowseはWindows標準のExplorer風フォルダ選択ダイアログを開いて、選択した親フォルダとアプリ名slugからProject rootを更新します。`project_root` 未指定の作成要求でも同じ推奨rootを使って初期化します。
 - WSLからWindows-primary開発環境へ移行した実機状態を再確認し、Go PATH、Node/Corepack/pnpm、Codex CLI/auth、Git設定が揃った状態で `go test ./...`、`corepack pnpm --dir ui test`、`corepack pnpm --dir ui lint`、`corepack pnpm --dir ui build`、`devos platform doctor --include-ui --include-codex` が通るようにしました。Windows host上でのWSL runtime候補検出、Git for Windows同梱`sh.exe`解決、Windows rootからWSL sidecar rootへのfake profile変換、Windows nativeでは成立しないcase-collision fixtureの扱いを補正しました。
 - UIから新規projectを作成できる入口を追加しました。`/api/projects` は現在の単一project、runtime候補、registry登録済みprojectを返し、`POST /api/projects` はユーザーが選択したruntimeでdirectory作成、`git init`、`.gitignore` / `.gitattributes` 初期化、`devos init` 相当のproject-local DB初期化、global registry登録、初期PRD/Architecture/Roadmap/Task YAML artifact生成まで実行します。WSL内でUIサーバーを動かす場合は、登録済みWSL projectを同一WSL内のlocal authorityで読めるようにしました。UIにはCurrent Project表示、New Projectフォーム、runtime自動判定候補のユーザー選択を追加しました。
 - 登録projectが0件の状態で `/api/projects` が `null` 配列を返し、単一project dashboard読み込み時にも複数APIの空結果 `null` がReact UIを白画面にする不備を修正しました。registry/APIは空project一覧を `[]` として返し、UI側のdashboard正規化で空配列field、planning/work status、merge/setup statusを防御的に扱うようにしました。`devos serve --ui` を再起動し、headless ChromeのDOM/screenshotでHuman Inbox dashboardが表示されることを確認済みです。

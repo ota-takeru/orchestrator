@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, FileCheck2, GitMerge, Inbox, ListChecks, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, requestDependencyApproval, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
+import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, requestDependencyApproval, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork } from "./api";
 import type { DashboardData, Decision, InboxItem, MemoryRecord, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
 
 const countRows: Array<{
@@ -43,6 +43,7 @@ function App() {
   const [setupActioning, setSetupActioning] = useState("");
   const [workActioning, setWorkActioning] = useState("");
   const [artifactActioning, setArtifactActioning] = useState("");
+  const [changeActioning, setChangeActioning] = useState("");
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
 
@@ -127,6 +128,19 @@ function App() {
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Change request failed");
+    }
+  };
+
+  const submitChangeRequestAction = async (id: string, action: "analyze" | "approve") => {
+    setChangeActioning(`${id}:${action}`);
+    setError("");
+    try {
+      await runChangeRequestAction(id, action, selectedProjectID || undefined);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Change request action failed");
+    } finally {
+      setChangeActioning("");
     }
   };
 
@@ -300,7 +314,14 @@ function App() {
             actioning={taskActioning}
             onAction={submitTaskAction}
           />
-          <ChangeRequestPanel requests={data?.changeRequests ?? []} text={changeText} setText={setChangeText} onSubmit={submitChangeRequest} />
+          <ChangeRequestPanel
+            requests={data?.changeRequests ?? []}
+            text={changeText}
+            setText={setChangeText}
+            actioning={changeActioning}
+            onSubmit={submitChangeRequest}
+            onAction={submitChangeRequestAction}
+          />
           <DependencyRiskPanel
             risks={data?.dependencyRisks ?? []}
             dependencyName={dependencyName}
@@ -742,12 +763,16 @@ function ChangeRequestPanel({
   requests,
   text,
   setText,
-  onSubmit
+  actioning,
+  onSubmit,
+  onAction
 }: {
   requests: DashboardData["changeRequests"];
   text: string;
   setText: (value: string) => void;
   onSubmit: () => void;
+  actioning: string;
+  onAction: (id: string, action: "analyze" | "approve") => void;
 }) {
   return (
     <section className="panel compact">
@@ -766,6 +791,14 @@ function ChangeRequestPanel({
           <div className="stack-row" key={request.id}>
             <span>{request.body}</span>
             <small>{request.status}</small>
+            <div className="toolbar-row">
+              <button className="secondary-button" type="button" onClick={() => onAction(request.id, "analyze")} disabled={request.status !== "proposed" || actioning !== ""}>
+                {actioning === `${request.id}:analyze` ? "Analyzing" : "Analyze"}
+              </button>
+              <button className="secondary-button" type="button" onClick={() => onAction(request.id, "approve")} disabled={request.status !== "analyzed" || actioning !== ""}>
+                {actioning === `${request.id}:approve` ? "Approving" : "Approve"}
+              </button>
+            </div>
           </div>
         ))}
       </StackEmpty>

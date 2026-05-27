@@ -136,6 +136,11 @@ export async function createChangeRequest(text: string, projectID?: string): Pro
   await postJSON(path, { text });
 }
 
+export async function runChangeRequestAction(id: string, action: "analyze" | "approve", projectID?: string): Promise<void> {
+  const base = projectID ? `/api/projects/${encodeURIComponent(projectID)}/change-requests` : "/api/change-requests";
+  await postJSON(`${base}/${encodeURIComponent(id)}/${action}`, action === "approve" ? { option: "approve" } : {});
+}
+
 export async function startWork(projectID?: string, adapter = "fake"): Promise<void> {
   const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/work/start` : "/api/work/start";
   await postJSON(path, {

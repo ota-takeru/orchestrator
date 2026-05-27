@@ -211,6 +211,36 @@ func TestServerApprovesArtifactAndMaterializesTasks(t *testing.T) {
 	}
 }
 
+func TestServerAnalyzesAndApprovesChangeRequest(t *testing.T) {
+	db, projectID := openAPITestDB(t)
+	ctx := context.Background()
+	created, err := db.CreateChangeRequest(ctx, projectID, "Add status output")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	analyzeReq := httptest.NewRequest(http.MethodPost, "/api/change-requests/"+created.ChangeRequest.ID+"/analyze", bytes.NewBufferString(`{}`))
+	analyzeRec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(analyzeRec, analyzeReq)
+	if analyzeRec.Code != http.StatusOK {
+		t.Fatalf("analyze status = %d body = %s", analyzeRec.Code, analyzeRec.Body.String())
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/change-requests/"+created.ChangeRequest.ID+"/approve", bytes.NewBufferString(`{"option":"approve"}`))
+	approveRec := httptest.NewRecorder()
+	NewServer(db, projectID).Handler().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusOK {
+		t.Fatalf("approve status = %d body = %s", approveRec.Code, approveRec.Body.String())
+	}
+	var record storage.ChangeRequestRecord
+	if err := json.Unmarshal(approveRec.Body.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "approved" {
+		t.Fatalf("change request = %#v", record)
+	}
+}
+
 func TestServerExposesPathMappings(t *testing.T) {
 	db, projectID := openAPITestDB(t)
 	ctx := context.Background()

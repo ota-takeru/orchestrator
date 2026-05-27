@@ -23,6 +23,8 @@ type ProjectAuthority interface {
 	Inbox(ctx context.Context, project registry.RegisteredProject, status string) (any, error)
 	CreateFeatureRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
 	CreateChangeRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
+	AnalyzeChangeRequest(ctx context.Context, project registry.RegisteredProject, changeRequestID string) (any, error)
+	ApproveChangeRequest(ctx context.Context, project registry.RegisteredProject, changeRequestID string, option string) (any, error)
 	StartWork(ctx context.Context, project registry.RegisteredProject, input storage.WorkStartInput) (any, error)
 	Artifacts(ctx context.Context, project registry.RegisteredProject, artifactType string) (any, error)
 	ApproveArtifact(ctx context.Context, project registry.RegisteredProject, artifactID string, version int, status string, notes string) (any, error)
@@ -164,6 +166,24 @@ func (WindowsLocalAuthority) CreateChangeRequest(ctx context.Context, project re
 	}
 	defer db.Close()
 	return db.CreateChangeRequest(ctx, projectID, text)
+}
+
+func (WindowsLocalAuthority) AnalyzeChangeRequest(ctx context.Context, project registry.RegisteredProject, changeRequestID string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.AnalyzeChangeRequest(ctx, projectID, changeRequestID)
+}
+
+func (WindowsLocalAuthority) ApproveChangeRequest(ctx context.Context, project registry.RegisteredProject, changeRequestID string, option string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.ApproveChangeRequest(ctx, storage.ChangeApproveInput{ProjectID: projectID, ChangeRequestID: changeRequestID, Option: option})
 }
 
 func (WindowsLocalAuthority) StartWork(ctx context.Context, project registry.RegisteredProject, input storage.WorkStartInput) (any, error) {
@@ -458,6 +478,26 @@ func (a WslAuthority) CreateFeatureRequest(ctx context.Context, project registry
 func (a WslAuthority) CreateChangeRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error) {
 	var body map[string]any
 	if err := a.runJSONWithTrailing(ctx, project, &body, []string{"change", "request"}, text); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) AnalyzeChangeRequest(ctx context.Context, project registry.RegisteredProject, changeRequestID string) (any, error) {
+	var body map[string]any
+	if err := a.runJSONWithTrailing(ctx, project, &body, []string{"change", "analyze"}, changeRequestID); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) ApproveChangeRequest(ctx context.Context, project registry.RegisteredProject, changeRequestID string, option string) (any, error) {
+	var body map[string]any
+	args := []string{"change", "approve"}
+	if strings.TrimSpace(option) != "" {
+		args = append(args, "--option", option)
+	}
+	if err := a.runJSONWithTrailing(ctx, project, &body, args, changeRequestID); err != nil {
 		return nil, err
 	}
 	return body, nil

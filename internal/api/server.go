@@ -53,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/work/status", s.handleWorkStatus)
 	mux.HandleFunc("/api/planning/status", s.handlePlanningStatus)
 	mux.HandleFunc("/api/change-requests", s.handleChangeRequests)
+	mux.HandleFunc("/api/change-requests/", s.handleChangeRequestRoute)
 	mux.HandleFunc("/api/dependency-risks", s.handleDependencyRisks)
 	mux.HandleFunc("/api/dependency-approvals", s.handleDependencyApprovals)
 	mux.HandleFunc("/api/env/bindings", s.handleEnvBindings)
@@ -117,6 +118,7 @@ func requiresLocalToken(r *http.Request) bool {
 		strings.HasSuffix(r.URL.Path, "/env/bindings") ||
 		strings.Contains(r.URL.Path, "/approve") ||
 		strings.HasSuffix(r.URL.Path, "/tasks/materialize") ||
+		strings.Contains(r.URL.Path, "/change-requests/") ||
 		strings.Contains(r.URL.Path, "/work/start") ||
 		strings.Contains(r.URL.Path, "/merge") ||
 		strings.Contains(r.URL.Path, "/review/") ||
@@ -411,6 +413,32 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "change-requests" && parts[5] == "analyze":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		body, err := authority.AnalyzeChangeRequest(r.Context(), project, parts[4])
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "change-requests" && parts[5] == "approve":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		option, ok := decodeOptionBody(w, r, "approve")
+		if !ok {
+			return
+		}
+		body, err := authority.ApproveChangeRequest(r.Context(), project, parts[4], option)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
 	case len(parts) == 5 && action == "work" && parts[4] == "start":
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
@@ -673,6 +701,40 @@ func (s *Server) handleChangeRequests(w http.ResponseWriter, r *http.Request) {
 		writeAPIJSON(w, http.StatusOK, result)
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST is required")
+	}
+}
+
+func (s *Server) handleChangeRequestRoute(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "change-requests" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown change request route")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	switch parts[3] {
+	case "analyze":
+		result, err := s.db.AnalyzeChangeRequest(r.Context(), s.projectID, parts[2])
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "change_analyze_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, result)
+	case "approve":
+		option, ok := decodeOptionBody(w, r, "approve")
+		if !ok {
+			return
+		}
+		record, err := s.db.ApproveChangeRequest(r.Context(), storage.ChangeApproveInput{ProjectID: s.projectID, ChangeRequestID: parts[2], Option: option})
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "change_approve_failed", err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, record)
+	default:
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown change request action")
 	}
 }
 
@@ -999,6 +1061,22 @@ func decodeNotesBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return input.Notes, true
+}
+
+func decodeOptionBody(w http.ResponseWriter, r *http.Request, fallback string) (string, bool) {
+	var input struct {
+		Option string `json:"option"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return "", false
+		}
+	}
+	if strings.TrimSpace(input.Option) == "" {
+		input.Option = fallback
+	}
+	return input.Option, true
 }
 
 func decodeWorkStartBody(w http.ResponseWriter, r *http.Request) (storage.WorkStartInput, bool) {

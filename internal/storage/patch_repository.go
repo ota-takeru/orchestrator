@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ota-takeru/orchestrator/internal/decisions"
+	"github.com/ota-takeru/orchestrator/internal/platform"
 	"github.com/ota-takeru/orchestrator/internal/runners"
 	"github.com/ota-takeru/orchestrator/internal/statemachine"
 	"github.com/ota-takeru/orchestrator/internal/verifier"
@@ -175,10 +176,32 @@ func (db *DB) MarkPatchApplied(ctx context.Context, projectID string, taskID str
 }
 
 func (db *DB) VerifyAppliedPatchFake(ctx context.Context, projectID string, taskID string) (PatchApplicationRecord, error) {
+	return db.VerifyAppliedPatch(ctx, projectID, taskID, "fake")
+}
+
+func (db *DB) VerifyAppliedPatch(ctx context.Context, projectID string, taskID string, adapter string) (PatchApplicationRecord, error) {
+	adapter = strings.TrimSpace(adapter)
+	if adapter == "" {
+		adapter = "local"
+	}
 	patch, err := db.openPatchApplication(ctx, projectID, taskID, "manually_applied")
 	if err != nil {
 		return PatchApplicationRecord{}, err
 	}
+	env, err := db.primaryEnvironment(ctx, projectID)
+	if err != nil {
+		return PatchApplicationRecord{}, err
+	}
+	runID := "RUN-" + stableShortHash(taskID+"|patch-reverify|"+adapter+"|"+time.Now().UTC().Format(time.RFC3339Nano))
+	attemptNo, err := db.nextRunAttempt(ctx, projectID, taskID, "reverify")
+	if err != nil {
+		return PatchApplicationRecord{}, err
+	}
+	commands, registry, err := db.patchVerificationPlan(ctx, projectID, taskID, adapter, env)
+	if err != nil {
+		return PatchApplicationRecord{}, err
+	}
+	planHash := verificationPlanHash(commands)
 	if err := statemachine.Task.ValidateTransition("manually_applied", "reverifying"); err != nil {
 		return PatchApplicationRecord{}, err
 	}
@@ -188,27 +211,36 @@ func (db *DB) VerifyAppliedPatchFake(ctx context.Context, projectID string, task
 	if err := db.updatePatchStatus(ctx, projectID, patch.ID, "manually_applied", "verifying"); err != nil {
 		return PatchApplicationRecord{}, err
 	}
-	env, err := db.primaryEnvironment(ctx, projectID)
-	if err != nil {
-		return PatchApplicationRecord{}, err
+	if !verificationPlanHasRequiredCommand(commands) {
+		if err := db.markPatchNeedsDecision(ctx, projectID, taskID, patch.ID, "verification plan has no required-for-merge command"); err != nil {
+			return PatchApplicationRecord{}, err
+		}
+		return PatchApplicationRecord{}, fmt.Errorf("verification_required: verification plan has no required-for-merge command")
 	}
-	runID := "RUN-" + stableShortHash(taskID+"|patch-reverify|"+time.Now().UTC().Format(time.RFC3339Nano))
-	command := verifier.Command{ID: "fake-patch-reverify", EnvironmentID: env.ID, Runner: "fake", WorkingDir: env.ProjectRoot, Argv: []string{"reverify"}, NetworkPolicy: runners.NetworkOff, RequiredForMerge: true}
-	report, err := verifier.Run(ctx, runID, verifier.StaticRunnerRegistry{env.ID: fakeRunnerForEnvironment(env)}, []verifier.Command{command})
+	if blocker := db.patchAppliedCommitBlocker(ctx, env.ProjectRoot, patch.AppliedCommit); adapter == "local" && blocker != "" {
+		if err := db.markPatchNeedsDecision(ctx, projectID, taskID, patch.ID, blocker); err != nil {
+			return PatchApplicationRecord{}, err
+		}
+		return PatchApplicationRecord{}, fmt.Errorf("%s", blocker)
+	}
+	report, err := verifier.Run(ctx, runID, registry, commands)
 	if err != nil {
 		return PatchApplicationRecord{}, err
 	}
 	if err := db.SaveVerificationReport(ctx, SaveVerificationInput{
-		ProjectID:           projectID,
-		TaskID:              &taskID,
-		RunID:               runID,
-		RunType:             "reverify",
-		AttemptNo:           1,
-		BaseCommit:          "BASE",
-		ReverifyContextType: "patch_application",
-		ReverifyContextID:   patch.ID,
-		Commands:            []verifier.Command{command},
-		Report:              report,
+		ProjectID:            projectID,
+		TaskID:               &taskID,
+		RunID:                runID,
+		RunType:              "reverify",
+		AttemptNo:            attemptNo,
+		BaseCommit:           patch.AppliedCommit,
+		VerifiedWorktree:     env.ProjectRoot,
+		VerifiedCommit:       patch.AppliedCommit,
+		VerificationPlanHash: planHash,
+		ReverifyContextType:  "patch_application",
+		ReverifyContextID:    patch.ID,
+		Commands:             commands,
+		Report:               report,
 	}); err != nil {
 		return PatchApplicationRecord{}, err
 	}
@@ -227,6 +259,46 @@ func (db *DB) VerifyAppliedPatchFake(ctx context.Context, projectID string, task
 	}
 	patch.Status = "verified"
 	return patch, nil
+}
+
+func (db *DB) patchVerificationPlan(ctx context.Context, projectID string, taskID string, adapter string, env platform.ExecutionEnvironment) ([]verifier.Command, verifier.RunnerRegistry, error) {
+	switch adapter {
+	case "fake":
+		command := verifier.Command{ID: "fake-patch-reverify", EnvironmentID: env.ID, Runner: "fake", WorkingDir: env.ProjectRoot, Argv: []string{"reverify"}, NetworkPolicy: runners.NetworkOff, RequiredForMerge: true}
+		return []verifier.Command{command}, verifier.StaticRunnerRegistry{env.ID: fakeRunnerForEnvironment(env)}, nil
+	case "local":
+		return db.verificationPlan(ctx, projectID, taskID, adapter, env)
+	default:
+		return nil, nil, fmt.Errorf("unsupported patch verification adapter: %s", adapter)
+	}
+}
+
+func verificationPlanHasRequiredCommand(commands []verifier.Command) bool {
+	for _, command := range commands {
+		if command.RequiredForMerge {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *DB) patchAppliedCommitBlocker(ctx context.Context, projectRoot string, appliedCommit string) string {
+	_ = db
+	if strings.TrimSpace(appliedCommit) == "" {
+		return "applied commit is required"
+	}
+	if strings.TrimSpace(gitOutputOrEmpty(ctx, projectRoot, "rev-parse", "--is-inside-work-tree")) != "true" {
+		return ""
+	}
+	head := strings.TrimSpace(gitOutputOrEmpty(ctx, projectRoot, "rev-parse", "HEAD"))
+	applied := strings.TrimSpace(gitOutputOrEmpty(ctx, projectRoot, "rev-parse", appliedCommit))
+	if head == "" || applied == "" {
+		return "registered applied commit cannot be resolved"
+	}
+	if head != applied {
+		return "current HEAD does not match registered applied commit"
+	}
+	return ""
 }
 
 func (db *DB) latestDiffEvidence(ctx context.Context, projectID string, taskID string) (approvalEvidence, error) {

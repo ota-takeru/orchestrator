@@ -476,7 +476,7 @@ func runTaskCommand(ctx context.Context, args []string, stdout io.Writer) int {
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
-	adapter := fs.String("adapter", "fake", "fake or codex")
+	adapter := fs.String("adapter", "local", "local or fake")
 	realCodex := fs.Bool("real-codex", false, "run Linux/current-environment real Codex adapter")
 	dryRun := fs.Bool("dry-run", false, "preview real Codex execution without starting Codex")
 	verifyAfter := fs.Bool("verify", false, "run orchestrator verification after implementation succeeds")
@@ -2070,7 +2070,7 @@ func runPatchVerifyApplied(ctx context.Context, args []string, stdout io.Writer)
 	fs.SetOutput(io.Discard)
 	projectRoot := fs.String("project-root", "", "project root")
 	dataRoot := fs.String("data-root", "", "orchestrator data root")
-	adapter := fs.String("adapter", "fake", "fake or codex")
+	adapter := fs.String("adapter", "local", "local or fake")
 	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
 	if err := fs.Parse(args); err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
@@ -2078,15 +2078,12 @@ func runPatchVerifyApplied(ctx context.Context, args []string, stdout io.Writer)
 	if fs.NArg() != 1 {
 		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("task id is required"))
 	}
-	if *adapter != "fake" {
-		return writeError(stdout, *jsonOut, exitValidation, "unsupported_adapter", errors.New("only --adapter fake is implemented"))
-	}
 	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
 	if err != nil {
 		return writeError(stdout, *jsonOut, errCode, "patch_verify_applied_failed", err)
 	}
 	defer db.Close()
-	patch, err := db.VerifyAppliedPatchFake(ctx, projectID, fs.Arg(0))
+	patch, err := db.VerifyAppliedPatch(ctx, projectID, fs.Arg(0), *adapter)
 	if err != nil {
 		return writeError(stdout, *jsonOut, exitValidation, "patch_verify_applied_failed", err)
 	}
@@ -3973,7 +3970,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos merge queue [--project-root PATH] [--data-root PATH] [--process-fake] [--simulate-conflict] [--retry-conflict ID] [--cancel-conflict ID] [--dry-run-real-git] [--process-real-git --execute --ff-only --no-push --target main] [--entry ID] [--json]")
 	fmt.Fprintln(w, "  devos patch export [--project-root PATH] [--data-root PATH] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch mark-applied [--project-root PATH] [--data-root PATH] --commit SHA [--json] TASK_ID")
-	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter fake] [--json] TASK_ID")
+	fmt.Fprintln(w, "  devos patch verify-applied [--project-root PATH] [--data-root PATH] [--adapter local|fake] [--json] TASK_ID")
 	fmt.Fprintln(w, "  devos patch status [--project-root PATH] [--data-root PATH] [--json] [TASK_ID]")
 	fmt.Fprintln(w, "  devos cleanup [--project-root PATH] [--data-root PATH] [--dry-run] [--execute] [--quarantine] [--quarantine-root PATH] [--delete] [--merged] [--applied] [--older-than AGE] [--json]")
 	fmt.Fprintln(w, "  devos cleanup quarantine list [--project-root PATH] [--data-root PATH] [--json]")

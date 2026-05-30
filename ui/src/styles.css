@@ -108,6 +108,80 @@ select {
   padding: 16px 18px;
 }
 
+.workflow-strip {
+  display: grid;
+  gap: 14px;
+  border: 1px solid #cfd7e2;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workflow-step {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.workflow-step span {
+  display: inline-grid;
+  height: 22px;
+  width: 22px;
+  place-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475467;
+  font-weight: 700;
+}
+
+.workflow-step small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-step.done span {
+  border-color: #39a275;
+  background: #eefaf4;
+  color: #14543b;
+}
+
+.workflow-step.active {
+  color: #182230;
+  font-weight: 700;
+}
+
+.workflow-step.active span {
+  border-color: #182230;
+  background: #182230;
+  color: #ffffff;
+}
+
+.workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workflow-complete {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  color: #14543b;
+  font-weight: 750;
+}
+
 .ready-run-panel.is-busy {
   border-color: #74c69d;
   box-shadow: 0 0 0 3px rgb(57 162 117 / 12%);
@@ -636,6 +710,16 @@ button:disabled {
   font-size: 13px;
 }
 
+.setup-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .step-dot {
   display: inline-block;
   height: 10px;
@@ -727,6 +811,44 @@ button:disabled {
 
 .artifact-preview-shell {
   position: relative;
+}
+
+.artifact-preview-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 10px 12px;
+}
+
+.artifact-preview-collapsed span {
+  min-width: 0;
+  overflow: hidden;
+  color: #344054;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-preview-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.artifact-preview-collapsed .artifact-edit-button {
+  position: static;
+}
+
+.artifact-collapse-button {
+  position: absolute;
+  top: 8px;
+  right: 46px;
+  z-index: 1;
 }
 
 .artifact-edit-button {
@@ -917,6 +1039,50 @@ button:disabled {
   font-size: 12px;
 }
 
+.artifact-actions small {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.artifact-run-record {
+  border-top: 1px solid #e4e7ec;
+  padding-top: 10px;
+}
+
+.artifact-run-record summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.artifact-run-record summary span {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.artifact-run-record summary small,
+.artifact-run-record > small {
+  color: #667085;
+  font-size: 12px;
+}
+
+.artifact-run-record > small {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.artifact-run-record.is-log:not([open]) summary span {
+  color: #475467;
+}
+
 .error-banner {
   display: flex;
   align-items: flex-start;
@@ -963,6 +1129,10 @@ button:disabled {
     display: grid;
   }
 
+  .workflow-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .ready-run-actions {
     justify-content: flex-start;
   }
@@ -987,6 +1157,11 @@ button:disabled {
     display: grid;
   }
 
+  .artifact-preview-collapsed,
+  .setup-summary {
+    display: grid;
+  }
+
   th:nth-child(4),
   td:nth-child(4) {
     display: none;
@@ -994,6 +1169,10 @@ button:disabled {
 }
 
 @media (max-width: 540px) {
+  .workflow-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .metric-grid {
     grid-template-columns: 1fr;
   }

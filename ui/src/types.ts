@@ -148,6 +148,8 @@ export type TaskRecord = {
   id: string;
   status: string;
   title: string;
+  final_review_approved?: boolean;
+  merge_approved?: boolean;
 };
 
 export type FeatureRequest = {

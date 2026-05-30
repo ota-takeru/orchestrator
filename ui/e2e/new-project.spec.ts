@@ -31,10 +31,11 @@ test("creating a project selects it and replaces the creation form with its dash
   await expect(activityPanel.getByText(projectRoot)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Artifacts", exact: true })).toBeVisible();
   await expect(page.getByText("4 waiting for review")).toBeVisible();
-  const prdPreview = page.locator(".markdown-preview", { hasText: "PRD" });
-  await expect(prdPreview).toBeVisible();
-  await expect(prdPreview.getByRole("heading", { name: "PRD" })).toBeVisible();
-  await expect(prdPreview).toContainText("A project created by the UI end-to-end check.");
+  const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
+  await expect(prdCard).toContainText("PRD");
+  await prdCard.getByRole("button", { name: "Review content" }).click();
+  await expect(prdCard.locator(".markdown-preview").getByRole("heading", { name: "PRD" })).toBeVisible();
+  await expect(prdCard.locator(".markdown-preview")).toContainText("A project created by the UI end-to-end check.");
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 
@@ -50,6 +51,7 @@ test("artifact review supports revision requests and manual edits", async ({ pag
   await expect(page.getByText("UI Review Project was created and selected.")).toBeVisible({ timeout: 30_000 });
 
   const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
+  await prdCard.getByRole("button", { name: "Review content" }).click();
   await expect(prdCard.locator(".markdown-preview").getByRole("heading", { name: "PRD" })).toBeVisible();
   await expect(prdCard.getByRole("button", { name: "Request revision" })).toBeEnabled();
   await expect(prdCard.getByLabel("What should change?")).toHaveCount(0);
@@ -105,17 +107,12 @@ test("project setup actions execute from the UI after creation", async ({ page }
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByText("UI Execution Project was created and selected.")).toBeVisible({ timeout: 30_000 });
 
-  for (let i = 0; i < 4; i += 1) {
-    const approveButton = page.locator('button:has-text("Approve latest"):not(:disabled)').first();
-    await expect(approveButton).toBeVisible();
-    await approveButton.click();
-    await expect(page.getByText("Artifact approved.")).toBeVisible();
-  }
-
+  await page.getByRole("button", { name: "Approve all generated plan" }).click();
+  await expect(page.getByText("4 artifact(s) approved. Next: create an implementation task.")).toBeVisible();
   await expect(page.locator('button:has-text("Approve latest"):not(:disabled)')).toHaveCount(0);
-  await page.getByRole("button", { name: "Materialize tasks" }).click();
+  await page.getByRole("button", { name: "Create implementation task" }).click();
   await expect(page.getByText("1 task(s) materialized and queued. Next: run a worker.")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Ready to run" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Implementation queued" })).toBeVisible();
   await expect(page.getByText("TASK-001 / ready")).toBeVisible();
   await expect(page.locator(".artifact-summary-panel")).toContainText("4 approved / 4 total");
   await expect(page.locator(".artifact-summary-panel").getByRole("button", { name: "View artifacts" })).toBeVisible();
@@ -128,17 +125,22 @@ test("project setup actions execute from the UI after creation", async ({ page }
     await route.fallback();
   }, { times: 1 });
   const workResponse = page.waitForResponse((response) => response.url().includes("/work/start") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Run fake worker" }).click();
-  await expect(page.locator(".ready-run-panel").getByRole("status")).toContainText("Running fake worker");
+  await page.getByRole("button", { name: "Run simulation" }).click();
+  await expect(page.locator(".ready-run-panel").getByRole("status")).toContainText("Running simulation");
   finishWork();
   await workResponse;
   await expect(page.getByText("Fake worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("TASK-001 / ready_for_human_review")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Ready for review" })).toBeVisible();
-  await page.getByRole("button", { name: "Open artifacts" }).click();
+  await expect(page.getByRole("heading", { name: "Review implementation" })).toBeVisible();
+  await page.getByRole("button", { name: "Review evidence" }).click();
   await expect(page.locator("#task-artifacts-viewer").getByRole("heading", { name: "Diff & Artifacts" })).toBeVisible();
   await expect(page.locator("#task-artifacts-viewer")).toContainText("diff.patch");
-  await page.getByRole("button", { name: "Open task artifacts" }).click();
+  await expect(page.getByRole("button", { name: "Approve implementation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Approve implementation" }).click();
+  await expect(page.getByRole("button", { name: "Approve for merge" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open implementation evidence" }).click();
   await expect(page.locator("#task-artifacts-viewer")).toContainText("fake-verification");
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });

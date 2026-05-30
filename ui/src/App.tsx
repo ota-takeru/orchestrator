@@ -2,7 +2,7 @@ import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChec
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, processRealGitMerge, requestDependencyApproval, reviseArtifact, reviseArtifactWithCodex, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
-import type { ArtifactRecord, CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, WorkQueueItem } from "./types";
+import type { ArtifactRecord, CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, TaskRecord, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -321,6 +321,26 @@ function App() {
     }
   };
 
+  const submitReviewAllArtifacts = async () => {
+    const pendingArtifacts =
+      data?.artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved") ?? [];
+    if (pendingArtifacts.length === 0) return;
+    setArtifactActioning("approve-all");
+    setError("");
+    setNotice("");
+    try {
+      for (const artifact of pendingArtifacts) {
+        await approveArtifact(artifact.artifact_id, artifact.latest_version || 1, selectedProjectID || undefined, "approved", "Approved from UI");
+      }
+      await refresh();
+      setNotice(`${pendingArtifacts.length} artifact(s) approved. Next: create an implementation task.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Artifact review failed");
+    } finally {
+      setArtifactActioning("");
+    }
+  };
+
   const submitReviseArtifact = async (artifactID: string, content: string) => {
     setArtifactActioning(`revise:${artifactID}`);
     setError("");
@@ -540,9 +560,12 @@ function App() {
               onStartWork={submitWorkStart}
               artifactActioning={artifactActioning}
               onReviewArtifact={submitReviewArtifact}
+              onReviewAllArtifacts={submitReviewAllArtifacts}
               onReviseArtifact={submitReviseArtifact}
               onCodexReviseArtifact={submitCodexReviseArtifact}
               onMaterializeTasks={submitMaterializeTasks}
+              mergeActioning={mergeActioning}
+              onProcessMerge={submitProcessMerge}
             />
           ) : (
             <LoadingPanel />
@@ -587,7 +610,7 @@ function App() {
             onSubmit={submitDependencyApproval}
           />
           <ToolchainSetupPanel cards={data?.toolchainSetupCards ?? []} />
-          <MergeGatePanel status={data?.mergeStatus} actioning={mergeActioning} onProcess={submitProcessMerge} />
+          <MergeGatePanel status={data?.mergeStatus} />
           <ProjectCheckPanel violations={data?.projectViolations ?? []} />
           <TrustedArtifactsPanel artifacts={data?.trustedArtifacts ?? []} />
           <PathMappingsPanel mappings={data?.pathMappings ?? []} />
@@ -698,9 +721,12 @@ function SelectedProjectDashboard({
   onStartWork,
   artifactActioning,
   onReviewArtifact,
+  onReviewAllArtifacts,
   onReviseArtifact,
   onCodexReviseArtifact,
-  onMaterializeTasks
+  onMaterializeTasks,
+  mergeActioning,
+  onProcessMerge
 }: {
   data: DashboardData;
   selectedProject?: RegisteredProject | CurrentProject;
@@ -719,9 +745,12 @@ function SelectedProjectDashboard({
   onStartWork: (adapter: "fake" | "real-codex") => void;
   artifactActioning: string;
   onReviewArtifact: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
+  onReviewAllArtifacts: () => void;
   onReviseArtifact: (artifactID: string, content: string) => void;
   onCodexReviseArtifact: (artifactID: string, instruction: string) => void;
   onMaterializeTasks: () => void;
+  mergeActioning: string;
+  onProcessMerge: (entryID: string) => void;
 }) {
   const hasPendingArtifacts = data.artifacts.some((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
   const hasMaterializedTasks = data.tasks.length > 0 || data.queueItems.some((item) => item.item_type === "task_implementation");
@@ -735,15 +764,33 @@ function SelectedProjectDashboard({
       onReview={onReviewArtifact}
       onRevise={onReviseArtifact}
       onCodexRevise={onCodexReviseArtifact}
-      onMaterialize={onMaterializeTasks}
     />
   );
   return (
     <>
       {selectedProject ? <ProjectStatusPanel project={selectedProject} /> : null}
+      <WorkflowStepsPanel
+        data={data}
+        artifactActioning={artifactActioning}
+        taskActioning={taskActioning}
+        workActioning={workActioning}
+        mergeActioning={mergeActioning}
+        selectedArtifactTaskID={selectedArtifactTaskID}
+        onReviewAllArtifacts={onReviewAllArtifacts}
+        onMaterializeTasks={onMaterializeTasks}
+        onStartWork={onStartWork}
+        onOpenTaskArtifacts={onOpenTaskArtifacts}
+        onTaskAction={onTaskAction}
+        onProcessMerge={onProcessMerge}
+      />
       {hasMaterializedTasks ? (
         <>
-          <ReadyToRunPanel tasks={data.tasks} queueItems={data.queueItems} actioning={workActioning} onStartWork={onStartWork} onOpenTaskArtifacts={onOpenTaskArtifacts} />
+          <ReadyToRunPanel
+            tasks={data.tasks}
+            queueItems={data.queueItems}
+            actioning={workActioning}
+            mergeActioning={mergeActioning}
+          />
           <WorkPlanningPanel data={data} actioning={workActioning} onStartWork={onStartWork} showActions={false} />
           <TaskPanel tasks={data.tasks} onOpenArtifacts={onOpenTaskArtifacts} />
           {selectedArtifactTaskID ? (
@@ -779,6 +826,143 @@ function SelectedProjectDashboard({
       <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
     </>
+  );
+}
+
+function WorkflowStepsPanel({
+  data,
+  artifactActioning,
+  taskActioning,
+  workActioning,
+  mergeActioning,
+  selectedArtifactTaskID,
+  onReviewAllArtifacts,
+  onMaterializeTasks,
+  onStartWork,
+  onOpenTaskArtifacts,
+  onTaskAction,
+  onProcessMerge
+}: {
+  data: DashboardData;
+  artifactActioning: string;
+  taskActioning: string;
+  workActioning: string;
+  mergeActioning: string;
+  selectedArtifactTaskID: string;
+  onReviewAllArtifacts: () => void;
+  onMaterializeTasks: () => void;
+  onStartWork: (adapter: "fake" | "real-codex") => void;
+  onOpenTaskArtifacts: (taskID: string) => void;
+  onTaskAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
+  onProcessMerge: (entryID: string) => void;
+}) {
+  const pendingArtifacts = data.artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
+  const implementationQueueCount = data.queueItems.filter((item) => item.item_type === "task_implementation" && item.status === "queued").length;
+  const reviewTask = data.tasks.find(isWaitingForImplementationReview);
+  const mergeApprovalTask = data.tasks.find(isWaitingForMergeApproval);
+  const queuedMergeTask = data.tasks.find((task) => task.status === "queued_for_merge");
+  const mergeEntry = data.mergeStatus.queue.find((entry) => entry.task_id === queuedMergeTask?.id) ?? data.mergeStatus.queue[0];
+  const allMerged = data.tasks.length > 0 && data.tasks.every((task) => task.status === "merged");
+  const activeStep =
+    pendingArtifacts.length > 0
+      ? 1
+      : data.tasks.length === 0
+        ? 2
+        : implementationQueueCount > 0
+          ? 3
+          : reviewTask
+            ? 4
+            : mergeApprovalTask || queuedMergeTask
+              ? 5
+              : allMerged
+                ? 6
+                : 3;
+  const steps = [
+    { label: "Project", done: data.artifacts.length > 0 || data.tasks.length > 0 },
+    { label: "Plan review", done: data.artifacts.length > 0 && pendingArtifacts.length === 0 },
+    { label: "Task", done: data.tasks.length > 0 },
+    { label: "Implementation", done: Boolean(reviewTask || mergeApprovalTask || queuedMergeTask || allMerged) },
+    { label: "Human review", done: Boolean(mergeApprovalTask || queuedMergeTask || allMerged) },
+    { label: "Merged", done: allMerged }
+  ];
+  const busy = artifactActioning !== "" || taskActioning !== "" || workActioning !== "" || mergeActioning !== "";
+  const primaryAction = (() => {
+    if (pendingArtifacts.length > 0) {
+      return (
+        <button type="button" onClick={onReviewAllArtifacts} disabled={busy}>
+          {artifactActioning === "approve-all" ? "Approving plan" : "Approve all generated plan"}
+        </button>
+      );
+    }
+    if (data.artifacts.length > 0 && data.tasks.length === 0) {
+      return (
+        <button type="button" onClick={onMaterializeTasks} disabled={busy}>
+          {artifactActioning === "materialize" ? "Creating task" : "Create implementation task"}
+        </button>
+      );
+    }
+    if (implementationQueueCount > 0) {
+      return (
+        <>
+          <button type="button" onClick={() => onStartWork("real-codex")} disabled={busy}>
+            {workActioning === "real-codex" ? "Building with Codex" : "Build with Codex"}
+          </button>
+          <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={busy}>
+            {workActioning === "fake" ? "Running simulation" : "Run simulation"}
+          </button>
+        </>
+      );
+    }
+    if (reviewTask) {
+      if (selectedArtifactTaskID === reviewTask.id) {
+        return null;
+      }
+      return (
+        <>
+          <button type="button" onClick={() => onTaskAction(reviewTask.id, "review-approve")} disabled={busy}>
+            {taskActioning === `${reviewTask.id}:review-approve` ? "Approving implementation" : "Approve implementation"}
+          </button>
+          <button className="secondary-button no-margin" type="button" onClick={() => onOpenTaskArtifacts(reviewTask.id)} disabled={busy}>
+            Review evidence
+          </button>
+        </>
+      );
+    }
+    if (mergeApprovalTask) {
+      if (selectedArtifactTaskID === mergeApprovalTask.id) {
+        return null;
+      }
+      return (
+        <button type="button" onClick={() => onTaskAction(mergeApprovalTask.id, "merge-approve")} disabled={busy}>
+          {taskActioning === `${mergeApprovalTask.id}:merge-approve` ? "Approving merge" : "Approve for merge"}
+        </button>
+      );
+    }
+    if (queuedMergeTask && mergeEntry) {
+      return (
+        <button type="button" onClick={() => onProcessMerge(mergeEntry.id)} disabled={busy || !data.mergeStatus.ready}>
+          {mergeActioning === mergeEntry.id ? "Merging" : "Merge to main"}
+        </button>
+      );
+    }
+    if (allMerged) {
+      return <span className="workflow-complete">Merged</span>;
+    }
+    return null;
+  })();
+
+  return (
+    <section className="workflow-strip" aria-label="Project workflow">
+      <div className="workflow-steps">
+        {steps.map((step, index) => (
+          <div className={`workflow-step ${step.done ? "done" : ""} ${activeStep === index + 1 ? "active" : ""}`} key={step.label}>
+            <span>{index + 1}</span>
+            <small>{step.label}</small>
+          </div>
+        ))}
+      </div>
+      {primaryAction ? <div className="workflow-actions">{primaryAction}</div> : null}
+    </section>
   );
 }
 
@@ -964,31 +1148,44 @@ function ReadyToRunPanel({
   tasks,
   queueItems,
   actioning,
-  onStartWork,
-  onOpenTaskArtifacts
+  mergeActioning
 }: {
   tasks: DashboardData["tasks"];
   queueItems: WorkQueueItem[];
   actioning: string;
-  onStartWork: (adapter: "fake" | "real-codex") => void;
-  onOpenTaskArtifacts: (taskID: string) => void;
+  mergeActioning: string;
 }) {
   const implementationQueueCount = queueItems.filter((item) => item.item_type === "task_implementation" && item.status === "queued").length;
-  const reviewTask = tasks.find((task) => task.status === "ready_for_human_review");
-  const mergeTask = tasks.find((task) => task.status === "approved_for_merge" || task.status === "queued_for_merge");
+  const reviewTask = tasks.find(isWaitingForImplementationReview);
+  const mergeApprovalTask = tasks.find(isWaitingForMergeApproval);
+  const queuedMergeTask = tasks.find((task) => task.status === "queued_for_merge");
+  const merged = tasks.length > 0 && tasks.every((task) => task.status === "merged");
   const taskLabel = tasks.length === 1 ? tasks[0]?.id : `${tasks.length} tasks`;
-  const isRunning = actioning !== "";
-  const canRun = implementationQueueCount > 0 && !isRunning;
-  const title = reviewTask ? "Ready for review" : mergeTask ? "Ready for merge" : "Ready to run";
+  const isRunning = actioning !== "" || mergeActioning !== "";
+  const title = reviewTask
+    ? "Review implementation"
+    : mergeApprovalTask
+      ? "Merge approval"
+      : queuedMergeTask
+        ? "Merge queued"
+        : merged
+          ? "Complete"
+          : implementationQueueCount > 0
+            ? "Implementation queued"
+            : "Idle";
   const body = isRunning
-    ? "Worker is running. This can take a moment."
+    ? "Work is running. This can take a moment."
     : reviewTask
-      ? `${reviewTask.id} finished implementation. Open artifacts, then approve or request changes.`
-      : mergeTask
-        ? `${mergeTask.id} passed review. Open artifacts to continue merge approval.`
-        : implementationQueueCount > 0
-          ? `${taskLabel || "Task"} materialized. ${implementationQueueCount} implementation item(s) are queued.`
-          : "No implementation work is currently queued. Check Tasks for the next review or approval step.";
+      ? `${reviewTask.id} is waiting for implementation review.`
+      : mergeApprovalTask
+        ? `${mergeApprovalTask.id} passed review and is waiting for merge approval.`
+        : queuedMergeTask
+          ? `${queuedMergeTask.id} is queued for merge.`
+          : merged
+            ? "All implementation tasks are merged."
+            : implementationQueueCount > 0
+              ? `${taskLabel || "Task"} is ready for implementation.`
+              : "No implementation work is queued.";
   return (
     <section className={`ready-run-panel ${isRunning ? "is-busy" : ""}`} aria-busy={isRunning}>
       <div>
@@ -998,25 +1195,9 @@ function ReadyToRunPanel({
       {isRunning ? (
         <div className="ready-run-status" role="status" aria-live="polite">
           <span className="ready-run-spinner" />
-          <span>{actioning === "real-codex" ? "Running Codex worker" : "Running fake worker"}</span>
+          <span>{mergeActioning ? "Merging" : actioning === "real-codex" ? "Building with Codex" : "Running simulation"}</span>
         </div>
       ) : null}
-      <div className="ready-run-actions">
-        {reviewTask || mergeTask ? (
-          <button className="secondary-button no-margin" type="button" onClick={() => onOpenTaskArtifacts((reviewTask ?? mergeTask)?.id ?? "")}>
-            Open artifacts
-          </button>
-        ) : (
-          <>
-            <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("real-codex")} disabled={!canRun}>
-              {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
-            </button>
-            <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={!canRun}>
-              {actioning === "fake" ? "Running fake" : "Run fake worker"}
-            </button>
-          </>
-        )}
-      </div>
     </section>
   );
 }
@@ -1033,6 +1214,7 @@ function WorkPlanningPanel({
   showActions?: boolean;
 }) {
   const workerRuns = latestWorkerRuns(data.workStatus.worker_runs);
+  const canRun = data.queueItems.some((item) => item.item_type === "task_implementation" && item.status === "queued") && actioning === "";
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -1042,13 +1224,13 @@ function WorkPlanningPanel({
         </div>
         <Wrench size={20} className="text-zinc-500" />
       </div>
-      {showActions ? (
+      {showActions && (canRun || actioning !== "") ? (
         <div className="toolbar-row">
-          <button className="secondary-button" type="button" onClick={() => onStartWork("fake")} disabled={actioning !== ""}>
-            {actioning === "fake" ? "Running fake" : "Run fake worker"}
+          <button className="secondary-button" type="button" onClick={() => onStartWork("real-codex")} disabled={!canRun}>
+            {actioning === "real-codex" ? "Building with Codex" : "Build with Codex"}
           </button>
-          <button className="secondary-button" type="button" onClick={() => onStartWork("real-codex")} disabled={actioning !== ""}>
-            {actioning === "real-codex" ? "Running Codex" : "Run Codex worker"}
+          <button className="secondary-button" type="button" onClick={() => onStartWork("fake")} disabled={!canRun}>
+            {actioning === "fake" ? "Running simulation" : "Run simulation"}
           </button>
         </div>
       ) : null}
@@ -1095,7 +1277,7 @@ function TaskPanel({ tasks, onOpenArtifacts }: { tasks: DashboardData["tasks"]; 
               {task.id} / {task.status}
             </small>
             <button className="secondary-button" type="button" onClick={() => onOpenArtifacts(task.id)}>
-              Open task artifacts
+              Open implementation evidence
             </button>
           </div>
         ))}
@@ -1157,6 +1339,11 @@ function SetupWizardPanel({
         { label: "Git clean", done: setup.git_clean }
       ]
     : [];
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const blockers = setup?.blockers ?? [];
+  const actions = setup?.actions ?? [];
+  const completedSteps = steps.filter((step) => step.done).length;
+  const showDetails = detailsOpen || blockers.length > 0;
   return (
     <section className="panel compact">
       <div className="panel-heading">
@@ -1167,32 +1354,42 @@ function SetupWizardPanel({
         <div className="empty-stack">Setup status unavailable</div>
       ) : (
         <div className="stack">
-          {steps.map((step) => (
-            <div className="setup-step" key={step.label}>
-              <span className={step.done ? "step-dot done" : "step-dot"} />
-              <span>{step.label}</span>
-            </div>
-          ))}
-          <StackEmpty empty={(setup.blockers ?? []).length === 0} label="Project is ready for guarded operation">
-            {(setup.blockers ?? []).map((blocker) => (
-              <div className="stack-row" key={blocker}>
-                <span>{blocker}</span>
-                <small>setup blocker</small>
-              </div>
-            ))}
-          </StackEmpty>
-          <StackEmpty empty={(setup.actions ?? []).length === 0} label="No setup actions">
-            {(setup.actions ?? []).map((action) => (
-              <div className="stack-row" key={action.id}>
-                <span>{action.label}</span>
-                <small>{action.enabled ? "ready" : action.reason}</small>
-                <code className="inline-command">{action.command}</code>
-                <button className="secondary-button" type="button" onClick={() => onRunAction(action.id)} disabled={!action.enabled || actioning === action.id}>
-                  {actioning === action.id ? "Running" : "Run"}
-                </button>
-              </div>
-            ))}
-          </StackEmpty>
+          <div className="setup-summary">
+            <span>{blockers.length > 0 ? `${blockers.length} blocker(s)` : `${completedSteps}/${steps.length} checks passed`}</span>
+            <button className="secondary-button no-margin" type="button" onClick={() => setDetailsOpen((open) => !open)}>
+              {showDetails ? "Hide setup" : "Show setup"}
+            </button>
+          </div>
+          {showDetails ? (
+            <>
+              {steps.map((step) => (
+                <div className="setup-step" key={step.label}>
+                  <span className={step.done ? "step-dot done" : "step-dot"} />
+                  <span>{step.label}</span>
+                </div>
+              ))}
+              <StackEmpty empty={blockers.length === 0} label="Project is ready for guarded operation">
+                {blockers.map((blocker) => (
+                  <div className="stack-row" key={blocker}>
+                    <span>{blocker}</span>
+                    <small>setup blocker</small>
+                  </div>
+                ))}
+              </StackEmpty>
+              <StackEmpty empty={actions.length === 0} label="No setup actions">
+                {actions.map((action) => (
+                  <div className="stack-row" key={action.id}>
+                    <span>{action.label}</span>
+                    <small>{action.enabled ? "ready" : action.reason}</small>
+                    <code className="inline-command">{action.command}</code>
+                    <button className="secondary-button" type="button" onClick={() => onRunAction(action.id)} disabled={!action.enabled || actioning === action.id}>
+                      {actioning === action.id ? "Running" : "Run"}
+                    </button>
+                  </div>
+                ))}
+              </StackEmpty>
+            </>
+          ) : null}
         </div>
       )}
     </section>
@@ -1214,6 +1411,7 @@ function ArtifactViewerPanel({
   actioning: string;
   onAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
 }) {
+  const sortedArtifacts = [...artifacts].sort((a, b) => artifactSortRank(a) - artifactSortRank(b));
   return (
     <section className="panel compact" id="task-artifacts-viewer" aria-busy={loading}>
       <div className="panel-heading">
@@ -1225,39 +1423,48 @@ function ArtifactViewerPanel({
           <span>
             {task.id} / {task.status}
           </span>
-          <button className="secondary-button" type="button" onClick={() => onAction(task.id, "verify")} disabled={task.status !== "verifying" || actioning === `${task.id}:verify`}>
-            Re-run verify
-          </button>
-          <button className="secondary-button" type="button" onClick={() => onAction(task.id, "review-approve")} disabled={task.status !== "ready_for_human_review" || actioning === `${task.id}:review-approve`}>
-            Approve
-          </button>
-          <button className="secondary-button" type="button" onClick={() => onAction(task.id, "review-reject")} disabled={task.status !== "ready_for_human_review" || actioning === `${task.id}:review-reject`}>
-            Request changes
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => onAction(task.id, "merge-approve")}
-            disabled={(task.status !== "ready_for_human_review" && task.status !== "approved_for_merge") || actioning === `${task.id}:merge-approve`}
-          >
-            Merge approve
-          </button>
+          {task.status === "verifying" ? (
+            <button className="secondary-button" type="button" onClick={() => onAction(task.id, "verify")} disabled={actioning === `${task.id}:verify`}>
+              Re-run verification
+            </button>
+          ) : null}
+          {isWaitingForImplementationReview(task) ? (
+            <>
+              <button className="secondary-button" type="button" onClick={() => onAction(task.id, "review-approve")} disabled={actioning === `${task.id}:review-approve`}>
+                {actioning === `${task.id}:review-approve` ? "Approving implementation" : "Approve implementation"}
+              </button>
+              <button className="secondary-button" type="button" onClick={() => onAction(task.id, "review-reject")} disabled={actioning === `${task.id}:review-reject`}>
+                Request changes
+              </button>
+            </>
+          ) : null}
+          {isWaitingForMergeApproval(task) ? (
+            <button className="secondary-button" type="button" onClick={() => onAction(task.id, "merge-approve")} disabled={actioning === `${task.id}:merge-approve`}>
+              {actioning === `${task.id}:merge-approve` ? "Approving merge" : "Approve for merge"}
+            </button>
+          ) : null}
+          {task.status === "queued_for_merge" ? <small>Queued for merge</small> : null}
+          {task.status === "merged" ? <small>Merged</small> : null}
         </div>
       ) : null}
       {loading ? <div className="ready-run-status" role="status" aria-live="polite"><span className="ready-run-spinner" />Loading artifacts</div> : null}
       <StackEmpty empty={!loading && (!taskID || artifacts.length === 0)} label={taskID ? "No artifacts for selected task" : "Select a task"}>
-        {artifacts.slice(0, 12).map((artifact) => (
-          <div className="stack-row" key={artifact.id}>
-            <span>
-              {artifact.artifact_type} / {artifact.artifact_key}
-            </span>
-            <small>
-              {artifact.run_id} / {artifact.run_status}
-            </small>
-            <small>{artifact.path}</small>
-            {artifact.content ? <pre className="artifact-content">{artifact.content.slice(0, 4000)}</pre> : null}
-          </div>
-        ))}
+        {sortedArtifacts.slice(0, 12).map((artifact) => {
+          const open = artifact.artifact_type === "diff" || artifact.artifact_type === "final_message";
+          const noisy = artifact.artifact_key.includes("stderr") || artifact.artifact_key.includes("stdout") || artifact.artifact_type.includes("command");
+          return (
+            <details className={`artifact-run-record ${noisy ? "is-log" : ""}`} key={artifact.id} open={open}>
+              <summary>
+                <span>{artifactDisplayName(artifact)}</span>
+                <small>
+                  {artifact.run_id} / {artifact.run_status}
+                </small>
+              </summary>
+              <small>{artifact.path}</small>
+              {artifact.content ? <pre className="artifact-content">{artifact.content.slice(0, artifact.artifact_type === "diff" ? 8000 : 4000)}</pre> : null}
+            </details>
+          );
+        })}
       </StackEmpty>
     </section>
   );
@@ -1554,6 +1761,30 @@ function activeWorkQueueItems(items: WorkQueueItem[]) {
   return items.filter((item) => item.status !== "completed" && item.status !== "cancelled" && item.status !== "failed");
 }
 
+function isWaitingForImplementationReview(task: TaskRecord) {
+  return task.status === "ready_for_human_review" && !task.final_review_approved;
+}
+
+function isWaitingForMergeApproval(task: TaskRecord) {
+  return (task.status === "ready_for_human_review" && Boolean(task.final_review_approved)) || task.status === "approved_for_merge";
+}
+
+function artifactSortRank(artifact: TaskArtifact) {
+  if (artifact.artifact_type === "diff") return 0;
+  if (artifact.artifact_type === "final_message") return 1;
+  if (artifact.artifact_key.includes("verification") || artifact.artifact_key.includes("stdout")) return 2;
+  if (artifact.artifact_key.includes("stderr")) return 4;
+  return 3;
+}
+
+function artifactDisplayName(artifact: TaskArtifact) {
+  if (artifact.artifact_type === "diff") return "Implementation diff";
+  if (artifact.artifact_type === "final_message") return "Implementation summary";
+  if (artifact.artifact_key.includes("stdout")) return "Command output";
+  if (artifact.artifact_key.includes("stderr")) return "Diagnostic log";
+  return `${artifact.artifact_type} / ${artifact.artifact_key}`;
+}
+
 function DecisionPanel({ decisions }: { decisions: DashboardData["decisions"] }) {
   return (
     <section className="panel compact">
@@ -1597,18 +1828,13 @@ function ToolchainSetupPanel({ cards }: { cards: DashboardData["toolchainSetupCa
 }
 
 function MergeGatePanel({
-  status,
-  actioning,
-  onProcess
+  status
 }: {
   status?: DashboardData["mergeStatus"];
-  actioning: string;
-  onProcess: (entryID: string) => void;
 }) {
   const blockers = status?.blockers ?? [];
   const inboxItems = status?.blocking_inbox_items ?? [];
   const queue = status?.queue ?? [];
-  const canProcess = status?.ready && queue.length > 0 && !actioning;
   return (
     <section className="panel compact">
       <div className="panel-heading">
@@ -1624,9 +1850,6 @@ function MergeGatePanel({
           <div className="stack-row" key={entry.id}>
             <span>{entry.task_id}</span>
             <small>{entry.status}</small>
-            <button className="secondary-button" type="button" onClick={() => onProcess(entry.id)} disabled={!canProcess || actioning === entry.id}>
-              {actioning === entry.id ? "Merging" : "Process merge"}
-            </button>
           </div>
         ))}
         {blockers.map((blocker) => (
@@ -1697,8 +1920,7 @@ function ArtifactsPanel({
   materializedTaskCount,
   onReview,
   onRevise,
-  onCodexRevise,
-  onMaterialize
+  onCodexRevise
 }: {
   artifacts: DashboardData["artifacts"];
   actioning: string;
@@ -1707,7 +1929,6 @@ function ArtifactsPanel({
   onReview: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
   onRevise: (artifactID: string, content: string) => void;
   onCodexRevise: (artifactID: string, instruction: string) => void;
-  onMaterialize: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
@@ -1715,6 +1936,7 @@ function ArtifactsPanel({
   const [moreMenus, setMoreMenus] = useState<Record<string, boolean>>({});
   const [editingArtifacts, setEditingArtifacts] = useState<Record<string, boolean>>({});
   const [revisionContent, setRevisionContent] = useState<Record<string, string>>({});
+  const [previewOpen, setPreviewOpen] = useState<Record<string, boolean>>({});
   const pendingCount = artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved").length;
   const approvedCount = artifacts.filter((artifact) => artifact.approved_version && artifact.approved_version === artifact.latest_version).length;
   const showDetails = !compact || detailsOpen;
@@ -1748,17 +1970,13 @@ function ArtifactsPanel({
         </div>
         <FileCheck2 size={18} className="text-zinc-500" />
       </div>
-      <div className="toolbar-row">
-        {compact ? (
+      {compact ? (
+        <div className="toolbar-row">
           <button className="secondary-button no-margin" type="button" onClick={() => setDetailsOpen(false)}>
             Hide artifacts
           </button>
-        ) : (
-          <button className="secondary-button" type="button" onClick={onMaterialize} disabled={actioning !== ""}>
-            {actioning === "materialize" ? "Materializing" : "Materialize tasks"}
-          </button>
-        )}
-      </div>
+        </div>
+      ) : null}
       <StackEmpty empty={artifacts.length === 0} label="No artifacts">
         {artifacts.map((artifact) => {
           const canReview = artifact.latest_version ? artifact.approved_version !== artifact.latest_version && artifact.status !== "approved" : false;
@@ -1772,6 +1990,7 @@ function ArtifactsPanel({
           const requestOpen = revisionRequests[artifact.artifact_id] ?? false;
           const moreOpen = moreMenus[artifact.artifact_id] ?? false;
           const isCodexRevising = actioning === `codex-revise:${artifact.artifact_id}`;
+          const isPreviewOpen = previewOpen[artifact.artifact_id] ?? false;
           return (
             <div className={`artifact-review-card ${isCodexRevising ? "is-busy" : ""}`} key={artifact.artifact_id} aria-busy={isCodexRevising}>
               <div className="artifact-review-body">
@@ -1786,7 +2005,9 @@ function ArtifactsPanel({
                 </div>
                 <ArtifactContentPreview
                   artifact={artifact}
+                  open={isPreviewOpen}
                   canEdit={canRevise && actioning === ""}
+                  onToggle={() => setPreviewOpen((previous) => ({ ...previous, [artifact.artifact_id]: !isPreviewOpen }))}
                   onEdit={() => {
                     setRevisionContent((previous) => ({ ...previous, [artifact.artifact_id]: previous[artifact.artifact_id] ?? artifact.content ?? "" }));
                     setEditingArtifacts((previous) => ({ ...previous, [artifact.artifact_id]: true }));
@@ -1905,7 +2126,19 @@ function ArtifactsPanel({
   );
 }
 
-function ArtifactContentPreview({ artifact, canEdit, onEdit }: { artifact: ArtifactRecord; canEdit: boolean; onEdit: () => void }) {
+function ArtifactContentPreview({
+  artifact,
+  open,
+  canEdit,
+  onToggle,
+  onEdit
+}: {
+  artifact: ArtifactRecord;
+  open: boolean;
+  canEdit: boolean;
+  onToggle: () => void;
+  onEdit: () => void;
+}) {
   if (!artifact.content) {
     return <div className="empty-stack">Content preview unavailable</div>;
   }
@@ -1915,9 +2148,25 @@ function ArtifactContentPreview({ artifact, canEdit, onEdit }: { artifact: Artif
       <Pencil size={14} />
     </button>
   );
+  if (!open) {
+    return (
+      <div className="artifact-preview-collapsed">
+        <span>{artifactSummary(artifact)}</span>
+        <div className="artifact-preview-actions">
+          <button className="secondary-button no-margin" type="button" onClick={onToggle}>
+            Review content
+          </button>
+          {editButton}
+        </div>
+      </div>
+    );
+  }
   if (artifact.path?.toLowerCase().endsWith(".md")) {
     return (
       <div className="artifact-preview-shell">
+        <button className="secondary-button no-margin artifact-collapse-button" type="button" onClick={onToggle}>
+          Hide content
+        </button>
         {editButton}
         <div className="markdown-preview">{renderMarkdown(content)}</div>
       </div>
@@ -1925,10 +2174,22 @@ function ArtifactContentPreview({ artifact, canEdit, onEdit }: { artifact: Artif
   }
   return (
     <div className="artifact-preview-shell">
+      <button className="secondary-button no-margin artifact-collapse-button" type="button" onClick={onToggle}>
+        Hide content
+      </button>
       {editButton}
       <pre className="artifact-content artifact-content-review">{content}</pre>
     </div>
   );
+}
+
+function artifactSummary(artifact: ArtifactRecord) {
+  const firstLine = artifact.content
+    ?.replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim().replace(/^#+\s*/, ""))
+    .find((line) => line.length > 0);
+  return firstLine ?? artifact.path ?? artifact.artifact_type;
 }
 
 function renderMarkdown(content: string): ReactNode[] {

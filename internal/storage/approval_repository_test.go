@@ -25,6 +25,13 @@ func TestFinalAndMergeApprovalMovesTaskToApprovedForMerge(t *testing.T) {
 	if finalReview.TaskStatus != "ready_for_human_review" || finalReview.ApprovedForMerge {
 		t.Fatalf("unexpected final review result: %#v", finalReview)
 	}
+	tasks, err := db.ListTasks(ctx, "PROJECT-001", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || !tasks[0].FinalReviewApproved || tasks[0].MergeApproved {
+		t.Fatalf("task approval flags after final review = %#v", tasks)
+	}
 
 	merge, err := db.ApproveTaskEvidence(ctx, ApprovalInput{
 		ProjectID:    "PROJECT-001",
@@ -44,6 +51,13 @@ func TestFinalAndMergeApprovalMovesTaskToApprovedForMerge(t *testing.T) {
 	}
 	if status != "approved_for_merge" {
 		t.Fatalf("task status = %s", status)
+	}
+	tasks, err = db.ListTasks(ctx, "PROJECT-001", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || !tasks[0].FinalReviewApproved || !tasks[0].MergeApproved {
+		t.Fatalf("task approval flags after merge approval = %#v", tasks)
 	}
 }
 

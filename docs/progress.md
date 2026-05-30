@@ -19,6 +19,7 @@
 
 2026-05-30:
 
+- UIの新規作成から実装・review・merge承認までの主導線を整理しました。中央にworkflow step / next actionを追加し、Artifact本文とrun logは折りたたみ表示へ変更、`Run fake worker` / `Run Codex worker` を `Run simulation` / `Build with Codex` に改名しました。final review承認済みかどうかをTask APIで返すようにし、UIでは `Approve implementation` と `Approve for merge` を状態に応じて片方だけ表示します。追加検証: `pnpm --dir ui test`、`pnpm --dir ui e2e`、`go test ./...`。
 - UIからReal Codex workerを起動した際に、canonical worktree dirtyなどの `worktree_required` Decisionで停止し、`retry_after_manual_action` 承認後にtaskだけ `ready` へ戻ってexecution queueが再投入されない不備を修正しました。Decision承認時にtask implementation work itemを再queueし、既に `ready` task / terminal execution queue item の谷間に落ちた既存projectも `devos work start` / UI worker起動時に自動回復するようにしました。追加検証: `go test ./...`。
 
 2026-05-27:

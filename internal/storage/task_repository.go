@@ -20,6 +20,8 @@ type TaskRecord struct {
 	ID                   string                    `json:"id"`
 	Status               string                    `json:"status"`
 	Title                string                    `json:"title"`
+	FinalReviewApproved  bool                      `json:"final_review_approved,omitempty"`
+	MergeApproved        bool                      `json:"merge_approved,omitempty"`
 	VerificationCommands []TaskVerificationCommand `json:"verification_commands,omitempty"`
 }
 
@@ -236,7 +238,6 @@ func (db *DB) ListTasks(ctx context.Context, projectID string, status string) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var tasks []TaskRecord
 	for rows.Next() {
 		var task TaskRecord
@@ -251,7 +252,60 @@ func (db *DB) ListTasks(ctx context.Context, projectID string, status string) ([
 		}
 		tasks = append(tasks, task)
 	}
-	return tasks, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		finalReviewApproved, mergeApproved, err := db.taskApprovalFlags(ctx, projectID, tasks[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		tasks[i].FinalReviewApproved = finalReviewApproved
+		tasks[i].MergeApproved = mergeApproved
+	}
+	return tasks, nil
+}
+
+func (db *DB) taskApprovalFlags(ctx context.Context, projectID string, taskID string) (bool, bool, error) {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return false, false, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	evidence, err := collectApprovalEvidence(ctx, tx, projectID, taskID)
+	if err != nil {
+		if err := tx.Commit(); err != nil {
+			return false, false, err
+		}
+		committed = true
+		return false, false, nil
+	}
+	evidenceJSON, err := json.Marshal(evidence)
+	if err != nil {
+		return false, false, err
+	}
+	finalReviewApproved, err := matchingApprovalExists(ctx, tx, projectID, taskID, ApprovalFinalReview, string(evidenceJSON))
+	if err != nil {
+		return false, false, err
+	}
+	mergeApproved, err := matchingApprovalExists(ctx, tx, projectID, taskID, ApprovalMerge, string(evidenceJSON))
+	if err != nil {
+		return false, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, false, err
+	}
+	committed = true
+	return finalReviewApproved, mergeApproved, nil
 }
 
 type approvedArtifact struct {

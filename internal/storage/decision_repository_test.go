@@ -129,6 +129,20 @@ INSERT INTO decisions(
 	if taskStatus != "ready" {
 		t.Fatalf("task status = %s", taskStatus)
 	}
+	var queued int
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM work_queue_items
+WHERE project_id = 'PROJECT-001'
+  AND lane = 'execution'
+  AND item_type = 'task_implementation'
+  AND item_id = 'TASK-001'
+  AND status = 'queued'`).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("queued implementation items = %d", queued)
+	}
 }
 
 func insertOpenDecisionWithInbox(t *testing.T, db *DB, projectID string, decisionID string) {

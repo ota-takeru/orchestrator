@@ -549,6 +549,42 @@ func TestStartWorkCompletesStaleExecutionQueueItems(t *testing.T) {
 	}
 }
 
+func TestStartWorkRequeuesReadyTaskWithTerminalExecutionItem(t *testing.T) {
+	ctx := context.Background()
+	db := openMigratedTestDB(t)
+	root := seedProjectRoot(t)
+	insertProjectWithRoot(t, db, "PROJECT-001", root)
+	insertEnvironment(t, db.SQL(), "linux-main", "PROJECT-001", "primary")
+	insertTask(t, db, "PROJECT-001", "TASK-001", "ready")
+	if _, err := db.SQL().ExecContext(ctx, `
+INSERT INTO work_queue_items(
+  id, project_id, lane, item_type, item_id, status, priority,
+  attempt_no, max_attempts, idempotency_key, finished_at, created_at, updated_at
+) VALUES (
+  'WQ-55E6A7FFE4CB', 'PROJECT-001', 'execution', 'task_implementation',
+  'TASK-001', 'completed', 'medium', 1, 3, 'task_implementation:TASK-001',
+  ?, ?, ?
+)`, now(), now(), now()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.StartWork(ctx, WorkStartInput{
+		ProjectID:                 "PROJECT-001",
+		Mode:                      "sequential",
+		PlanningConcurrency:       3,
+		ImplementationConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Execution) != 1 {
+		t.Fatalf("execution = %#v", result.Execution)
+	}
+	if result.Execution[0].QueueItem.Status != "completed" || result.Execution[0].TaskStatus != "ready_for_human_review" {
+		t.Fatalf("execution result = %#v", result.Execution[0])
+	}
+}
+
 func TestStartWorkProcessesQueuedRepair(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)

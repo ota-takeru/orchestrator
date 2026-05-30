@@ -267,10 +267,15 @@ func resumeTaskAfterDecisionApproval(ctx context.Context, tx *sql.Tx, projectID 
 	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status = 'ready', updated_at = ? WHERE project_id = ? AND id = ? AND status = 'needs_decision'", now, projectID, taskID); err != nil {
 		return err
 	}
+	queueID, err := requeueTaskImplementationWorkItem(ctx, tx, projectID, taskID, now)
+	if err != nil {
+		return err
+	}
 	return insertWorkflowEvent(ctx, tx, projectID, "task_resumed_after_decision", map[string]any{
-		"task_id":     taskID,
-		"decision_id": decisionID,
-		"from_status": "needs_decision",
-		"to_status":   "ready",
+		"task_id":            taskID,
+		"decision_id":        decisionID,
+		"from_status":        "needs_decision",
+		"to_status":          "ready",
+		"work_queue_item_id": queueID,
 	}, now)
 }

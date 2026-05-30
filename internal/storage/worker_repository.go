@@ -101,6 +101,9 @@ func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartRes
 	}
 	var execution []ExecutionWorkResult
 	if workErr == nil {
+		workErr = db.EnsureReadyTasksQueued(ctx, input.ProjectID)
+	}
+	if workErr == nil {
 		switch implementationAdapter {
 		case "fake":
 			execution, workErr = db.ProcessExecutionQueueFake(ctx, input.ProjectID, 1)
@@ -127,6 +130,70 @@ func (db *DB) StartWork(ctx context.Context, input WorkStartInput) (WorkStartRes
 		return WorkStartResult{}, workErr
 	}
 	return WorkStartResult{WorkerRun: finished, Recovery: recovery, Planning: planning, Consolidation: consolidation, Execution: execution}, nil
+}
+
+func (db *DB) EnsureReadyTasksQueued(ctx context.Context, projectID string) error {
+	if strings.TrimSpace(projectID) == "" {
+		return fmt.Errorf("project id is required")
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	rows, err := tx.QueryContext(ctx, `
+SELECT t.id
+FROM tasks t
+WHERE t.project_id = ?
+  AND t.status = 'ready'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM work_queue_items wq
+    WHERE wq.project_id = t.project_id
+      AND wq.lane = 'execution'
+      AND wq.item_type = 'task_implementation'
+      AND wq.item_id = t.id
+      AND wq.status IN ('queued', 'leased', 'running', 'heartbeat_lost', 'waiting_for_human', 'blocked')
+  )
+ORDER BY t.id`, projectID)
+	if err != nil {
+		return err
+	}
+	var taskIDs []string
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, taskID := range taskIDs {
+		queueID, err := requeueTaskImplementationWorkItem(ctx, tx, projectID, taskID, now)
+		if err != nil {
+			return err
+		}
+		if err := insertWorkflowEvent(ctx, tx, projectID, "ready_task_requeued", map[string]any{
+			"task_id":            taskID,
+			"work_queue_item_id": queueID,
+		}, now); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (db *DB) GetWorkStatus(ctx context.Context, projectID string) (WorkStatus, error) {

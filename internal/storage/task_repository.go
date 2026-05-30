@@ -126,6 +126,41 @@ INSERT OR IGNORE INTO work_queue_items(
 	return queueID, nil
 }
 
+func requeueTaskImplementationWorkItem(ctx context.Context, tx *sql.Tx, projectID string, taskID string, now string) (string, error) {
+	queueID := "WQ-" + stableShortHash(projectID+"|task_implementation|"+taskID)
+	result, err := tx.ExecContext(ctx, `
+UPDATE work_queue_items
+SET status = 'queued',
+    blocked_reason = NULL,
+    run_after = NULL,
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = NULL,
+    error_json = NULL,
+    started_at = NULL,
+    finished_at = NULL,
+    updated_at = ?
+WHERE project_id = ?
+  AND id = ?
+  AND lane = 'execution'
+  AND item_type = 'task_implementation'
+  AND item_id = ?
+  AND status IN ('completed', 'failed', 'cancelled')`,
+		now, projectID, queueID, taskID,
+	)
+	if err != nil {
+		return "", err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if affected > 0 {
+		return queueID, nil
+	}
+	return enqueueTaskImplementationWorkItem(ctx, tx, projectID, taskID, now)
+}
+
 func detectedVerificationCommandsForProject(ctx context.Context, tx *sql.Tx, projectID string) ([]TaskVerificationCommand, error) {
 	root, err := projectRoot(ctx, tx, projectID)
 	if err != nil {

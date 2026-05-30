@@ -1,6 +1,40 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import path from "node:path";
+
+async function createProjectFromUI(page: Page, testInfo: TestInfo, name: string, concept: string) {
+  const projectRoot = path.normalize(testInfo.outputPath(name.toLowerCase().replaceAll(" ", "-")));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "New Project" }).click();
+  await page.getByLabel("Name").fill(name);
+  await page.getByLabel("Project root").fill(projectRoot);
+  await page.getByPlaceholder("What do you want this project to become?").fill(concept);
+  await page.getByRole("button", { name: "Create project" }).click();
+  await expect(page.getByText(`${name} was created and selected.`)).toBeVisible({ timeout: 30_000 });
+
+  return projectRoot;
+}
+
+async function moveToQueuedImplementation(page: Page, testInfo: TestInfo, name: string) {
+  const projectRoot = await createProjectFromUI(
+    page,
+    testInfo,
+    name,
+    "A tiny app used to exercise every visible workflow transition button."
+  );
+  await page.getByRole("button", { name: "Approve all generated plan" }).click();
+  await expect(page.getByText("4 artifact(s) approved. Next: create an implementation task.")).toBeVisible();
+  await page.getByRole("button", { name: "Create implementation task" }).click();
+  await expect(page.getByText("1 task(s) materialized and queued. Next: run a worker.")).toBeVisible();
+  return projectRoot;
+}
+
+async function runSimulationToReview(page: Page) {
+  await page.getByRole("button", { name: "Run simulation" }).click();
+  await expect(page.getByText("Fake worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("TASK-001 / ready_for_human_review")).toBeVisible();
+}
 
 test("new project form defaults the name and project root", async ({ page }) => {
   await page.goto("/");
@@ -142,6 +176,103 @@ test("project setup actions execute from the UI after creation", async ({ page }
   await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(0);
   await page.getByRole("button", { name: "Open implementation evidence" }).click();
   await expect(page.locator("#task-artifacts-viewer")).toContainText("fake-verification");
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
+test("workflow buttons stay exclusive and actionable across implementation approval states", async ({ page }, testInfo) => {
+  await moveToQueuedImplementation(page, testInfo, "UI Button Matrix Project");
+
+  await expect(page.getByRole("button", { name: "Build with Codex" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Run simulation" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Create implementation task" })).toHaveCount(0);
+
+  let capturedAdapter = "";
+  await page.route("**/work/start", async (route) => {
+    const body = route.request().postDataJSON() as { adapter?: string };
+    capturedAdapter = body.adapter ?? "";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] })
+    });
+  }, { times: 1 });
+  await page.getByRole("button", { name: "Build with Codex" }).click();
+  await expect(page.getByText("Codex worker checked the queue, but no ready execution work was found.")).toBeVisible();
+  expect(capturedAdapter).toBe("real-codex");
+  await page.unroute("**/work/start");
+  await expect(page.getByRole("button", { name: "Run simulation" })).toHaveCount(1);
+
+  await runSimulationToReview(page);
+  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Review evidence" }).click();
+  await expect(page.locator("#task-artifacts-viewer")).toContainText("Implementation diff");
+  await expect(page.getByRole("button", { name: "Review evidence" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Approve implementation" }).click();
+
+  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Approve for merge" }).click();
+  await expect(page.locator("small").filter({ hasText: "TASK-001 / queued_for_merge" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Merge to main" }).click();
+  await expect(page.getByText(/Merge (blocked|succeeded) for TASK-001/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
+test("review rejection button does not expose merge actions from the wrong state", async ({ page }, testInfo) => {
+  await moveToQueuedImplementation(page, testInfo, "UI Rejection Project");
+  await runSimulationToReview(page);
+
+  await page.getByRole("button", { name: "Review evidence" }).click();
+  await expect(page.getByRole("button", { name: "Request changes" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Request changes" }).click();
+
+  await expect(page.locator("small").filter({ hasText: "TASK-001 / needs_decision" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(0);
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
+test("artifact review buttons toggle without creating duplicate workflow actions", async ({ page }, testInfo) => {
+  await createProjectFromUI(
+    page,
+    testInfo,
+    "UI Artifact Buttons Project",
+    "A tiny app used to exercise artifact review controls."
+  );
+
+  const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
+  await expect(prdCard.getByRole("button", { name: "Review content" })).toBeVisible();
+  await prdCard.getByRole("button", { name: "Review content" }).click();
+  await expect(prdCard.getByRole("button", { name: "Hide content" })).toBeVisible();
+  await prdCard.getByRole("button", { name: "Hide content" }).click();
+  await expect(prdCard.getByRole("button", { name: "Review content" })).toBeVisible();
+
+  await expect(page.getByRole("button", { name: "Approve all generated plan" })).toHaveCount(1);
+  await prdCard.getByRole("button", { name: "Approve latest" }).click();
+  await expect(page.getByText("Artifact approved.")).toBeVisible();
+  await expect(prdCard.getByText("approved / latest v1 / approved v1")).toBeVisible();
+  await expect(prdCard.getByRole("button", { name: "Approve latest" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create implementation task" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Approve all generated plan" }).click();
+  await expect(page.getByRole("button", { name: "Approve all generated plan" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Create implementation task" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Create implementation task" }).click();
+
+  const artifactsPanel = page.locator("section", { has: page.getByRole("heading", { name: "Artifacts", exact: true }) });
+  await expect(artifactsPanel.getByRole("button", { name: "View artifacts" })).toBeVisible();
+  await artifactsPanel.getByRole("button", { name: "View artifacts" }).click();
+  await expect(artifactsPanel.getByRole("button", { name: "Hide artifacts" })).toBeVisible();
+  await artifactsPanel.getByRole("button", { name: "Hide artifacts" }).click();
+  await expect(artifactsPanel.getByRole("button", { name: "View artifacts" })).toBeVisible();
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 

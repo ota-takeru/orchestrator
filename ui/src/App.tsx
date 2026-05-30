@@ -857,7 +857,7 @@ function WorkflowStepsPanel({
   onProcessMerge: (entryID: string) => void;
 }) {
   const pendingArtifacts = data.artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
-  const implementationQueueCount = data.queueItems.filter((item) => item.item_type === "task_implementation" && item.status === "queued").length;
+  const executionQueueItems = data.queueItems.filter(isQueuedExecutionItem);
   const reviewTask = data.tasks.find(isWaitingForImplementationReview);
   const mergeApprovalTask = data.tasks.find(isWaitingForMergeApproval);
   const queuedMergeTask = data.tasks.find((task) => task.status === "queued_for_merge");
@@ -868,7 +868,7 @@ function WorkflowStepsPanel({
       ? 1
       : data.tasks.length === 0
         ? 2
-        : implementationQueueCount > 0
+        : executionQueueItems.length > 0
           ? 3
           : reviewTask
             ? 4
@@ -901,7 +901,7 @@ function WorkflowStepsPanel({
         </button>
       );
     }
-    if (implementationQueueCount > 0) {
+    if (executionQueueItems.length > 0) {
       return (
         <>
           <button type="button" onClick={() => onStartWork("real-codex")} disabled={busy}>
@@ -1155,7 +1155,8 @@ function ReadyToRunPanel({
   actioning: string;
   mergeActioning: string;
 }) {
-  const implementationQueueCount = queueItems.filter((item) => item.item_type === "task_implementation" && item.status === "queued").length;
+  const executionQueueItems = queueItems.filter(isQueuedExecutionItem);
+  const repairQueueCount = executionQueueItems.filter((item) => item.item_type === "task_repair").length;
   const reviewTask = tasks.find(isWaitingForImplementationReview);
   const mergeApprovalTask = tasks.find(isWaitingForMergeApproval);
   const queuedMergeTask = tasks.find((task) => task.status === "queued_for_merge");
@@ -1170,8 +1171,10 @@ function ReadyToRunPanel({
         ? "Merge queued"
         : merged
           ? "Complete"
-          : implementationQueueCount > 0
-            ? "Implementation queued"
+          : executionQueueItems.length > 0
+            ? repairQueueCount > 0
+              ? "Repair queued"
+              : "Implementation queued"
             : "Idle";
   const body = isRunning
     ? "Work is running. This can take a moment."
@@ -1183,8 +1186,10 @@ function ReadyToRunPanel({
           ? `${queuedMergeTask.id} is queued for merge.`
           : merged
             ? "All implementation tasks are merged."
-            : implementationQueueCount > 0
-              ? `${taskLabel || "Task"} is ready for implementation.`
+            : executionQueueItems.length > 0
+              ? repairQueueCount > 0
+                ? `${taskLabel || "Task"} is ready for repair.`
+                : `${taskLabel || "Task"} is ready for implementation.`
               : "No implementation work is queued.";
   return (
     <section className={`ready-run-panel ${isRunning ? "is-busy" : ""}`} aria-busy={isRunning}>
@@ -1214,7 +1219,7 @@ function WorkPlanningPanel({
   showActions?: boolean;
 }) {
   const workerRuns = latestWorkerRuns(data.workStatus.worker_runs);
-  const canRun = data.queueItems.some((item) => item.item_type === "task_implementation" && item.status === "queued") && actioning === "";
+  const canRun = data.queueItems.some(isQueuedExecutionItem) && actioning === "";
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -1759,6 +1764,10 @@ function latestWorkerRuns(workerRuns: DashboardData["workStatus"]["worker_runs"]
 
 function activeWorkQueueItems(items: WorkQueueItem[]) {
   return items.filter((item) => item.status !== "completed" && item.status !== "cancelled" && item.status !== "failed");
+}
+
+function isQueuedExecutionItem(item: WorkQueueItem) {
+  return (item.item_type === "task_implementation" || item.item_type === "task_repair") && item.status === "queued";
 }
 
 function isWaitingForImplementationReview(task: TaskRecord) {

@@ -171,28 +171,7 @@ select {
 .workflow-actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 8px;
-}
-
-.workflow-blocked {
-  display: grid;
-  max-width: min(520px, 100%);
-  gap: 2px;
-  padding: 8px 10px;
-  border: 1px solid #f0b45b;
-  border-radius: 8px;
-  background: #fff8ea;
-  color: #5c3b00;
-}
-
-.workflow-blocked strong {
-  font-size: 13px;
-}
-
-.workflow-blocked small {
-  color: #755118;
-  line-height: 1.35;
 }
 
 .workflow-complete {

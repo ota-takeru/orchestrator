@@ -20,7 +20,14 @@ type FakeMergeResult struct {
 }
 
 func (db *DB) ProcessNextFakeMerge(ctx context.Context, projectID string) (FakeMergeResult, error) {
+	return db.ProcessFakeMerge(ctx, projectID, "")
+}
+
+func (db *DB) ProcessFakeMerge(ctx context.Context, projectID string, entryID string) (FakeMergeResult, error) {
 	entry, err := db.nextQueuedMergeEntry(ctx, projectID)
+	if entryID != "" {
+		entry, err = db.mergeEntryByID(ctx, projectID, entryID, "queued")
+	}
 	if err != nil {
 		return FakeMergeResult{}, err
 	}

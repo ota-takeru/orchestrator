@@ -21,14 +21,6 @@ const countRows: Array<{
 
 const defaultNewProjectName = "New Project";
 
-type MergeBlockState = {
-  entryID: string;
-  taskID: string;
-  blockers: string[];
-  failureClass?: string;
-  attemptedAt: string;
-};
-
 function App() {
   const [projects, setProjects] = useState<RegisteredProject[]>([]);
   const [currentProject, setCurrentProject] = useState<CurrentProject | undefined>();
@@ -71,7 +63,6 @@ function App() {
   const [artifactActioning, setArtifactActioning] = useState("");
   const [changeActioning, setChangeActioning] = useState("");
   const [mergeActioning, setMergeActioning] = useState("");
-  const [mergeBlock, setMergeBlock] = useState<MergeBlockState | null>(null);
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectID), [projects, selectedProjectID]);
   const selectedProjectSummary = selectedProjectID ? (selectedProject ?? (lastCreatedProject?.id === selectedProjectID ? lastCreatedProject : undefined)) : currentProject;
@@ -132,7 +123,6 @@ function App() {
     setSelectedArtifactTaskID("");
     setTaskArtifacts([]);
     setTaskArtifactsLoading(false);
-    setMergeBlock(null);
   }, [selectedProjectID]);
 
   useEffect(() => {
@@ -491,17 +481,6 @@ function App() {
       const result = await processRealGitMerge(entryID, "main", selectedProjectID || undefined);
       await refresh();
       const blockers = result.blockers?.length ? ` Blockers: ${result.blockers.join("; ")}` : "";
-      if (result.status === "blocked") {
-        setMergeBlock({
-          entryID: result.merge_queue_entry_id || entryID,
-          taskID: result.task_id,
-          blockers: result.blockers?.length ? result.blockers : ["Merge processing is blocked."],
-          failureClass: result.failure_class,
-          attemptedAt: new Date().toLocaleTimeString()
-        });
-      } else {
-        setMergeBlock(null);
-      }
       setNotice(`Merge ${result.status} for ${result.task_id}.${blockers}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Merge processing failed");
@@ -586,7 +565,6 @@ function App() {
               onCodexReviseArtifact={submitCodexReviseArtifact}
               onMaterializeTasks={submitMaterializeTasks}
               mergeActioning={mergeActioning}
-              mergeBlock={mergeBlock}
               onProcessMerge={submitProcessMerge}
             />
           ) : (
@@ -748,7 +726,6 @@ function SelectedProjectDashboard({
   onCodexReviseArtifact,
   onMaterializeTasks,
   mergeActioning,
-  mergeBlock,
   onProcessMerge
 }: {
   data: DashboardData;
@@ -773,7 +750,6 @@ function SelectedProjectDashboard({
   onCodexReviseArtifact: (artifactID: string, instruction: string) => void;
   onMaterializeTasks: () => void;
   mergeActioning: string;
-  mergeBlock: MergeBlockState | null;
   onProcessMerge: (entryID: string) => void;
 }) {
   const hasPendingArtifacts = data.artifacts.some((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
@@ -799,7 +775,6 @@ function SelectedProjectDashboard({
         taskActioning={taskActioning}
         workActioning={workActioning}
         mergeActioning={mergeActioning}
-        mergeBlock={mergeBlock}
         selectedArtifactTaskID={selectedArtifactTaskID}
         onReviewAllArtifacts={onReviewAllArtifacts}
         onMaterializeTasks={onMaterializeTasks}
@@ -860,7 +835,6 @@ function WorkflowStepsPanel({
   taskActioning,
   workActioning,
   mergeActioning,
-  mergeBlock,
   selectedArtifactTaskID,
   onReviewAllArtifacts,
   onMaterializeTasks,
@@ -881,7 +855,6 @@ function WorkflowStepsPanel({
   onOpenTaskArtifacts: (taskID: string) => void;
   onTaskAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
   onProcessMerge: (entryID: string) => void;
-  mergeBlock: MergeBlockState | null;
 }) {
   const pendingArtifacts = data.artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
   const executionQueueItems = data.queueItems.filter(isQueuedExecutionItem);
@@ -966,22 +939,10 @@ function WorkflowStepsPanel({
       );
     }
     if (queuedMergeTask && mergeEntry) {
-      const blocked = mergeBlock && (mergeBlock.entryID === mergeEntry.id || mergeBlock.taskID === queuedMergeTask.id);
       return (
-        <>
-          {blocked ? (
-            <div className="workflow-blocked" role="status" aria-live="polite">
-              <strong>Merge blocked</strong>
-              <small>
-                {mergeBlock.blockers.join("; ")}
-                {mergeBlock.failureClass ? ` (${mergeBlock.failureClass})` : ""} at {mergeBlock.attemptedAt}
-              </small>
-            </div>
-          ) : null}
-          <button type="button" onClick={() => onProcessMerge(mergeEntry.id)} disabled={busy || !data.mergeStatus.ready}>
-            {mergeActioning === mergeEntry.id ? "Merging" : blocked ? "Retry merge" : "Merge to main"}
-          </button>
-        </>
+        <button type="button" onClick={() => onProcessMerge(mergeEntry.id)} disabled={busy || !data.mergeStatus.ready}>
+          {mergeActioning === mergeEntry.id ? "Merging" : "Merge to main"}
+        </button>
       );
     }
     if (allMerged) {

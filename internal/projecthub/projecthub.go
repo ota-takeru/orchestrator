@@ -368,7 +368,7 @@ func (WindowsLocalAuthority) ProcessRealGitMerge(ctx context.Context, project re
 	if strings.TrimSpace(target) == "" {
 		target = "main"
 	}
-	return db.ProcessRealGitMerge(ctx, projectID, storage.RealGitMergeInput{EntryID: entryID, Target: target, Execute: true, FFOnly: true, NoPush: true})
+	return db.ProcessMergeQueueAuto(ctx, projectID, storage.RealGitMergeInput{EntryID: entryID, Target: target, Execute: true, FFOnly: true, NoPush: true})
 }
 
 func (WindowsLocalAuthority) RequestDependencyApproval(ctx context.Context, project registry.RegisteredProject, input storage.DependencyApprovalRequestInput) (any, error) {

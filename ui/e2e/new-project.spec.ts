@@ -221,9 +221,9 @@ test("workflow buttons stay exclusive and actionable across implementation appro
   await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(1);
 
   await page.getByRole("button", { name: "Merge to main" }).click();
-  await expect(page.getByText(/Merge (blocked|succeeded) for TASK-001/)).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("status").filter({ hasText: "Merge blocked" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Retry merge" })).toHaveCount(1);
+  await expect(page.getByText("Merge succeeded for TASK-001.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("small").filter({ hasText: "TASK-001 / merged" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(0);
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 

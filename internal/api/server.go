@@ -1988,7 +1988,7 @@ func (s *Server) handleMergeProcessRealGit(w http.ResponseWriter, r *http.Reques
 	if strings.TrimSpace(input.Target) == "" {
 		input.Target = "main"
 	}
-	result, err := s.db.ProcessRealGitMerge(r.Context(), s.projectID, storage.RealGitMergeInput{
+	result, err := s.db.ProcessMergeQueueAuto(r.Context(), s.projectID, storage.RealGitMergeInput{
 		EntryID: input.EntryID,
 		Target:  input.Target,
 		Execute: true,

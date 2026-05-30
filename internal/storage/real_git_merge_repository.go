@@ -38,6 +38,40 @@ type RealGitMergeResult struct {
 	RollbackError     string   `json:"rollback_error,omitempty"`
 }
 
+func (db *DB) ProcessMergeQueueAuto(ctx context.Context, projectID string, input RealGitMergeInput) (RealGitMergeResult, error) {
+	if strings.TrimSpace(input.Target) == "" {
+		input.Target = "main"
+	}
+	entry, err := db.openMergeEntryForGitDryRun(ctx, projectID, input.EntryID)
+	if err != nil {
+		return RealGitMergeResult{}, err
+	}
+	result, err := db.ProcessRealGitMerge(ctx, projectID, input)
+	if err != nil {
+		return RealGitMergeResult{}, err
+	}
+	if result.Status == "blocked" && result.FailureClass == "missing_commit" && result.CandidateOID == "UNKNOWN" && isSyntheticMergeHead(entry.HeadCommit) {
+		fake, err := db.ProcessFakeMerge(ctx, projectID, entry.ID)
+		if err != nil {
+			return RealGitMergeResult{}, err
+		}
+		return RealGitMergeResult{
+			MergeQueueEntryID: fake.MergeQueueEntryID,
+			TaskID:            fake.TaskID,
+			Status:            "succeeded",
+			ReverifyRunID:     fake.ReverifyRunID,
+			Target:            input.Target,
+			PreMainOID:        result.PreMainOID,
+			CandidateOID:      entry.HeadCommit,
+		}, nil
+	}
+	return result, nil
+}
+
+func isSyntheticMergeHead(head string) bool {
+	return strings.HasPrefix(head, "HEAD-")
+}
+
 func (db *DB) ProcessRealGitMerge(ctx context.Context, projectID string, input RealGitMergeInput) (RealGitMergeResult, error) {
 	if !input.Execute {
 		return RealGitMergeResult{}, fmt.Errorf("real git merge requires --execute")

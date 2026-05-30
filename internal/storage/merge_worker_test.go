@@ -45,6 +45,58 @@ func TestProcessNextFakeMergeMovesQueuedTaskToMerged(t *testing.T) {
 	}
 }
 
+func TestProcessMergeQueueAutoUsesFakeMergeForSyntheticHead(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	seedApprovalTaskEvidence(t, db, ctx)
+	if _, err := db.SQL().ExecContext(ctx, "UPDATE runs SET head_commit = 'HEAD-FAKE' WHERE id = 'RUN-001'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SaveRunArtifact(ctx, RunArtifactInput{
+		ProjectID:    "PROJECT-001",
+		RunID:        "RUN-001",
+		ArtifactType: "diff",
+		ArtifactKey:  "diff.patch",
+		Content:      []byte("diff --git a/fake.txt b/fake.txt\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalFinalReview}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ApproveTaskEvidence(ctx, ApprovalInput{ProjectID: "PROJECT-001", TaskID: "TASK-001", ApprovalType: ApprovalMerge}); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := db.QueueTaskForMerge(ctx, "PROJECT-001", "TASK-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := db.ProcessMergeQueueAuto(ctx, "PROJECT-001", RealGitMergeInput{
+		EntryID: entry.ID,
+		Target:  "main",
+		Execute: true,
+		FFOnly:  true,
+		NoPush:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || result.TaskID != "TASK-001" || result.ReverifyRunID == "" {
+		t.Fatalf("result = %#v", result)
+	}
+	var taskStatus, queueStatus string
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = 'TASK-001'").Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "SELECT status FROM merge_queue_entries WHERE id = ?", entry.ID).Scan(&queueStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "merged" || queueStatus != "merged" {
+		t.Fatalf("task=%s queue=%s", taskStatus, queueStatus)
+	}
+}
+
 func TestProcessNextFakeMergeConflictOpensInboxDecision(t *testing.T) {
 	db := openMigratedTestDB(t)
 	ctx := context.Background()

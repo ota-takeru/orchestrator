@@ -236,13 +236,6 @@ func setupActions(root string, status SetupStatus) []SetupAction {
 			Reason:  disabledReason(status.GitRepository && !status.GitClean, "git repository with pending DevOS files is required"),
 		},
 		{
-			ID:      "fake_workflow",
-			Label:   "Run fake workflow",
-			Command: "devos bootstrap --adapter fake --project-root " + quotedRoot + " --json \"Fake setup workflow\"",
-			Enabled: status.GitRepository && status.GitignoreEnvLocal,
-			Reason:  disabledReason(status.GitRepository && status.GitignoreEnvLocal, "git repo and .env.local ignore rule are required"),
-		},
-		{
 			ID:      "real_dry_run",
 			Label:   "Preview real Codex",
 			Command: "devos run --real-codex --dry-run --project-root " + quotedRoot + " --json TASK-ID",
@@ -289,7 +282,7 @@ func (db *DB) RunSetupAction(ctx context.Context, projectID string, actionID str
 			return SetupActionResult{ActionID: actionID, Status: "succeeded", Message: "initial DevOS project state committed"}, nil
 		}
 		return SetupActionResult{ActionID: actionID, Status: "succeeded", Message: "initial DevOS project state already clean"}, nil
-	case "fake_workflow", "real_dry_run":
+	case "real_dry_run":
 		return SetupActionResult{ActionID: actionID, Status: "manual_required", Message: "run the displayed command from the project root"}, nil
 	default:
 		return SetupActionResult{}, fmt.Errorf("unknown setup action: %s", actionID)

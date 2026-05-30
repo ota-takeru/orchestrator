@@ -2117,7 +2117,7 @@ func decodeWorkStartBody(w http.ResponseWriter, r *http.Request) (storage.WorkSt
 		input.Mode = "sequential"
 	}
 	if input.Adapter == "" {
-		input.Adapter = "fake"
+		input.Adapter = "real-codex"
 	}
 	if input.PlanningConcurrency == 0 {
 		input.PlanningConcurrency = 3

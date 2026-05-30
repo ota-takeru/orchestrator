@@ -30,12 +30,6 @@ async function moveToQueuedImplementation(page: Page, testInfo: TestInfo, name: 
   return projectRoot;
 }
 
-async function runSimulationToReview(page: Page) {
-  await page.getByRole("button", { name: "Run simulation" }).click();
-  await expect(page.getByText("Fake worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("TASK-001 / ready_for_human_review")).toBeVisible();
-}
-
 test("new project form defaults the name and project root", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "New Project" }).click();
@@ -65,6 +59,7 @@ test("creating a project selects it and replaces the creation form with its dash
   await expect(activityPanel.getByText(projectRoot)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Artifacts", exact: true })).toBeVisible();
   await expect(page.getByText("4 waiting for review")).toBeVisible();
+  await expect(page.getByText("Run fake workflow")).toHaveCount(0);
   const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
   await expect(prdCard).toContainText("PRD");
   await prdCard.getByRole("button", { name: "Review content" }).click();
@@ -137,7 +132,7 @@ test("project setup actions execute from the UI after creation", async ({ page }
   await page.getByRole("button", { name: "New Project" }).click();
   await page.getByLabel("Name").fill("UI Execution Project");
   await page.getByLabel("Project root").fill(projectRoot);
-  await page.getByPlaceholder("What do you want this project to become?").fill("A project that exercises artifact approval, materialization, and fake worker execution.");
+  await page.getByPlaceholder("What do you want this project to become?").fill("A project that exercises artifact approval, materialization, and real Codex execution wiring.");
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByText("UI Execution Project was created and selected.")).toBeVisible({ timeout: 30_000 });
 
@@ -156,89 +151,55 @@ test("project setup actions execute from the UI after creation", async ({ page }
     await new Promise<void>((resolve) => {
       finishWork = resolve;
     });
-    await route.fallback();
+    const body = route.request().postDataJSON() as { adapter?: string };
+    expect(body.adapter).toBe("real-codex");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ execution: [{ id: "TASK-001" }], worker_run: { status: "succeeded" } })
+    });
   }, { times: 1 });
   const workResponse = page.waitForResponse((response) => response.url().includes("/work/start") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Run simulation" }).click();
-  await expect(page.locator(".ready-run-panel").getByRole("status")).toContainText("Running simulation");
+  await expect(page.getByRole("button", { name: "Run simulation" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Build with Codex" }).click();
+  await expect(page.locator(".ready-run-panel").getByRole("status")).toContainText("Building with Codex");
   finishWork();
   await workResponse;
-  await expect(page.getByText("Fake worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("TASK-001 / ready_for_human_review")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Review implementation" })).toBeVisible();
-  await page.getByRole("button", { name: "Review evidence" }).click();
-  await expect(page.locator("#task-artifacts-viewer").getByRole("heading", { name: "Diff & Artifacts" })).toBeVisible();
-  await expect(page.locator("#task-artifacts-viewer")).toContainText("diff.patch");
-  await expect(page.getByRole("button", { name: "Approve implementation" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Approve implementation" }).click();
-  await expect(page.getByRole("button", { name: "Approve for merge" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Open implementation evidence" }).click();
-  await expect(page.locator("#task-artifacts-viewer")).toContainText("fake-verification");
+  await expect(page.getByText("Codex worker finished with 1 execution item(s).")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("TASK-001 / ready")).toBeVisible();
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 
-test("workflow buttons stay exclusive and actionable across implementation approval states", async ({ page }, testInfo) => {
+test("work start uses real Codex and does not expose simulation controls", async ({ page }, testInfo) => {
   await moveToQueuedImplementation(page, testInfo, "UI Button Matrix Project");
 
   await expect(page.getByRole("button", { name: "Build with Codex" })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Run simulation" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Run simulation" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create implementation task" })).toHaveCount(0);
 
   let capturedAdapter = "";
+  let finishWork!: () => void;
   await page.route("**/work/start", async (route) => {
     const body = route.request().postDataJSON() as { adapter?: string };
     capturedAdapter = body.adapter ?? "";
+    await new Promise<void>((resolve) => {
+      finishWork = resolve;
+    });
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ items: [] })
     });
   }, { times: 1 });
+  const workResponse = page.waitForResponse((response) => response.url().includes("/work/start") && response.request().method() === "POST");
   await page.getByRole("button", { name: "Build with Codex" }).click();
+  await expect(page.locator(".ready-run-panel").getByRole("status")).toContainText("Building with Codex");
+  finishWork();
+  await workResponse;
   await expect(page.getByText("Codex worker checked the queue, but no ready execution work was found.")).toBeVisible();
   expect(capturedAdapter).toBe("real-codex");
   await page.unroute("**/work/start");
-  await expect(page.getByRole("button", { name: "Run simulation" })).toHaveCount(1);
-
-  await runSimulationToReview(page);
-  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Review evidence" }).click();
-  await expect(page.locator("#task-artifacts-viewer")).toContainText("Implementation diff");
-  await expect(page.getByRole("button", { name: "Review evidence" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(1);
-  await page.getByRole("button", { name: "Approve implementation" }).click();
-
-  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(1);
-  await page.getByRole("button", { name: "Approve for merge" }).click();
-  await expect(page.locator("small").filter({ hasText: "TASK-001 / queued_for_merge" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(1);
-
-  await page.getByRole("button", { name: "Merge to main" }).click();
-  await expect(page.getByText("Merge succeeded for TASK-001.")).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator("small").filter({ hasText: "TASK-001 / merged" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(0);
-  await expect(page.locator(".error-banner")).toHaveCount(0);
-});
-
-test("review rejection button does not expose merge actions from the wrong state", async ({ page }, testInfo) => {
-  await moveToQueuedImplementation(page, testInfo, "UI Rejection Project");
-  await runSimulationToReview(page);
-
-  await page.getByRole("button", { name: "Review evidence" }).click();
-  await expect(page.getByRole("button", { name: "Request changes" })).toHaveCount(1);
-  await page.getByRole("button", { name: "Request changes" }).click();
-
-  await expect(page.locator("small").filter({ hasText: "TASK-001 / needs_decision" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve implementation" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Approve for merge" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Merge to main" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Run simulation" })).toHaveCount(0);
   await expect(page.locator(".error-banner")).toHaveCount(0);
 });
 

@@ -55,6 +55,18 @@ func TestServerRejectsInvalidSnapshotLimit(t *testing.T) {
 	}
 }
 
+func TestDecodeWorkStartBodyDefaultsToRealCodex(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/work/start", bytes.NewBufferString(`{}`))
+	rec := httptest.NewRecorder()
+	input, ok := decodeWorkStartBody(rec, req)
+	if !ok {
+		t.Fatalf("decode failed: %s", rec.Body.String())
+	}
+	if input.ImplementationAdapter != "real-codex" {
+		t.Fatalf("ImplementationAdapter = %q, want real-codex", input.ImplementationAdapter)
+	}
+}
+
 func TestServerApprovesInboxDecision(t *testing.T) {
 	db, projectID := openAPITestDB(t)
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -475,7 +487,7 @@ func TestServerRequestsDependencyApproval(t *testing.T) {
 
 func TestServerRunsSetupAction(t *testing.T) {
 	db, projectID := openAPITestDB(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/setup/actions/fake_workflow", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/actions/real_dry_run", nil)
 	rec := httptest.NewRecorder()
 	NewServer(db, projectID).Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -485,7 +497,7 @@ func TestServerRunsSetupAction(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.ActionID != "fake_workflow" || body.Status != "manual_required" {
+	if body.ActionID != "real_dry_run" || body.Status != "manual_required" {
 		t.Fatalf("body = %#v", body)
 	}
 }

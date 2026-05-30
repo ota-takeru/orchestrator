@@ -19,6 +19,7 @@
 
 2026-05-30:
 
+- UIのworker起動導線とSetup Wizardからsimulation/fake実行ボタンを外し、`Build with Codex` / Real Codex系actionだけを表示するようにしました。UI API clientとHTTP APIのadapter省略時defaultも `real-codex` に寄せ、Playwright E2Eはfake経路を押さずにReal Codex payloadとsimulation非表示を検証する形へ更新しました。
 - Simulation実行後のmergeが実Git専用処理へ流れ、疑似head commitが見つからずblockedになる設計不備を修正しました。merge処理はreal commitがある場合はreal git merge、simulation由来のsynthetic headの場合はfake merge workerへ自動フォールバックしてmergedまで進めます。UIへblocked/retry状態を出す変更は撤回し、人間操作を要求しない導線に戻しました。追加検証: `pnpm --dir ui test`、`pnpm --dir ui e2e`、`go test ./...`。
 - UI状態遷移ごとのボタン回帰を追加検証しました。workflow CTAが各状態で1つに絞られること、`Build with Codex` が正しいadapterでPOSTすること、review承認後に `Approve implementation` が消えて `Approve for merge` だけになること、merge承認後に `Merge to main` だけになること、`Request changes` 後にmerge系ボタンが出ないことをPlaywright E2Eへ追加しました。あわせてexecution queue判定を `task_implementation` / `task_repair` 共通にし、修復queueでもUIからworker起動できるようにしました。
 - UIの新規作成から実装・review・merge承認までの主導線を整理しました。中央にworkflow step / next actionを追加し、Artifact本文とrun logは折りたたみ表示へ変更、`Run fake worker` / `Run Codex worker` を `Run simulation` / `Build with Codex` に改名しました。final review承認済みかどうかをTask APIで返すようにし、UIでは `Approve implementation` と `Approve for merge` を状態に応じて片方だけ表示します。追加検証: `pnpm --dir ui test`、`pnpm --dir ui e2e`、`go test ./...`。

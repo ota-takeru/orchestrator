@@ -284,7 +284,7 @@ function App() {
     }
   };
 
-  const submitWorkStart = async (adapter: "fake" | "real-codex") => {
+  const submitWorkStart = async (adapter: "real-codex") => {
     setWorkActioning(adapter);
     setError("");
     setNotice("");
@@ -292,12 +292,11 @@ function App() {
       const result = await startWork(selectedProjectID || undefined, adapter);
       await refresh();
       const executionCount = result.execution?.length ?? 0;
-      const label = adapter === "fake" ? "Fake" : "Codex";
       if (executionCount > 0) {
-        setNotice(`${label} worker finished with ${executionCount} execution item(s).`);
+        setNotice(`Codex worker finished with ${executionCount} execution item(s).`);
       } else {
         const reason = result.worker_run?.stop_reason ? ` Reason: ${result.worker_run.stop_reason}.` : "";
-        setNotice(`${label} worker checked the queue, but no ready execution work was found.${reason}`);
+        setNotice(`Codex worker checked the queue, but no ready execution work was found.${reason}`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Work start failed");
@@ -742,7 +741,7 @@ function SelectedProjectDashboard({
   taskActioning: string;
   onTaskAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
   workActioning: string;
-  onStartWork: (adapter: "fake" | "real-codex") => void;
+  onStartWork: (adapter: "real-codex") => void;
   artifactActioning: string;
   onReviewArtifact: (artifactID: string, version: number, status: "approved" | "approved_with_notes" | "rejected", notes: string) => void;
   onReviewAllArtifacts: () => void;
@@ -851,7 +850,7 @@ function WorkflowStepsPanel({
   selectedArtifactTaskID: string;
   onReviewAllArtifacts: () => void;
   onMaterializeTasks: () => void;
-  onStartWork: (adapter: "fake" | "real-codex") => void;
+  onStartWork: (adapter: "real-codex") => void;
   onOpenTaskArtifacts: (taskID: string) => void;
   onTaskAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
   onProcessMerge: (entryID: string) => void;
@@ -903,14 +902,9 @@ function WorkflowStepsPanel({
     }
     if (executionQueueItems.length > 0) {
       return (
-        <>
-          <button type="button" onClick={() => onStartWork("real-codex")} disabled={busy}>
-            {workActioning === "real-codex" ? "Building with Codex" : "Build with Codex"}
-          </button>
-          <button className="secondary-button no-margin" type="button" onClick={() => onStartWork("fake")} disabled={busy}>
-            {workActioning === "fake" ? "Running simulation" : "Run simulation"}
-          </button>
-        </>
+        <button type="button" onClick={() => onStartWork("real-codex")} disabled={busy}>
+          {workActioning === "real-codex" ? "Building with Codex" : "Build with Codex"}
+        </button>
       );
     }
     if (reviewTask) {
@@ -1200,7 +1194,7 @@ function ReadyToRunPanel({
       {isRunning ? (
         <div className="ready-run-status" role="status" aria-live="polite">
           <span className="ready-run-spinner" />
-          <span>{mergeActioning ? "Merging" : actioning === "real-codex" ? "Building with Codex" : "Running simulation"}</span>
+          <span>{mergeActioning ? "Merging" : "Building with Codex"}</span>
         </div>
       ) : null}
     </section>
@@ -1215,7 +1209,7 @@ function WorkPlanningPanel({
 }: {
   data: DashboardData;
   actioning: string;
-  onStartWork: (adapter: "fake" | "real-codex") => void;
+  onStartWork: (adapter: "real-codex") => void;
   showActions?: boolean;
 }) {
   const workerRuns = latestWorkerRuns(data.workStatus.worker_runs);
@@ -1233,9 +1227,6 @@ function WorkPlanningPanel({
         <div className="toolbar-row">
           <button className="secondary-button" type="button" onClick={() => onStartWork("real-codex")} disabled={!canRun}>
             {actioning === "real-codex" ? "Building with Codex" : "Build with Codex"}
-          </button>
-          <button className="secondary-button" type="button" onClick={() => onStartWork("fake")} disabled={!canRun}>
-            {actioning === "fake" ? "Running simulation" : "Run simulation"}
           </button>
         </div>
       ) : null}

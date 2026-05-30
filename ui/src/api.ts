@@ -186,7 +186,7 @@ type WorkStartAPIResult = {
   };
 };
 
-export async function startWork(projectID?: string, adapter = "fake"): Promise<WorkStartAPIResult> {
+export async function startWork(projectID?: string, adapter = "real-codex"): Promise<WorkStartAPIResult> {
   const path = projectID ? `/api/projects/${encodeURIComponent(projectID)}/work/start` : "/api/work/start";
   return postJSON<WorkStartAPIResult>(path, {
     mode: "sequential",

@@ -210,6 +210,8 @@ Contract Fix Sliceをここで完了します。
 - policy memory
 - Change Request flow
 - Request Queue
+- Understanding-first intake
+- Approval Packet risk gate
 - bounded parallel planning lane
 - Planning Consolidation
 - Serial Canonical Commit
@@ -217,6 +219,16 @@ Contract Fix Sliceをここで完了します。
 - Rolling Planning Checkpoint
 - Human Inbox UI
 - Full Dashboard
+
+## Slice 8.25: Understanding-first Core
+
+- `intent_items`、`understanding_snapshots`、`proposal_batches`、`proposal_deltas`、`approval_packets` migrationを追加する。
+- 新規project作成は初期artifactを即生成せず、`initial_concept` Intent、Understanding Snapshot、Approval Packet、Inbox itemを作る。
+- Approval Packet承認後に初期PRD / Architecture / Roadmap / Task YAMLを `proposed` artifactとして生成する。
+- Feature Request planningはplaceholderではなくsnapshot由来の `feature_detail_report` / `impact_analysis_report` / `task_group_proposal` / `risk_report` を作る。
+- `L0/L1` はauto-go、`L2/L3` はApproval Packet待ち、`L4` はhard gateとしてready taskを作らない。
+- UIは `Understanding Review -> Artifact review -> Task -> Implementation -> Review -> Merge` を主導線にする。
+- 常駐worker化、`devos work daemon`、worker pause/resume/stop-after-current、SSE event streamは次feature chunkで扱う。
 
 ## Acceptance Test Names
 

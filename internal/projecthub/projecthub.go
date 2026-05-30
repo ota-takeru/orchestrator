@@ -20,6 +20,9 @@ type ProjectSnapshot = storage.HumanInboxSnapshot
 type ProjectAuthority interface {
 	Snapshot(ctx context.Context, project registry.RegisteredProject) (ProjectSnapshot, error)
 	Dashboard(ctx context.Context, project registry.RegisteredProject) (storage.ProjectDashboardData, error)
+	Understanding(ctx context.Context, project registry.RegisteredProject) (any, error)
+	ApprovalPackets(ctx context.Context, project registry.RegisteredProject, status string) (any, error)
+	ApproveApprovalPacket(ctx context.Context, project registry.RegisteredProject, packetID string, option string, notes string) (any, error)
 	Tasks(ctx context.Context, project registry.RegisteredProject) (any, error)
 	Inbox(ctx context.Context, project registry.RegisteredProject, status string) (any, error)
 	CreateFeatureRequest(ctx context.Context, project registry.RegisteredProject, text string) (any, error)
@@ -130,6 +133,46 @@ func (WindowsLocalAuthority) Dashboard(ctx context.Context, project registry.Reg
 	}
 	defer db.Close()
 	return db.LoadProjectDashboard(ctx, projectID, 20)
+}
+
+func (WindowsLocalAuthority) Understanding(ctx context.Context, project registry.RegisteredProject) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	snapshots, err := db.ListUnderstandingSnapshots(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"understanding_snapshots": snapshots}, nil
+}
+
+func (WindowsLocalAuthority) ApprovalPackets(ctx context.Context, project registry.RegisteredProject, status string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	packets, err := db.ListApprovalPackets(ctx, projectID, status)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"approval_packets": packets}, nil
+}
+
+func (WindowsLocalAuthority) ApproveApprovalPacket(ctx context.Context, project registry.RegisteredProject, packetID string, option string, notes string) (any, error) {
+	db, projectID, err := openProjectDB(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.ApproveApprovalPacket(ctx, storage.ApprovalPacketApprovalInput{
+		ProjectID: projectID,
+		PacketID:  packetID,
+		Option:    option,
+		Notes:     notes,
+	})
 }
 
 func (WindowsLocalAuthority) Tasks(ctx context.Context, project registry.RegisteredProject) (any, error) {
@@ -494,6 +537,41 @@ func (a WslAuthority) Dashboard(ctx context.Context, project registry.Registered
 		return storage.ProjectDashboardData{}, err
 	}
 	return dashboard, nil
+}
+
+func (a WslAuthority) Understanding(ctx context.Context, project registry.RegisteredProject) (any, error) {
+	var body map[string]any
+	if err := a.runJSON(ctx, project, &body, "understanding"); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) ApprovalPackets(ctx context.Context, project registry.RegisteredProject, status string) (any, error) {
+	var body map[string]any
+	args := []string{"approval-packets"}
+	if strings.TrimSpace(status) != "" {
+		args = append(args, "--status", status)
+	}
+	if err := a.runJSON(ctx, project, &body, args...); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (a WslAuthority) ApproveApprovalPacket(ctx context.Context, project registry.RegisteredProject, packetID string, option string, notes string) (any, error) {
+	var body map[string]any
+	args := []string{"approval-packets", "approve"}
+	if strings.TrimSpace(option) != "" {
+		args = append(args, "--option", option)
+	}
+	if strings.TrimSpace(notes) != "" {
+		args = append(args, "--notes", notes)
+	}
+	if err := a.runJSONWithTrailing(ctx, project, &body, args, packetID); err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 func (a WslAuthority) Tasks(ctx context.Context, project registry.RegisteredProject) (any, error) {

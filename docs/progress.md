@@ -19,6 +19,7 @@
 
 2026-05-30:
 
+- Slice 8.25としてUnderstanding-first coreを追加しました。`intent_items`、`understanding_snapshots`、`proposal_batches`、`proposal_deltas`、`approval_packets` migrationを追加し、新規project作成は初期artifactを即生成せずApproval Packet承認後に初期PRD / Architecture / Roadmap / Task YAMLを生成します。Feature Request planningはUnderstanding Snapshot由来の構造化reportを作り、`L0/L1` auto-go、`L2/L3` approval待ち、`L4` hard gateとして扱います。Local API、multi-project authority bridge、CLI、React UIのUnderstanding Review / Approval Packet表示を接続しました。
 - 初期artifact生成の文面からDevOS / Orchestrator運用前提やGo / React / TypeScript / SQLiteなど未指定の技術スタック前提を外し、ユーザーのプロダクトコンセプトに対して中立なPRD / Architecture / Task YAMLになるよう修正しました。CLI側のartifact生成も同じ文面へ揃え、中立性回帰テストを追加しました。
 - UIのworker起動導線とSetup Wizardからsimulation/fake実行ボタンを外し、`Build with Codex` / Real Codex系actionだけを表示するようにしました。UI API clientとHTTP APIのadapter省略時defaultも `real-codex` に寄せ、Playwright E2Eはfake経路を押さずにReal Codex payloadとsimulation非表示を検証する形へ更新しました。
 - Simulation実行後のmergeが実Git専用処理へ流れ、疑似head commitが見つからずblockedになる設計不備を修正しました。merge処理はreal commitがある場合はreal git merge、simulation由来のsynthetic headの場合はfake merge workerへ自動フォールバックしてmergedまで進めます。UIへblocked/retry状態を出す変更は撤回し、人間操作を要求しない導線に戻しました。追加検証: `pnpm --dir ui test`、`pnpm --dir ui e2e`、`go test ./...`。

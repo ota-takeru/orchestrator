@@ -12,10 +12,10 @@ func TestRegisteredMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 14 {
-		t.Fatalf("migration count = %d, want 14", len(migrations))
+	if len(migrations) != 15 {
+		t.Fatalf("migration count = %d, want 15", len(migrations))
 	}
-	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 || migrations[7].Version != 8 || migrations[8].Version != 9 || migrations[9].Version != 10 || migrations[10].Version != 11 || migrations[11].Version != 12 || migrations[12].Version != 13 || migrations[13].Version != 14 {
+	if migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 || migrations[7].Version != 8 || migrations[8].Version != 9 || migrations[9].Version != 10 || migrations[10].Version != 11 || migrations[11].Version != 12 || migrations[12].Version != 13 || migrations[13].Version != 14 || migrations[14].Version != 15 {
 		t.Fatalf("unexpected migration versions: %#v", migrations)
 	}
 }
@@ -103,6 +103,19 @@ func TestMigration014AddsDependencyRiskLedger(t *testing.T) {
 	for _, token := range []string{"CREATE TABLE dependency_risk_ledger", "package_manager", "approved_scope", "idx_dependency_risk_ledger_project"} {
 		if !strings.Contains(sql, token) {
 			t.Fatalf("migration 014 missing %q", token)
+		}
+	}
+}
+
+func TestMigration015AddsUnderstandingApprovalPackets(t *testing.T) {
+	migrations, err := RegisteredMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := migrations[14].SQL
+	for _, token := range []string{"CREATE TABLE intent_items", "CREATE TABLE understanding_snapshots", "CREATE TABLE approval_packets", "idx_approval_packets_source", "'L4'"} {
+		if !strings.Contains(sql, token) {
+			t.Fatalf("migration 015 missing %q", token)
 		}
 	}
 }

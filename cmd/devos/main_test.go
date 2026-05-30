@@ -249,7 +249,7 @@ func TestPlanStartCLIWorkflow(t *testing.T) {
 	initGitRepo(t, projectRoot)
 
 	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Plan start workflow")
-	runCLI(t, "request", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "Today Viewを追加して")
+	runCLI(t, "request", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "UX layout directionを変えたい")
 	out := runCLI(t, "plan", "start", "--project-root", projectRoot, "--data-root", dataRoot, "--concurrency", "2", "--json")
 	var started storage.PlanStartResult
 	decodeJSON(t, out, &started)

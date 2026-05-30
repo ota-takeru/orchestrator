@@ -44,23 +44,25 @@ type SetupActionResult struct {
 }
 
 type ProjectDashboardData struct {
-	Snapshot            HumanInboxSnapshot             `json:"snapshot"`
-	Tasks               []TaskRecord                   `json:"tasks"`
-	FeatureRequests     []FeatureRequestRecord         `json:"feature_requests"`
-	QueueItems          []WorkQueueItemRecord          `json:"queue_items"`
-	WorkStatus          WorkStatus                     `json:"work_status"`
-	PlanningStatus      PlanningStatus                 `json:"planning_status"`
-	ChangeRequests      []ChangeRequestRecord          `json:"change_requests"`
-	DependencyRisks     []DependencyRiskRecord         `json:"dependency_risks"`
-	Decisions           []DecisionRecord               `json:"decisions"`
-	BaselineIssues      []MemoryRecord                 `json:"baseline_issues"`
-	Artifacts           []ArtifactRecord               `json:"artifacts"`
-	TrustedArtifacts    []TrustedArtifactContentRecord `json:"trusted_artifacts"`
-	PathMappings        []PathMappingRecord            `json:"path_mappings"`
-	ToolchainSetupCards []ToolchainSetupInstructions   `json:"toolchain_setup_cards"`
-	MergeStatus         MergeGateStatus                `json:"merge_status"`
-	ProjectViolations   []InvariantViolation           `json:"project_violations"`
-	SetupStatus         SetupStatus                    `json:"setup_status"`
+	Snapshot               HumanInboxSnapshot             `json:"snapshot"`
+	Tasks                  []TaskRecord                   `json:"tasks"`
+	FeatureRequests        []FeatureRequestRecord         `json:"feature_requests"`
+	QueueItems             []WorkQueueItemRecord          `json:"queue_items"`
+	WorkStatus             WorkStatus                     `json:"work_status"`
+	PlanningStatus         PlanningStatus                 `json:"planning_status"`
+	ChangeRequests         []ChangeRequestRecord          `json:"change_requests"`
+	DependencyRisks        []DependencyRiskRecord         `json:"dependency_risks"`
+	Decisions              []DecisionRecord               `json:"decisions"`
+	UnderstandingSnapshots []UnderstandingSnapshotRecord  `json:"understanding_snapshots"`
+	ApprovalPackets        []ApprovalPacketRecord         `json:"approval_packets"`
+	BaselineIssues         []MemoryRecord                 `json:"baseline_issues"`
+	Artifacts              []ArtifactRecord               `json:"artifacts"`
+	TrustedArtifacts       []TrustedArtifactContentRecord `json:"trusted_artifacts"`
+	PathMappings           []PathMappingRecord            `json:"path_mappings"`
+	ToolchainSetupCards    []ToolchainSetupInstructions   `json:"toolchain_setup_cards"`
+	MergeStatus            MergeGateStatus                `json:"merge_status"`
+	ProjectViolations      []InvariantViolation           `json:"project_violations"`
+	SetupStatus            SetupStatus                    `json:"setup_status"`
 }
 
 type TaskRunArtifact struct {
@@ -118,6 +120,14 @@ func (db *DB) LoadProjectDashboard(ctx context.Context, projectID string, limit 
 	if err != nil {
 		return ProjectDashboardData{}, err
 	}
+	understandingSnapshots, err := db.ListUnderstandingSnapshots(ctx, projectID)
+	if err != nil {
+		return ProjectDashboardData{}, err
+	}
+	approvalPackets, err := db.ListApprovalPackets(ctx, projectID, "")
+	if err != nil {
+		return ProjectDashboardData{}, err
+	}
 	baseline, err := db.ListMemories(ctx, projectID, "baseline_issue")
 	if err != nil {
 		return ProjectDashboardData{}, err
@@ -151,23 +161,25 @@ func (db *DB) LoadProjectDashboard(ctx context.Context, projectID string, limit 
 		return ProjectDashboardData{}, err
 	}
 	return ProjectDashboardData{
-		Snapshot:            snapshot,
-		Tasks:               tasks,
-		FeatureRequests:     requests,
-		QueueItems:          queue,
-		WorkStatus:          work,
-		PlanningStatus:      planning,
-		ChangeRequests:      changes,
-		DependencyRisks:     risks,
-		Decisions:           decisions,
-		BaselineIssues:      baseline,
-		Artifacts:           artifacts,
-		TrustedArtifacts:    trusted,
-		PathMappings:        mappings,
-		ToolchainSetupCards: cards,
-		MergeStatus:         mergeStatus,
-		ProjectViolations:   violations,
-		SetupStatus:         setup,
+		Snapshot:               snapshot,
+		Tasks:                  tasks,
+		FeatureRequests:        requests,
+		QueueItems:             queue,
+		WorkStatus:             work,
+		PlanningStatus:         planning,
+		ChangeRequests:         changes,
+		DependencyRisks:        risks,
+		Decisions:              decisions,
+		UnderstandingSnapshots: understandingSnapshots,
+		ApprovalPackets:        approvalPackets,
+		BaselineIssues:         baseline,
+		Artifacts:              artifacts,
+		TrustedArtifacts:       trusted,
+		PathMappings:           mappings,
+		ToolchainSetupCards:    cards,
+		MergeStatus:            mergeStatus,
+		ProjectViolations:      violations,
+		SetupStatus:            setup,
 	}, nil
 }
 

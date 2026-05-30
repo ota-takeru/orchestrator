@@ -277,6 +277,14 @@ func TestProjectsAPICreatesProjectFromUI(t *testing.T) {
 		Artifacts []struct {
 			ArtifactType string `json:"artifact_type"`
 		} `json:"artifacts"`
+		UnderstandingSnapshot struct {
+			ID string `json:"id"`
+		} `json:"understanding_snapshot"`
+		ApprovalPacket struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"approval_packet"`
+		NextAction string `json:"next_action"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
@@ -287,10 +295,13 @@ func TestProjectsAPICreatesProjectFromUI(t *testing.T) {
 	if created.Project.ProjectRoot != root {
 		t.Fatalf("project root = %s", created.Project.ProjectRoot)
 	}
-	if len(created.Artifacts) != 4 {
+	if len(created.Artifacts) != 0 {
 		t.Fatalf("artifacts = %#v", created.Artifacts)
 	}
-	for _, rel := range []string{".git", ".gitattributes", ".gitignore", ".devagent/concept.md", ".devagent/prd.md", ".devagent/architecture.md", ".devagent/roadmap.yaml", ".devagent/tasks/TASK-001.yaml", "orchestrator-data/devos.sqlite"} {
+	if created.UnderstandingSnapshot.ID == "" || created.ApprovalPacket.ID == "" || created.ApprovalPacket.Status != "open" || created.NextAction != "review_project_understanding" {
+		t.Fatalf("understanding response = snapshot:%#v packet:%#v next:%s", created.UnderstandingSnapshot, created.ApprovalPacket, created.NextAction)
+	}
+	for _, rel := range []string{".git", ".gitattributes", ".gitignore", ".devagent/concept.md", "orchestrator-data/devos.sqlite"} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
@@ -501,6 +512,15 @@ func (a apiFakeAuthority) Snapshot(context.Context, registry.RegisteredProject) 
 }
 func (a apiFakeAuthority) Dashboard(context.Context, registry.RegisteredProject) (storage.ProjectDashboardData, error) {
 	return storage.ProjectDashboardData{Snapshot: projecthub.ProjectSnapshot{ProjectID: a.name}}, nil
+}
+func (a apiFakeAuthority) Understanding(context.Context, registry.RegisteredProject) (any, error) {
+	return map[string]any{"understanding_snapshots": []any{a.name}}, nil
+}
+func (a apiFakeAuthority) ApprovalPackets(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"approval_packets": []any{a.name}}, nil
+}
+func (a apiFakeAuthority) ApproveApprovalPacket(context.Context, registry.RegisteredProject, string, string, string) (any, error) {
+	return map[string]any{"ok": a.name}, nil
 }
 func (a apiFakeAuthority) Tasks(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"tasks": []any{a.name}}, nil

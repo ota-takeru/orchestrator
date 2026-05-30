@@ -1,8 +1,9 @@
 import { AlertTriangle, Check, FileCheck2, FolderOpen, GitMerge, Inbox, ListChecks, MoreHorizontal, Pencil, Plus, RefreshCcw, Route, ServerCog, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, processRealGitMerge, requestDependencyApproval, reviseArtifact, reviseArtifactWithCodex, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
-import type { ArtifactRecord, CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, TaskRecord, WorkQueueItem } from "./types";
+import { approveApprovalPacket, approveArtifact, approveInboxItem, createChangeRequest, createFeatureRequest, createProject, loadDashboardData, loadProjects, loadTaskArtifacts, materializeTasks, pickProjectPath, processRealGitMerge, requestDependencyApproval, reviseArtifact, reviseArtifactWithCodex, runChangeRequestAction, runSetupAction, runTaskAction, saveEnvBinding, startWork, suggestProjectPath } from "./api";
+import { UnderstandingPanel } from "./components/UnderstandingPanel";
+import type { ApprovalPacket, ArtifactRecord, CurrentProject, DashboardData, Decision, InboxItem, MemoryRecord, ProjectPathSuggestion, ProjectRuntimeOption, RegisteredProject, SnapshotCounts, TaskArtifact, TaskRecord, WorkQueueItem } from "./types";
 
 const countRows: Array<{
   key: keyof SnapshotCounts;
@@ -43,6 +44,7 @@ function App() {
   const [openingProjectPath, setOpeningProjectPath] = useState(false);
   const [newProjectActioning, setNewProjectActioning] = useState(false);
   const [approving, setApproving] = useState<string>("");
+  const [approvalPacketActioning, setApprovalPacketActioning] = useState("");
   const [featureText, setFeatureText] = useState("");
   const [changeText, setChangeText] = useState("");
   const [envKey, setEnvKey] = useState("");
@@ -197,7 +199,7 @@ function App() {
         concept: newProjectConcept,
         authority_runtime: newProjectRuntime,
         wsl_distro: newProjectWslDistro,
-        generate_initial_artifacts: true
+        generate_initial_artifacts: false
       });
 
       setLastCreatedProject(result.project);
@@ -237,7 +239,7 @@ function App() {
     setApproving(item.id);
     setError("");
     try {
-      const option = item.source_type === "decision" ? firstDecisionOption(data?.decisions ?? [], item.source_id) : undefined;
+      const option = item.source_type === "decision" ? firstDecisionOption(data?.decisions ?? [], item.source_id) : item.source_type === "approval_packet" ? "approve_recommended" : undefined;
       await approveInboxItem(item.id, "Approved from DevOS UI", option, selectedProjectID || undefined);
       await refresh();
     } catch (err) {
@@ -317,6 +319,21 @@ function App() {
       setError(err instanceof Error ? err.message : "Artifact review failed");
     } finally {
       setArtifactActioning("");
+    }
+  };
+
+  const submitApprovalPacket = async (packetID: string, option: "approve_recommended" | "request_changes" | "cancel") => {
+    setApprovalPacketActioning(packetID);
+    setError("");
+    setNotice("");
+    try {
+      await approveApprovalPacket(packetID, option, option === "approve_recommended" ? "Approved from DevOS UI" : "Requested from DevOS UI", selectedProjectID || undefined);
+      await refresh();
+      setNotice(option === "approve_recommended" ? "Understanding packet approved." : "Understanding packet updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Approval packet action failed");
+    } finally {
+      setApprovalPacketActioning("");
     }
   };
 
@@ -565,6 +582,8 @@ function App() {
               onMaterializeTasks={submitMaterializeTasks}
               mergeActioning={mergeActioning}
               onProcessMerge={submitProcessMerge}
+              approvalPacketActioning={approvalPacketActioning}
+              onApprovePacket={submitApprovalPacket}
             />
           ) : (
             <LoadingPanel />
@@ -725,7 +744,9 @@ function SelectedProjectDashboard({
   onCodexReviseArtifact,
   onMaterializeTasks,
   mergeActioning,
-  onProcessMerge
+  onProcessMerge,
+  approvalPacketActioning,
+  onApprovePacket
 }: {
   data: DashboardData;
   selectedProject?: RegisteredProject | CurrentProject;
@@ -750,6 +771,8 @@ function SelectedProjectDashboard({
   onMaterializeTasks: () => void;
   mergeActioning: string;
   onProcessMerge: (entryID: string) => void;
+  approvalPacketActioning: string;
+  onApprovePacket: (packetID: string, option: "approve_recommended" | "request_changes" | "cancel") => void;
 }) {
   const hasPendingArtifacts = data.artifacts.some((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
   const hasMaterializedTasks = data.tasks.length > 0 || data.queueItems.some((item) => item.item_type === "task_implementation");
@@ -775,13 +798,16 @@ function SelectedProjectDashboard({
         workActioning={workActioning}
         mergeActioning={mergeActioning}
         selectedArtifactTaskID={selectedArtifactTaskID}
+        approvalPacketActioning={approvalPacketActioning}
         onReviewAllArtifacts={onReviewAllArtifacts}
         onMaterializeTasks={onMaterializeTasks}
         onStartWork={onStartWork}
         onOpenTaskArtifacts={onOpenTaskArtifacts}
         onTaskAction={onTaskAction}
         onProcessMerge={onProcessMerge}
+        onApprovePacket={onApprovePacket}
       />
+      <UnderstandingPanel snapshots={data.understandingSnapshots} packets={data.approvalPackets} actioning={approvalPacketActioning} onApprovePacket={onApprovePacket} />
       {hasMaterializedTasks ? (
         <>
           <ReadyToRunPanel
@@ -822,7 +848,7 @@ function SelectedProjectDashboard({
         </>
       )}
       <Summary counts={data.snapshot.counts} generatedAt={data.snapshot.generated_at} lastMergeAt={data.snapshot.last_successful_merge_at} />
-      <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approving={approving} onApprove={onApprove} />
+      <InboxPanel items={data.snapshot.open_inbox_items} decisions={data.decisions} approvalPackets={data.approvalPackets} approving={approving} onApprove={onApprove} />
       <RequestQueuePanel requests={data.featureRequests} queueItems={data.queueItems} featureText={featureText} setFeatureText={setFeatureText} onSubmitFeature={onSubmitFeature} />
     </>
   );
@@ -835,12 +861,14 @@ function WorkflowStepsPanel({
   workActioning,
   mergeActioning,
   selectedArtifactTaskID,
+  approvalPacketActioning,
   onReviewAllArtifacts,
   onMaterializeTasks,
   onStartWork,
   onOpenTaskArtifacts,
   onTaskAction,
-  onProcessMerge
+  onProcessMerge,
+  onApprovePacket
 }: {
   data: DashboardData;
   artifactActioning: string;
@@ -848,13 +876,16 @@ function WorkflowStepsPanel({
   workActioning: string;
   mergeActioning: string;
   selectedArtifactTaskID: string;
+  approvalPacketActioning: string;
   onReviewAllArtifacts: () => void;
   onMaterializeTasks: () => void;
   onStartWork: (adapter: "real-codex") => void;
   onOpenTaskArtifacts: (taskID: string) => void;
   onTaskAction: (taskID: string, action: "verify" | "review-approve" | "review-reject" | "merge-approve") => void;
   onProcessMerge: (entryID: string) => void;
+  onApprovePacket: (packetID: string, option: "approve_recommended" | "request_changes" | "cancel") => void;
 }) {
+  const openApprovalPacket = data.approvalPackets.find((packet) => packet.status === "open");
   const pendingArtifacts = data.artifacts.filter((artifact) => artifact.latest_version && artifact.approved_version !== artifact.latest_version && artifact.status !== "approved");
   const executionQueueItems = data.queueItems.filter(isQueuedExecutionItem);
   const reviewTask = data.tasks.find(isWaitingForImplementationReview);
@@ -863,29 +894,38 @@ function WorkflowStepsPanel({
   const mergeEntry = data.mergeStatus.queue.find((entry) => entry.task_id === queuedMergeTask?.id) ?? data.mergeStatus.queue[0];
   const allMerged = data.tasks.length > 0 && data.tasks.every((task) => task.status === "merged");
   const activeStep =
-    pendingArtifacts.length > 0
+    openApprovalPacket
       ? 1
-      : data.tasks.length === 0
+      : pendingArtifacts.length > 0
         ? 2
-        : executionQueueItems.length > 0
+        : data.tasks.length === 0
           ? 3
-          : reviewTask
+          : executionQueueItems.length > 0
             ? 4
-            : mergeApprovalTask || queuedMergeTask
+            : reviewTask
               ? 5
-              : allMerged
-                ? 6
-                : 3;
+              : mergeApprovalTask || queuedMergeTask
+                ? 5
+                : allMerged
+                  ? 6
+                  : 4;
   const steps = [
-    { label: "Project", done: data.artifacts.length > 0 || data.tasks.length > 0 },
-    { label: "Plan review", done: data.artifacts.length > 0 && pendingArtifacts.length === 0 },
+    { label: "Understanding", done: data.understandingSnapshots.length > 0 && !openApprovalPacket },
+    { label: "Artifact review", done: data.artifacts.length > 0 && pendingArtifacts.length === 0 },
     { label: "Task", done: data.tasks.length > 0 },
     { label: "Implementation", done: Boolean(reviewTask || mergeApprovalTask || queuedMergeTask || allMerged) },
-    { label: "Human review", done: Boolean(mergeApprovalTask || queuedMergeTask || allMerged) },
-    { label: "Merged", done: allMerged }
+    { label: "Review", done: Boolean(mergeApprovalTask || queuedMergeTask || allMerged) },
+    { label: "Merge", done: allMerged }
   ];
-  const busy = artifactActioning !== "" || taskActioning !== "" || workActioning !== "" || mergeActioning !== "";
+  const busy = approvalPacketActioning !== "" || artifactActioning !== "" || taskActioning !== "" || workActioning !== "" || mergeActioning !== "";
   const primaryAction = (() => {
+    if (openApprovalPacket) {
+      return (
+        <button type="button" onClick={() => onApprovePacket(openApprovalPacket.id, "approve_recommended")} disabled={busy}>
+          {approvalPacketActioning === openApprovalPacket.id ? "Approving understanding" : "Approve understanding"}
+        </button>
+      );
+    }
     if (pendingArtifacts.length > 0) {
       return (
         <button type="button" onClick={onReviewAllArtifacts} disabled={busy}>
@@ -1624,15 +1664,18 @@ function Summary({ counts, generatedAt, lastMergeAt }: { counts: SnapshotCounts;
 function InboxPanel({
   items,
   decisions,
+  approvalPackets,
   approving,
   onApprove
 }: {
   items: InboxItem[];
   decisions: Decision[];
+  approvalPackets: ApprovalPacket[];
   approving: string;
   onApprove: (item: InboxItem) => void;
 }) {
   const decisionOptions = new Map(decisions.map((decision) => [decision.id, decision.options?.[0]?.id ?? ""]));
+  const packetMap = new Map(approvalPackets.map((packet) => [packet.id, packet]));
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -1670,11 +1713,12 @@ function InboxPanel({
                   <td>
                     <div className="item-title">{item.title}</div>
                     <div className="item-body">{item.body}</div>
-                    <div className="item-body">Recommended: {recommendedInboxAction(item, decisions)}</div>
+                    {item.source_type === "approval_packet" ? <ApprovalPacketInboxDetail packet={packetMap.get(item.source_id ?? "")} /> : null}
+                    <div className="item-body">Recommended: {recommendedInboxAction(item, decisions, approvalPackets)}</div>
                   </td>
                   <td>{item.source_type}</td>
                   <td className="row-action">
-                    {item.source_type === "human_approval" || (item.source_type === "decision" && decisionOptions.get(item.source_id ?? "")) ? (
+                    {item.source_type === "human_approval" || item.source_type === "approval_packet" || (item.source_type === "decision" && decisionOptions.get(item.source_id ?? "")) ? (
                       <button className="icon-button small" onClick={() => onApprove(item)} disabled={approving === item.id} title="Approve" aria-label={`Approve ${item.id}`}>
                         <Check size={16} />
                       </button>
@@ -1687,6 +1731,19 @@ function InboxPanel({
         </table>
       </div>
     </section>
+  );
+}
+
+function ApprovalPacketInboxDetail({ packet }: { packet?: ApprovalPacket }) {
+  if (!packet) return null;
+  const scope = packet.summary.proposed_scope;
+  return (
+    <div className="item-body">
+      <span>{packet.risk_level}</span>
+      {scope?.included?.length ? <span> / Scope: {scope.included.join(", ")}</span> : null}
+      {packet.summary.assumptions?.length ? <span> / Assumptions: {packet.summary.assumptions.map((item) => item.text).join(", ")}</span> : null}
+      {packet.summary.open_questions?.length ? <span> / Questions: {packet.summary.open_questions.map((item) => item.question).join(", ")}</span> : null}
+    </div>
   );
 }
 
@@ -2381,10 +2438,14 @@ function firstDecisionOption(decisions: Decision[], decisionID?: string) {
   return decisions.find((decision) => decision.id === decisionID)?.options?.[0]?.id;
 }
 
-function recommendedInboxAction(item: InboxItem, decisions: Decision[]) {
+function recommendedInboxAction(item: InboxItem, decisions: Decision[], approvalPackets: ApprovalPacket[]) {
   if (item.source_type === "decision") {
     const option = decisions.find((decision) => decision.id === item.source_id)?.options?.[0]?.label;
     return option ? `choose ${option}` : "open the related decision";
+  }
+  if (item.source_type === "approval_packet") {
+    const packet = approvalPackets.find((candidate) => candidate.id === item.source_id);
+    return packet?.summary.recommendation.reason ?? "approve the understanding packet";
   }
   if (item.source_type === "human_approval") {
     return "review evidence, then approve or request changes";

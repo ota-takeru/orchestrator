@@ -6,6 +6,7 @@ import type {
   DependencyRisk,
   FeatureRequest,
   ArtifactRecord,
+  ApprovalPacket,
   HumanInboxSnapshot,
   InvariantViolation,
   MemoryRecord,
@@ -92,6 +93,8 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     changeRequestBody,
     dependencyRiskBody,
     decisionBody,
+    understandingBody,
+    approvalPacketBody,
     memoryBody,
     artifactsBody,
     artifactBody,
@@ -110,6 +113,8 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     getJSON<{ change_requests?: ChangeRequest[] | null }>("/api/change-requests"),
     getJSON<{ risks?: DependencyRisk[] | null }>("/api/dependency-risks"),
     getJSON<{ decisions?: Decision[] | null }>("/api/decisions?status=open"),
+    getJSON<{ understanding_snapshots?: DashboardWireData["understanding_snapshots"] | null }>("/api/understanding"),
+    getJSON<{ approval_packets?: ApprovalPacket[] | null }>("/api/approval-packets"),
     getJSON<{ memories?: MemoryRecord[] | null }>("/api/memory?type=baseline_issue"),
     getJSON<{ artifacts?: ArtifactRecord[] | null }>("/api/artifacts"),
     getJSON<{ artifacts?: TrustedArtifact[] | null }>("/api/artifacts/trusted"),
@@ -130,6 +135,8 @@ export async function loadDashboardData(projectID?: string): Promise<DashboardDa
     change_requests: changeRequestBody.change_requests ?? [],
     dependency_risks: dependencyRiskBody.risks ?? [],
     decisions: decisionBody.decisions ?? [],
+    understanding_snapshots: understandingBody.understanding_snapshots ?? [],
+    approval_packets: approvalPacketBody.approval_packets ?? [],
     baseline_issues: memoryBody.memories ?? [],
     artifacts: artifactsBody.artifacts ?? [],
     trusted_artifacts: artifactBody.artifacts ?? [],
@@ -161,6 +168,13 @@ export async function approveInboxItem(id: string, notes: string, option?: strin
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
+}
+
+export async function approveApprovalPacket(packetID: string, option = "approve_recommended", notes = "Approved from DevOS UI", projectID?: string): Promise<void> {
+  const path = projectID
+    ? `/api/projects/${encodeURIComponent(projectID)}/approval-packets/${encodeURIComponent(packetID)}/approve`
+    : `/api/approval-packets/${encodeURIComponent(packetID)}/approve`;
+  await postJSON(path, { option, notes });
 }
 
 export async function createFeatureRequest(text: string, projectID?: string): Promise<void> {
@@ -386,6 +400,8 @@ function normalizeDashboard(data: DashboardWireData): DashboardData {
     changeRequests: data.change_requests ?? [],
     dependencyRisks: data.dependency_risks ?? [],
     decisions: data.decisions ?? [],
+    understandingSnapshots: data.understanding_snapshots ?? [],
+    approvalPackets: data.approval_packets ?? [],
     baselineIssues: data.baseline_issues ?? [],
     artifacts: data.artifacts ?? [],
     trustedArtifacts: data.trusted_artifacts ?? [],

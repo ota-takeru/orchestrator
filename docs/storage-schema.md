@@ -90,6 +90,16 @@ Migration 005 policy / memory / dependency:
 - `memories`
 - `dependency_risk_ledger`
 
+Migration 015 understanding-first intake:
+
+- `intent_items`
+- `understanding_snapshots`
+- `proposal_batches`
+- `proposal_deltas`
+- `approval_packets`
+
+このsliceはDB schema変更を伴う正規スコープです。新しい本番依存パッケージは追加しません。
+
 Migration 001内では `change_requests`、`feature_requests`、`task_groups` を `tasks` より前に作成します。`feature_requests.change_request_id -> change_requests(id)` と `tasks.task_group_id -> task_groups(id)` の親tableが存在しない状態でINSERTする危険を避けるため、planning workerの実装は後続migrationでも、FK親になるtableはcore migrationへ前倒しします。`task_dependencies` は `tasks` 作成後に作成します。
 
 ## Core CHECK Values
@@ -579,9 +589,23 @@ InboxSourceType:
 
 ```sql
 source_type TEXT NOT NULL CHECK (
-  source_type IN ('decision', 'human_approval', 'environment_requirement', 'environment_binding', 'gate_result', 'verification_result', 'change_request', 'merge_conflict', 'dependency', 'patch_application', 'execution_environment', 'path_mapping', 'toolchain_requirement', 'run_profile')
+  source_type IN ('decision', 'human_approval', 'approval_packet', 'environment_requirement', 'environment_binding', 'gate_result', 'verification_result', 'change_request', 'merge_conflict', 'dependency', 'patch_application', 'execution_environment', 'path_mapping', 'toolchain_requirement', 'run_profile')
 )
 ```
+
+Understanding / Approval Packet values:
+
+```sql
+risk_level TEXT NOT NULL CHECK (risk_level IN ('L0', 'L1', 'L2', 'L3', 'L4'));
+recommended_go_mode TEXT NOT NULL CHECK (
+  recommended_go_mode IN ('no_gate', 'implement_with_assumptions', 'approval_before_implementation', 'approval_before_canonical_artifact_update', 'hard_gate')
+);
+approval_packets.status TEXT NOT NULL CHECK (
+  status IN ('open', 'approved', 'approved_with_notes', 'rejected', 'superseded', 'cancelled')
+);
+```
+
+`approval_packets.source_type/source_id` は `initial_concept`、`feature_request`、`change_request`、`planning_consolidation` を指すpolymorphic referenceです。`source_type='approval_packet'` の `inbox_items` は表示projectionであり、source of truthは `approval_packets` です。
 
 EnvironmentRequirementStatus:
 
@@ -1061,6 +1085,16 @@ SQLiteにはJSONをTEXTで保存します。保存前にGo structへdecodeし、
 | `planning_artifacts.artifact_snapshot_json` | `PlanningSnapshot` |
 | `decision_report_drafts.content_json` | `.devagent/schemas/decision-report-draft.schema.json` |
 | `decision_report_drafts.artifact_snapshot_json` | `PlanningSnapshot` |
+| `understanding_snapshots.interpreted_goal_json` | `string[]` |
+| `understanding_snapshots.assumptions_json` | `UnderstandingAssumption[]` |
+| `understanding_snapshots.open_questions_json` | `UnderstandingOpenQuestion[]` |
+| `understanding_snapshots.affected_context_json` | `AffectedContext` |
+| `understanding_snapshots.risk_json` | `RiskAssessment` |
+| `proposal_batches.intent_item_ids_json` | `IntentItemID[]` |
+| `proposal_batches.summary_json` | `ProposalBatchSummary` |
+| `proposal_deltas.delta_json` | `ProposalDelta` |
+| `approval_packets.summary_json` | `ApprovalPacketSummary` |
+| `approval_packets.options_json` | `DecisionOption[]` |
 | `work_queue_items.error_json` | `WorkQueueError` |
 | `patch_applications.evidence_json` | `PatchApplicationEvidence` |
 

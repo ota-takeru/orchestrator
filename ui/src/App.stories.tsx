@@ -73,6 +73,8 @@ const dashboard: DashboardWireData = {
   change_requests: [],
   dependency_risks: [],
   decisions: [],
+  understanding_snapshots: [],
+  approval_packets: [],
   baseline_issues: [],
   artifacts: [],
   trusted_artifacts: [],
@@ -138,6 +140,8 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (url.pathname === "/api/change-requests") return json({ change_requests: dashboard.change_requests });
   if (url.pathname === "/api/dependency-risks") return json({ risks: dashboard.dependency_risks });
   if (url.pathname === "/api/decisions") return json({ decisions: dashboard.decisions });
+  if (url.pathname === "/api/understanding") return json({ understanding_snapshots: dashboard.understanding_snapshots });
+  if (url.pathname === "/api/approval-packets") return json({ approval_packets: dashboard.approval_packets });
   if (url.pathname === "/api/memory") return json({ memories: dashboard.baseline_issues });
   if (url.pathname === "/api/artifacts") return json({ artifacts: dashboard.artifacts });
   if (url.pathname === "/api/artifacts/trusted") return json({ artifacts: dashboard.trusted_artifacts });

@@ -56,22 +56,25 @@ Needs Your Judgment:
 4. Decision Report View
    判断理由、推奨、選択肢、証拠、影響を表示する。
 
-5. Semantic Diff Review
+5. Understanding Review
+   Intent、Understanding Snapshot、Approval Packetを表示し、scope、non-goals、assumptions、open questions、risk、affected contextを承認前に確認する。
+
+6. Semantic Diff Review
    生diffではなく、仕様、ファイル、リスク別に整理したdiffを表示する。
 
-6. Change Request Center
+7. Change Request Center
    後から変更したいことを入力し、影響分析と反映案を見る。
 
-7. Policy / Preference Editor
+8. Policy / Preference Editor
    どこまで自動承認するか、何を必ず止めるかを管理する。
 
-8. Run Trace / Logs
+9. Run Trace / Logs
    必要時だけ掘る詳細ログ。
 
-9. Environment Input
+10. Environment Input
    不足している環境変数を人間が入力し、保存後に該当runを再実行する。詳細は [environment-variables.md](environment-variables.md) を参照する。
 
-10. Platform Setup
+11. Platform Setup
     primary environment、runner capability、path mapping、toolchain setupをHuman Inboxで分離して扱う。
 
 ## Request Queue View
@@ -163,6 +166,9 @@ UI/APIの最小取得面は次です。
 - `GET /api/inbox?status=open`: Inbox projectionを一覧する。
 - `POST /api/inbox/{id}/approve`: Inbox itemを承認済みにする。承認は副作用を直接実行しない。
 - `GET /api/decisions?status=open`: Decision sourceを一覧する。
+- `GET /api/understanding`: Understanding Snapshotを一覧する。
+- `GET /api/approval-packets`: Approval Packetを一覧する。
+- `POST /api/approval-packets/{id}/approve`: `{ option, notes }` でApproval Packetを解決する。
 - `GET /api/memory?type=baseline_issue`: Baseline Issue Reportとして保存されたmemoryを一覧する。
 
 実装済みのHuman Inbox dashboardは、上記に加えて次のread surfaceを同一画面へ集約します。
@@ -191,6 +197,7 @@ UI/APIの最小取得面は次です。
 
 - Autonomy Status
 - Needs Attention / Human Inbox
+- Understanding Review
 - Request Queue
 - Work And Planning
 - Tasks
@@ -209,6 +216,8 @@ UI/APIの最小取得面は次です。
 source of truth:
 
 - `decisions`
+- `approval_packets`
+- `understanding_snapshots`
 - `human_approvals`
 - `environment_bindings`
 - `gate_results`

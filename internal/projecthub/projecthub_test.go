@@ -269,6 +269,15 @@ func (f fakeAuthority) Snapshot(context.Context, registry.RegisteredProject) (Pr
 func (f fakeAuthority) Dashboard(context.Context, registry.RegisteredProject) (storage.ProjectDashboardData, error) {
 	return storage.ProjectDashboardData{Snapshot: ProjectSnapshot{ProjectID: f.name}}, nil
 }
+func (f fakeAuthority) Understanding(context.Context, registry.RegisteredProject) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
+func (f fakeAuthority) ApprovalPackets(context.Context, registry.RegisteredProject, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
+func (f fakeAuthority) ApproveApprovalPacket(context.Context, registry.RegisteredProject, string, string, string) (any, error) {
+	return map[string]any{"name": f.name}, nil
+}
 func (f fakeAuthority) Tasks(context.Context, registry.RegisteredProject) (any, error) {
 	return map[string]any{"name": f.name}, nil
 }

@@ -30,6 +30,9 @@
 
 ```text
 Human Request
+  -> Intent Item
+  -> Understanding Snapshot
+  -> Approval Packet if required
   -> Feature Request
   -> Parallel Planning Lane
   -> Planning Consolidation
@@ -47,6 +50,23 @@ Feature Requestは、必ずしも即座にChange Requestになるとは限りま
 | PRD / Architectureに影響する | Change Requestを作る |
 | DB / auth / external API / dependency / personal dataに影響する | Change Request + Decision Gate必須 |
 | 複数機能が混ざる | 複数Feature RequestまたはTask Groupへ分ける |
+
+Understanding-first rule:
+
+- `POST /api/projects` は初期artifactを即生成せず、`initial_concept` Intent、Understanding Snapshot、Approval Packet、Human Inbox itemを作る。
+- Approval Packet承認後に初期PRD / Architecture / Roadmap / Task YAMLを `proposed` artifactとして生成する。
+- `CreateFeatureRequest` はFeature Requestと同時にIntentを作る。Planning時は必ずUnderstanding Snapshot由来の構造化reportを生成する。
+- `feature_detail_report`、`impact_analysis_report`、`task_group_proposal`、`risk_report` はsnapshotのgoal、scope、assumption、open question、affected context、riskをJSONとして保持する。
+
+Risk gate:
+
+| Risk | Handling |
+| --- | --- |
+| `L0` | gateなし。証跡だけ保存する |
+| `L1` | report-only。実装は止めない |
+| `L2` | implementation前にApproval Packet承認が必要 |
+| `L3` | canonical artifact/task更新前にApproval Packet承認が必要 |
+| `L4` | hard gate。ready taskを作らない |
 
 ## Lane Model
 

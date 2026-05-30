@@ -13,6 +13,26 @@
 - final reviewとmerge approvalのsource of truthは `human_approvals` であり、`inbox_items` ではない。manual applyの標準source of truthは `patch_applications` である。
 - terminal stateからの再開は直接遷移ではなく、新しいtask、change request、または明示的なretry operationとして扱う。
 
+## Understanding First Lifecycle
+
+自然文の入口は、canonical artifactやTaskを即生成せず、必ず次の順に保存します。
+
+```text
+IntentItem
+  -> UnderstandingSnapshot
+  -> ProposalBatch / ProposalDelta
+  -> ApprovalPacket
+  -> canonical artifact / task update
+```
+
+`intent_items.status` は `received -> interpreting -> interpreted/planning -> proposal_ready -> approved_for_execution` を基本とします。中止時は `cancelled`、別packetで置換された場合は `superseded`、質問が必要な場合は `needs_clarification` にします。
+
+`understanding_snapshots.status` は `draft -> proposed -> approved` を基本とし、古いsnapshotは `superseded` にします。Planning workerはread-only分析を行っても、canonical artifactやtaskを直接ready化しません。
+
+`approval_packets.status` は `open -> approved/approved_with_notes/rejected/cancelled` です。`L0` は no gate、`L1` は report-only auto-go、`L2` は実装前approval、`L3` はcanonical artifact/task更新前approval、`L4` はhard gateでありapprovalだけではready workを作ってはいけません。
+
+新規project作成時は `initial_concept` のIntent、Understanding Snapshot、Approval Packet、Human Inbox itemを作り、Approval Packet承認後に初期PRD / Architecture / Roadmap / Task YAMLを `proposed` artifactとして生成します。
+
 ## TaskStatus
 
 この文書はTaskStatusの状態一覧と許可遷移の正です。[storage-schema.md](storage-schema.md) のCHECK制約とGo enumは、この一覧を反映します。[data-model.md](data-model.md) は概念説明であり、状態遷移や正規enumの優先ソースではありません。
@@ -532,6 +552,8 @@ EnvironmentBindingStatus:
 | source resolved | matching open/snoozed itemを`resolved`へ変更 |
 | source rejected/cancelled | itemを`resolved`または`dismissed`へ変更し、理由を保持 |
 | source reopened | dedupe_keyが同じitemを再open。解決済みitemを履歴として残す場合は新itemを作る |
+
+`approval_packets.status='open'` は `source_type='approval_packet'` のInbox itemへ投影します。`risk_level='L4'` は `item_type='hard_block'`、`L2/L3` は `item_type='human_decision'` とします。`L0/L1` は原則としてopen Inboxを作らず、packetとsnapshotだけを証跡として残します。
 
 `dedupe_key` は `project_id + task_id + source_type + source_id + item_type` を基本にします。同じroot causeを複数runで共有する場合だけ `failure_signature` または `decision_type` を含めます。
 

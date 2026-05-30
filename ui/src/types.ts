@@ -49,6 +49,128 @@ export type DecisionOption = {
   description?: string;
 };
 
+export type IntentItem = {
+  id: string;
+  project_id: string;
+  source_type: string;
+  source_id?: string;
+  raw_text: string;
+  normalized_title: string;
+  status: string;
+  risk_level: "L0" | "L1" | "L2" | "L3" | "L4" | string;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Assumption = {
+  id: string;
+  text: string;
+  confidence: number;
+};
+
+export type OpenQuestion = {
+  id: string;
+  question: string;
+  required_before: string;
+};
+
+export type AffectedContext = {
+  artifacts?: string[];
+  files?: string[];
+  workflows?: string[];
+  human_inbox?: string[];
+};
+
+export type RiskAssessment = {
+  level: "L0" | "L1" | "L2" | "L3" | "L4" | string;
+  reasons: string[];
+};
+
+export type UnderstandingSnapshot = {
+  id: string;
+  project_id: string;
+  intent_item_id: string;
+  artifact_snapshot: Record<string, unknown>;
+  interpreted_goal: string[];
+  user_value: string[];
+  non_goals: string[];
+  assumptions: Assumption[];
+  open_questions: OpenQuestion[];
+  affected_context: AffectedContext;
+  risk: RiskAssessment;
+  confidence: number;
+  recommended_go_mode: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProposalBatch = {
+  id: string;
+  project_id: string;
+  intent_item_ids: string[];
+  understanding_snapshot_id: string;
+  status: string;
+  recommended_option: string;
+  summary: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
+};
+
+export type ProposalDelta = {
+  id: string;
+  project_id: string;
+  proposal_batch_id: string;
+  target_type: string;
+  target_id?: string;
+  delta: Record<string, unknown>;
+  rendered_markdown: string;
+  risk_level: string;
+  created_at: string;
+};
+
+export type ApprovalPacketSummary = {
+  one_liner: string;
+  user_value: string[];
+  existing_alignment: AffectedContext;
+  proposed_scope: {
+    included: string[];
+    excluded: string[];
+  };
+  assumptions: Assumption[];
+  open_questions: OpenQuestion[];
+  recommendation: {
+    option: string;
+    reason: string;
+  };
+  risk: RiskAssessment;
+  task_group_id?: string;
+  task_id?: string;
+  next_action: string;
+};
+
+export type ApprovalPacket = {
+  id: string;
+  project_id: string;
+  source_type: string;
+  source_id?: string;
+  understanding_snapshot_id: string;
+  proposal_batch_id: string;
+  title: string;
+  status: string;
+  summary: ApprovalPacketSummary;
+  options?: DecisionOption[];
+  recommended_option: string;
+  risk_level: "L0" | "L1" | "L2" | "L3" | "L4" | string;
+  intent_raw_text?: string;
+  intent_title?: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
+};
+
 export type MemoryRecord = {
   id: string;
   memory_type: string;
@@ -307,6 +429,8 @@ export type DashboardWireData = {
   change_requests: ChangeRequest[];
   dependency_risks: DependencyRisk[];
   decisions: Decision[];
+  understanding_snapshots: UnderstandingSnapshot[];
+  approval_packets: ApprovalPacket[];
   baseline_issues: MemoryRecord[];
   artifacts: ArtifactRecord[];
   trusted_artifacts: TrustedArtifact[];
@@ -327,6 +451,8 @@ export type DashboardData = {
   changeRequests: ChangeRequest[];
   dependencyRisks: DependencyRisk[];
   decisions: Decision[];
+  understandingSnapshots: UnderstandingSnapshot[];
+  approvalPackets: ApprovalPacket[];
   baselineIssues: MemoryRecord[];
   artifacts: ArtifactRecord[];
   trustedArtifacts: TrustedArtifact[];
@@ -380,6 +506,9 @@ export type ProjectCreateInput = {
 export type ProjectCreateResult = {
   project: RegisteredProject;
   dashboard: DashboardData;
+  understanding_snapshot?: UnderstandingSnapshot;
+  approval_packet?: ApprovalPacket;
+  next_action?: string;
 };
 
 export type ProjectPathSuggestion = {

@@ -59,6 +59,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/ui/snapshot", s.handleUISnapshot)
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/", s.handleInboxItem)
+	mux.HandleFunc("/api/understanding", s.handleUnderstanding)
+	mux.HandleFunc("/api/approval-packets", s.handleApprovalPackets)
+	mux.HandleFunc("/api/approval-packets/", s.handleApprovalPacketRoute)
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	mux.HandleFunc("/api/memory", s.handleMemory)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
@@ -494,11 +497,9 @@ func (s *Server) createProject(ctx context.Context, input projectCreateRequest) 
 		return nil, err
 	}
 	artifacts := []storage.ArtifactVersionRecord{}
-	if input.GenerateInitialArtifacts {
-		artifacts, err = saveGeneratedArtifacts(ctx, db, projectRecord.ID, initResult.ProjectRoot, artifactgen.BuildInitialArtifacts(initResult.ProjectRoot, concept, true))
-		if err != nil {
-			return nil, err
-		}
+	understanding, err := db.CreateInitialProjectUnderstanding(ctx, projectRecord.ID, concept)
+	if err != nil {
+		return nil, err
 	}
 	if err := commitInitialProjectState(ctx, initResult.ProjectRoot); err != nil {
 		return nil, err
@@ -527,13 +528,16 @@ func (s *Server) createProject(ctx context.Context, input projectCreateRequest) 
 		return nil, err
 	}
 	return map[string]any{
-		"project":          project,
-		"project_record":   projectRecord,
-		"database_path":    dbPath,
-		"init_result":      initResult,
-		"toolchain_report": toolchainReport,
-		"artifacts":        artifacts,
-		"dashboard":        dashboard,
+		"project":                project,
+		"project_record":         projectRecord,
+		"database_path":          dbPath,
+		"init_result":            initResult,
+		"toolchain_report":       toolchainReport,
+		"artifacts":              artifacts,
+		"understanding_snapshot": understanding.UnderstandingSnapshot,
+		"approval_packet":        understanding.ApprovalPacket,
+		"next_action":            "review_project_understanding",
+		"dashboard":              dashboard,
 	}, nil
 }
 
@@ -1049,7 +1053,7 @@ func saveGeneratedArtifacts(ctx context.Context, db *storage.DB, projectID strin
 		}
 		record, err := db.SaveArtifactVersion(ctx, storage.ArtifactVersionInput{
 			ProjectID:    projectID,
-			ArtifactType: artifact.Type,
+			ArtifactType: storage.ArtifactType(artifact.Type),
 			Path:         filepath.ToSlash(artifact.Path),
 			Content:      artifact.Content,
 			Status:       "proposed",
@@ -1192,6 +1196,43 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, err := authority.Dashboard(r.Context(), project)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "understanding":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.Understanding(r.Context(), project)
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 4 && action == "approval-packets":
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+			return
+		}
+		body, err := authority.ApprovalPackets(r.Context(), project, r.URL.Query().Get("status"))
+		if err != nil {
+			writeProjectHubError(w, err)
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, body)
+	case len(parts) == 6 && action == "approval-packets" && parts[5] == "approve":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+			return
+		}
+		input, ok := decodeApprovalPacketApprovalBody(w, r)
+		if !ok {
+			return
+		}
+		body, err := authority.ApproveApprovalPacket(r.Context(), project, parts[4], input.Option, input.Notes)
 		if err != nil {
 			writeProjectHubError(w, err)
 			return
@@ -1890,6 +1931,59 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleUnderstanding(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	snapshots, err := s.db.ListUnderstandingSnapshots(r.Context(), s.projectID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "understanding_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"understanding_snapshots": snapshots})
+}
+
+func (s *Server) handleApprovalPackets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	packets, err := s.db.ListApprovalPackets(r.Context(), s.projectID, r.URL.Query().Get("status"))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "approval_packets_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"approval_packets": packets})
+}
+
+func (s *Server) handleApprovalPacketRoute(w http.ResponseWriter, r *http.Request) {
+	packetID, action, ok := parseApprovalPacketActionPath(r.URL.Path)
+	if !ok || action != "approve" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "unknown approval packet action")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	input, ok := decodeApprovalPacketApprovalBody(w, r)
+	if !ok {
+		return
+	}
+	result, err := s.db.ApproveApprovalPacket(r.Context(), storage.ApprovalPacketApprovalInput{
+		ProjectID: s.projectID,
+		PacketID:  packetID,
+		Option:    input.Option,
+		Notes:     input.Notes,
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "approval_packet_approve_failed", err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
@@ -2058,6 +2152,18 @@ func parseInboxActionPath(path string) (string, string, bool) {
 	return parts[2], parts[3], true
 }
 
+func parseApprovalPacketActionPath(path string) (string, string, bool) {
+	trimmed := strings.Trim(path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "approval-packets" {
+		return "", "", false
+	}
+	if strings.TrimSpace(parts[2]) == "" || strings.TrimSpace(parts[3]) == "" {
+		return "", "", false
+	}
+	return parts[2], parts[3], true
+}
+
 func decodeTextBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 	var input struct {
 		Text string `json:"text"`
@@ -2081,6 +2187,25 @@ func decodeNotesBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return input.Notes, true
+}
+
+type approvalPacketApprovalBody struct {
+	Option string `json:"option"`
+	Notes  string `json:"notes"`
+}
+
+func decodeApprovalPacketApprovalBody(w http.ResponseWriter, r *http.Request) (approvalPacketApprovalBody, bool) {
+	var input approvalPacketApprovalBody
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return approvalPacketApprovalBody{}, false
+		}
+	}
+	if strings.TrimSpace(input.Option) == "" {
+		input.Option = "approve_recommended"
+	}
+	return input, true
 }
 
 func decodeOptionBody(w http.ResponseWriter, r *http.Request, fallback string) (string, bool) {

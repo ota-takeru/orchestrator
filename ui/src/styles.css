@@ -308,6 +308,26 @@ select {
   color: #236a48;
 }
 
+.risk-badge {
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #eef2f6;
+  color: #344054;
+}
+
+.risk-l2,
+.risk-l3 {
+  background: #fff9ea;
+  color: #8a5b00;
+}
+
+.risk-l4 {
+  background: #fff1f1;
+  color: #8a2626;
+}
+
 .status-missing,
 .status-invalid {
   background: #fff1f1;
@@ -511,6 +531,54 @@ td:nth-child(5) {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.understanding-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.understanding-header,
+.understanding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.understanding-actions {
+  justify-content: space-between;
+  border-top: 1px solid #e4e7ec;
+  padding-top: 12px;
+}
+
+.understanding-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.understanding-grid.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.understanding-grid h3 {
+  margin: 0 0 6px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.understanding-grid ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.understanding-grid li {
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+  color: #344054;
+  font-size: 13px;
 }
 
 .stack-row {
@@ -1145,6 +1213,11 @@ button:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .understanding-grid,
+  .understanding-grid.compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .split-grid,
   .form-row,
   .new-project-name-row,
@@ -1174,6 +1247,11 @@ button:disabled {
   }
 
   .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .understanding-grid,
+  .understanding-grid.compact {
     grid-template-columns: 1fr;
   }
 

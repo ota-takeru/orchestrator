@@ -172,7 +172,7 @@ func TestStartPlanningCompletesFeatureRequestQueueItem(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)
 	insertProject(t, db.SQL(), "PROJECT-001")
-	created, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して")
+	created, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "UX layout directionを変えたい")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestPlanningWorkerCannotWriteCanonicalArtifacts(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)
 	insertProject(t, db.SQL(), "PROJECT-001")
-	if _, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して"); err != nil {
+	if _, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "UX layout directionを変えたい"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -232,7 +232,7 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)
 	insertProject(t, db.SQL(), "PROJECT-001")
-	created, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して")
+	created, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "UX layout directionを変えたい")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,13 +293,20 @@ func TestConsolidatePlanningCreatesTaskGroupProposal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(decisions) != 1 || decisions[0].Options[0].ID != "promote_task_group_proposal" {
+	if len(decisions) != 0 {
 		t.Fatalf("planning decisions = %#v", decisions)
 	}
-	if _, err := db.ApproveDecision(ctx, DecisionApprovalInput{
-		ProjectID:  "PROJECT-001",
-		DecisionID: decisions[0].ID,
-		Option:     "promote_task_group_proposal",
+	packets, err := db.ListApprovalPackets(ctx, "PROJECT-001", "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packets) != 1 || packets[0].Summary.TaskID != result.ProposedTasks[0].ID || packets[0].RiskLevel != "L2" {
+		t.Fatalf("approval packets = %#v", packets)
+	}
+	if _, err := db.ApproveApprovalPacket(ctx, ApprovalPacketApprovalInput{
+		ProjectID: "PROJECT-001",
+		PacketID:  packets[0].ID,
+		Option:    "approve_recommended",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +365,7 @@ func TestStartWorkProcessesPlanningAndConsolidation(t *testing.T) {
 	ctx := context.Background()
 	db := openMigratedTestDB(t)
 	insertProject(t, db.SQL(), "PROJECT-001")
-	if _, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "Today Viewを追加して"); err != nil {
+	if _, err := db.CreateFeatureRequest(ctx, "PROJECT-001", "UX layout directionを変えたい"); err != nil {
 		t.Fatal(err)
 	}
 

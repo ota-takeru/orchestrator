@@ -88,6 +88,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runPlatform(ctx, args[1:], stdout, stderr)
 	case "inbox":
 		return runInbox(ctx, args[1:], stdout)
+	case "understanding":
+		return runUnderstanding(ctx, args[1:], stdout)
+	case "approval-packets":
+		return runApprovalPackets(ctx, args[1:], stdout)
 	case "decisions":
 		return runDecisions(ctx, args[1:], stdout)
 	case "approve":
@@ -2615,6 +2619,107 @@ func runInboxApprove(ctx context.Context, args []string, stdout io.Writer) int {
 	return 0
 }
 
+func runUnderstanding(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("understanding", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "understanding_failed", err)
+	}
+	defer db.Close()
+	snapshots, err := db.ListUnderstandingSnapshots(ctx, projectID)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "understanding_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"understanding_snapshots": snapshots}, 0)
+	}
+	if len(snapshots) == 0 {
+		fmt.Fprintln(stdout, "No understanding snapshots.")
+		return 0
+	}
+	for _, snapshot := range snapshots {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", snapshot.ID, snapshot.Status, snapshot.Risk.Level)
+	}
+	return 0
+}
+
+func runApprovalPackets(ctx context.Context, args []string, stdout io.Writer) int {
+	if len(args) > 0 && args[0] == "approve" {
+		return runApprovalPacketApprove(ctx, args[1:], stdout)
+	}
+	fs := flag.NewFlagSet("approval-packets", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	status := fs.String("status", "", "approval packet status")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "approval_packets_failed", err)
+	}
+	defer db.Close()
+	packets, err := db.ListApprovalPackets(ctx, projectID, *status)
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitStorage, "approval_packets_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, map[string]any{"approval_packets": packets}, 0)
+	}
+	if len(packets) == 0 {
+		fmt.Fprintln(stdout, "No approval packets.")
+		return 0
+	}
+	for _, packet := range packets {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", packet.ID, packet.Status, packet.RiskLevel, packet.Title)
+	}
+	return 0
+}
+
+func runApprovalPacketApprove(ctx context.Context, args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("approval-packets approve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	projectRoot := fs.String("project-root", "", "project root")
+	dataRoot := fs.String("data-root", "", "orchestrator data root")
+	option := fs.String("option", "approve_recommended", "approval option")
+	notes := fs.String("notes", "", "approval notes")
+	jsonOut := fs.Bool("json", false, "write JSON only to stdout")
+	if err := fs.Parse(args); err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", err)
+	}
+	if fs.NArg() != 1 {
+		return writeError(stdout, *jsonOut, exitValidation, "invalid_arguments", errors.New("approval-packets approve requires PACKET_ID"))
+	}
+	db, projectID, errCode, err := openMigratedProjectDB(ctx, *projectRoot, *dataRoot)
+	if err != nil {
+		return writeError(stdout, *jsonOut, errCode, "approval_packet_approve_failed", err)
+	}
+	defer db.Close()
+	result, err := db.ApproveApprovalPacket(ctx, storage.ApprovalPacketApprovalInput{
+		ProjectID: projectID,
+		PacketID:  fs.Arg(0),
+		Option:    *option,
+		Notes:     *notes,
+	})
+	if err != nil {
+		return writeError(stdout, *jsonOut, exitValidation, "approval_packet_approve_failed", err)
+	}
+	if *jsonOut {
+		return writeJSON(stdout, result, 0)
+	}
+	fmt.Fprintf(stdout, "%s\t%s\n", result.ApprovalPacket.ID, result.ApprovalPacket.Status)
+	return 0
+}
+
 func runDecisions(ctx context.Context, args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("decisions", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -4024,6 +4129,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  devos bootstrap [--project-root PATH] [--data-root PATH] [--adapter fake] [--profile MODE] [--json] [CONCEPT]")
 	fmt.Fprintln(w, "  devos inbox [--project-root PATH] [--data-root PATH] [--status open] [--json]")
 	fmt.Fprintln(w, "  devos inbox approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] INBOX_ID")
+	fmt.Fprintln(w, "  devos understanding [--project-root PATH] [--data-root PATH] [--json]")
+	fmt.Fprintln(w, "  devos approval-packets [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
+	fmt.Fprintln(w, "  devos approval-packets approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--json] PACKET_ID")
 	fmt.Fprintln(w, "  devos decisions [--project-root PATH] [--data-root PATH] [--status STATUS] [--json]")
 	fmt.Fprintln(w, "  devos approve [--project-root PATH] [--data-root PATH] --option OPTION [--notes TEXT] [--remember --memory-key KEY] [--json] DECISION_ID")
 	fmt.Fprintln(w, "  devos memory [--project-root PATH] [--data-root PATH] [--type TYPE] [--json]")

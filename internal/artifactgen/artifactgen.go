@@ -6,15 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/ota-takeru/orchestrator/internal/storage"
 )
 
 type Artifact struct {
 	Path    string
-	Type    storage.ArtifactType
+	Type    string
 	Content []byte
 }
+
+const (
+	ArtifactPRD          = "prd"
+	ArtifactArchitecture = "architecture"
+	ArtifactRoadmap      = "roadmap"
+	ArtifactTaskYAML     = "task_yaml"
+)
 
 type VerificationCommand struct {
 	ID               string
@@ -29,7 +34,7 @@ func BuildInitialArtifacts(root string, concept string, includePRD bool) []Artif
 	if includePRD {
 		artifacts = append(artifacts, Artifact{
 			Path:    ".devagent/prd.md",
-			Type:    storage.ArtifactPRD,
+			Type:    ArtifactPRD,
 			Content: BuildPRDArtifact(concept, commands),
 		})
 	}
@@ -46,9 +51,9 @@ func BuildPlanArtifactsWithCommands(concept string, commands []VerificationComma
 		commands = DefaultSmokeVerificationCommands()
 	}
 	return []Artifact{
-		{Path: ".devagent/architecture.md", Type: storage.ArtifactArchitecture, Content: buildArchitectureArtifact(concept, commands)},
-		{Path: ".devagent/roadmap.yaml", Type: storage.ArtifactRoadmap, Content: buildRoadmapArtifact(concept, commands)},
-		{Path: ".devagent/tasks/TASK-001.yaml", Type: storage.ArtifactTaskYAML, Content: buildTaskYAMLArtifact(concept, commands)},
+		{Path: ".devagent/architecture.md", Type: ArtifactArchitecture, Content: buildArchitectureArtifact(concept, commands)},
+		{Path: ".devagent/roadmap.yaml", Type: ArtifactRoadmap, Content: buildRoadmapArtifact(concept, commands)},
+		{Path: ".devagent/tasks/TASK-001.yaml", Type: ArtifactTaskYAML, Content: buildTaskYAMLArtifact(concept, commands)},
 	}
 }
 

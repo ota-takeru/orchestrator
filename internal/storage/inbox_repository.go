@@ -30,11 +30,12 @@ type InboxApprovalInput struct {
 }
 
 type InboxApprovalResult struct {
-	InboxID       string          `json:"inbox_id"`
-	SourceType    string          `json:"source_type"`
-	SourceID      string          `json:"source_id"`
-	Decision      *DecisionRecord `json:"decision,omitempty"`
-	HumanApproval *ApprovalRecord `json:"human_approval,omitempty"`
+	InboxID        string                        `json:"inbox_id"`
+	SourceType     string                        `json:"source_type"`
+	SourceID       string                        `json:"source_id"`
+	Decision       *DecisionRecord               `json:"decision,omitempty"`
+	HumanApproval  *ApprovalRecord               `json:"human_approval,omitempty"`
+	ApprovalPacket *ApprovalPacketApprovalResult `json:"approval_packet,omitempty"`
 }
 
 func (db *DB) ListInboxItems(ctx context.Context, projectID string, status string) ([]InboxItem, error) {
@@ -121,6 +122,18 @@ func (db *DB) ApproveInboxItem(ctx context.Context, input InboxApprovalInput) (I
 			return InboxApprovalResult{}, err
 		}
 		result.HumanApproval = &approval
+		return result, nil
+	case "approval_packet":
+		packet, err := db.ApproveApprovalPacket(ctx, ApprovalPacketApprovalInput{
+			ProjectID: input.ProjectID,
+			PacketID:  item.SourceID,
+			Option:    input.Option,
+			Notes:     input.Notes,
+		})
+		if err != nil {
+			return InboxApprovalResult{}, err
+		}
+		result.ApprovalPacket = &packet
 		return result, nil
 	default:
 		return InboxApprovalResult{}, fmt.Errorf("inbox source type %s is not supported for approve", item.SourceType)

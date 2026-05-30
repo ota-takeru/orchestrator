@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ota-takeru/orchestrator/internal/planning"
 )
 
 type PlanningRunRecord struct {
@@ -463,6 +465,11 @@ func (db *DB) completeFeaturePlanning(ctx context.Context, projectID string, can
 	if err != nil {
 		return nil, nil, nil, WorkQueueItemRecord{}, err
 	}
+	understanding := planning.GenerateUnderstanding(planning.UnderstandingInput{
+		SourceType: "feature_request",
+		Title:      candidate.FeatureRequest.Title,
+		RawText:    candidate.FeatureRequest.Description,
+	})
 	type plannedArtifact struct {
 		runType      string
 		artifactType string
@@ -470,34 +477,42 @@ func (db *DB) completeFeaturePlanning(ctx context.Context, projectID string, can
 		content      map[string]any
 	}
 	planned := []plannedArtifact{
-		{runType: "feature_detail", artifactType: "feature_detail_report", summary: "Feature request detail captured.", content: map[string]any{
-			"feature_request_id": candidate.FeatureRequest.ID,
-			"title":              candidate.FeatureRequest.Title,
-			"description":        candidate.FeatureRequest.Description,
-			"source":             candidate.FeatureRequest.Source,
-			"priority":           candidate.FeatureRequest.Priority,
-			"summary":            "Feature request captured for consolidation.",
-			"next_step":          "impact_analysis",
+		{runType: "feature_detail", artifactType: "feature_detail_report", summary: "Feature request understanding captured.", content: map[string]any{
+			"feature_request_id":  candidate.FeatureRequest.ID,
+			"title":               candidate.FeatureRequest.Title,
+			"description":         candidate.FeatureRequest.Description,
+			"source":              candidate.FeatureRequest.Source,
+			"priority":            candidate.FeatureRequest.Priority,
+			"interpreted_goal":    understanding.InterpretedGoal,
+			"user_value":          understanding.UserValue,
+			"non_goals":           understanding.NonGoals,
+			"assumptions":         understanding.Assumptions,
+			"open_questions":      understanding.OpenQuestions,
+			"recommended_go_mode": understanding.RecommendedGoMode,
+			"next_step":           "impact_analysis",
 		}},
-		{runType: "impact_analysis", artifactType: "impact_analysis_report", summary: "Impact analysis captured.", content: map[string]any{
-			"feature_request_id": candidate.FeatureRequest.ID,
-			"affected_artifacts": []string{"prd", "architecture", "roadmap", "task_breakdown"},
-			"summary":            "Planning worker did not modify canonical artifacts.",
-			"next_step":          "task_group_proposal",
+		{runType: "impact_analysis", artifactType: "impact_analysis_report", summary: "Impact analysis captured from understanding snapshot.", content: map[string]any{
+			"feature_request_id":    candidate.FeatureRequest.ID,
+			"affected_context":      understanding.AffectedContext,
+			"canonical_write_scope": "planning worker did not modify canonical artifacts",
+			"risk_level":            understanding.Risk.Level,
+			"next_step":             "task_group_proposal",
 		}},
-		{runType: "task_group_proposal", artifactType: "task_group_proposal", summary: "Task group proposal captured.", content: map[string]any{
+		{runType: "task_group_proposal", artifactType: "task_group_proposal", summary: "Feature chunk task group proposal captured.", content: map[string]any{
 			"feature_request_id": candidate.FeatureRequest.ID,
 			"planning_unit":      "feature_chunk",
 			"task_title":         "Implement " + candidate.FeatureRequest.Title,
+			"scope":              approvalPacketSummary(candidate.FeatureRequest.Title, understanding, "", "").ProposedScope,
+			"approval_required":  planning.ApprovalRequired(understanding.Risk.Level),
+			"risk_level":         understanding.Risk.Level,
 			"next_step":          "plan_consolidate",
 		}},
-		{runType: "risk_report", artifactType: "risk_report", summary: "Risk report captured.", content: map[string]any{
-			"feature_request_id": candidate.FeatureRequest.ID,
-			"dependency_risk":    "unknown",
-			"db_schema_risk":     "unknown",
-			"auth_risk":          "unknown",
-			"privacy_risk":       "unknown",
-			"next_step":          "decision_batching",
+		{runType: "risk_report", artifactType: "risk_report", summary: "Risk report captured from deterministic understanding.", content: map[string]any{
+			"feature_request_id":  candidate.FeatureRequest.ID,
+			"risk":                understanding.Risk,
+			"recommended_go_mode": understanding.RecommendedGoMode,
+			"approval_required":   planning.ApprovalRequired(understanding.Risk.Level),
+			"next_step":           "approval_packet",
 		}},
 	}
 	featureRequestID := candidate.FeatureRequest.ID
@@ -542,10 +557,11 @@ func (db *DB) completeFeaturePlanning(ctx context.Context, projectID string, can
 	}
 	decisionRunID := "PLANRUN-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|decision_draft|"+inputHash)
 	decisionContent, err := json.Marshal(map[string]any{
-		"why_human_required":     "Confirm scope before promoting proposed task group into canonical work.",
-		"impact":                 "Planning output may update PRD, roadmap, and task breakdown after approval.",
-		"evidence":               []string{"feature_detail_report", "impact_analysis_report", "risk_report"},
-		"after_approval_actions": []string{"batch_with_related_decisions", "promote_task_group_proposal"},
+		"why_human_required":     decisionDraftReason(understanding.Risk.Level),
+		"impact":                 understanding.AffectedContext,
+		"risk":                   understanding.Risk,
+		"evidence":               []string{"feature_detail_report", "impact_analysis_report", "task_group_proposal", "risk_report"},
+		"after_approval_actions": []string{"resolve_approval_packet", "promote_task_group_when_allowed"},
 	})
 	if err != nil {
 		return nil, nil, nil, WorkQueueItemRecord{}, err
@@ -724,6 +740,23 @@ func decisionDraftIDs(drafts []DecisionDraftRecord) []string {
 	return ids
 }
 
+func decisionDraftReason(level string) string {
+	switch level {
+	case "L0":
+		return "Gate is not required; the draft records why the request can proceed directly."
+	case "L1":
+		return "Gate is report-only; implementation may proceed with explicit assumptions."
+	case "L2":
+		return "Human approval is required before implementation because user-facing scope may change."
+	case "L3":
+		return "Human approval is required before canonical artifact or task updates."
+	case "L4":
+		return "Hard-gate risk was detected; do not create ready work until a human resolves it."
+	default:
+		return "Risk level is unknown; keep human review in front of implementation."
+	}
+}
+
 func (db *DB) markPlanningArtifactStale(ctx context.Context, projectID string, artifactID string, runID string, featureRequestID string, now string) error {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
@@ -789,6 +822,11 @@ func (db *DB) consolidatePlanningArtifact(ctx context.Context, projectID string,
 		stale.UpdatedAt = now
 		return TaskGroupRecord{}, TaskRecord{}, stale, nil
 	}
+	understanding := planning.GenerateUnderstanding(planning.UnderstandingInput{
+		SourceType: "feature_request",
+		Title:      candidate.FeatureRequest.Title,
+		RawText:    candidate.FeatureRequest.Description,
+	})
 	groupID := "TG-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|feature_chunk")
 	taskID := "TASK-" + stableShortHash(projectID+"|"+candidate.FeatureRequest.ID+"|implementation")
 	taskTitle := "Implement " + candidate.FeatureRequest.Title
@@ -810,12 +848,102 @@ func (db *DB) consolidatePlanningArtifact(ctx context.Context, projectID string,
 	if err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
+	packet, found, err := approvalPacketForSourceTx(ctx, tx, projectID, "feature_request", candidate.FeatureRequest.ID)
+	if err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	if !found {
+		intake, err := createUnderstandingIntakeTx(ctx, tx, understandingIntakeInput{
+			ProjectID:  projectID,
+			SourceType: "feature_request",
+			SourceID:   candidate.FeatureRequest.ID,
+			RawText:    candidate.FeatureRequest.Description,
+			Title:      candidate.FeatureRequest.Title,
+		}, now)
+		if err != nil {
+			return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+		}
+		packet = intake.ApprovalPacket
+	}
+	approvedPacket := packet.Status == "approved" || packet.Status == "approved_with_notes"
+	previousPacketStatus := packet.Status
+	hardGate := understanding.Risk.Level == "L4"
+	autoReady := !hardGate && (understanding.Risk.Level == "L0" || understanding.Risk.Level == "L1" || approvedPacket)
+	groupStatus := "proposed"
+	taskStatus := "proposed"
+	featureStatus := "waiting_for_human"
+	if autoReady {
+		groupStatus = "ready"
+		taskStatus = "ready"
+		featureStatus = "planned"
+	}
+	packetStatus := "open"
+	if autoReady {
+		packetStatus = "approved"
+		if approvedPacket {
+			packetStatus = previousPacketStatus
+		}
+	}
+	if hardGate && approvedPacket {
+		packetStatus = previousPacketStatus
+	}
+	packet.Status = packetStatus
+	if !hardGate {
+		packet.Summary = approvalPacketSummary(candidate.FeatureRequest.Title, understanding, groupID, taskID)
+	} else {
+		packet.Summary = approvalPacketSummary(candidate.FeatureRequest.Title, understanding, "", "")
+	}
+	packet.RiskLevel = understanding.Risk.Level
+	packet.Title = approvalPacketTitle(packet.SourceType, candidate.FeatureRequest.Title)
+	packet.RecommendedOption = "approve_recommended"
+	if len(packet.Options) == 0 {
+		packet.Options = approvalPacketOptions()
+	}
+	if err := updateApprovalPacketSummaryTx(ctx, tx, packet, now); err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	if err := acceptPlanningArtifactsForFeature(ctx, tx, projectID, candidate.FeatureRequest.ID, now); err != nil {
+		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+	}
+	if hardGate {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE feature_requests
+SET status = 'waiting_for_human', updated_at = ?
+WHERE project_id = ? AND id = ? AND task_group_id IS NULL`,
+			now, projectID, candidate.FeatureRequest.ID,
+		); err != nil {
+			return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+		}
+		if packet.Status == "open" {
+			if err := upsertApprovalPacketInboxItem(ctx, tx, packet, now); err != nil {
+				return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+			}
+		}
+		if err := insertWorkflowEvent(ctx, tx, projectID, "planning_consolidated", map[string]any{
+			"planning_artifact_id": candidate.Artifact.ID,
+			"feature_request_id":   candidate.FeatureRequest.ID,
+			"approval_packet_id":   packet.ID,
+			"risk_level":           understanding.Risk.Level,
+			"auto_go":              false,
+			"hard_gate":            true,
+		}, now); err != nil {
+			return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+		}
+		committed = true
+		acceptedArtifact := candidate.Artifact
+		acceptedArtifact.Status = "accepted"
+		acceptedArtifact.UpdatedAt = now
+		return TaskGroupRecord{}, TaskRecord{}, acceptedArtifact, nil
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO task_groups(
   id, project_id, feature_request_id, status, title,
   change_request_id, planning_unit, created_at, updated_at
-) VALUES (?, ?, ?, 'proposed', ?, NULL, 'feature_chunk', ?, ?)`,
-		groupID, projectID, candidate.FeatureRequest.ID, candidate.FeatureRequest.Title, now, now,
+) VALUES (?, ?, ?, ?, ?, NULL, 'feature_chunk', ?, ?)`,
+		groupID, projectID, candidate.FeatureRequest.ID, groupStatus, candidate.FeatureRequest.Title, now, now,
 	); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
@@ -823,82 +951,17 @@ INSERT INTO task_groups(
 INSERT INTO tasks(
   id, project_id, task_group_id, status, title, base_branch,
   verification_commands_json, created_at, updated_at
-) VALUES (?, ?, ?, 'proposed', ?, 'main', ?, ?, ?)`,
-		taskID, projectID, groupID, taskTitle, string(verificationCommandsJSON), now, now,
+) VALUES (?, ?, ?, ?, ?, 'main', ?, ?, ?)`,
+		taskID, projectID, groupID, taskStatus, taskTitle, string(verificationCommandsJSON), now, now,
 	); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE feature_requests
-SET task_group_id = ?, status = 'planned', updated_at = ?
+SET task_group_id = ?, status = ?, updated_at = ?
 WHERE project_id = ? AND id = ? AND task_group_id IS NULL`,
-		groupID, now, projectID, candidate.FeatureRequest.ID,
+		groupID, featureStatus, now, projectID, candidate.FeatureRequest.ID,
 	); err != nil {
-		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-UPDATE planning_artifacts
-SET status = 'accepted', updated_at = ?
-WHERE project_id = ? AND feature_request_id = ? AND status = 'proposed'
-  AND artifact_type IN ('feature_detail_report', 'impact_analysis_report', 'task_group_proposal', 'risk_report')`,
-		now, projectID, candidate.FeatureRequest.ID,
-	); err != nil {
-		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-UPDATE decision_report_drafts
-SET status = 'batched', updated_at = ?
-WHERE project_id = ? AND feature_request_id = ? AND status = 'draft'`,
-		now, projectID, candidate.FeatureRequest.ID,
-	); err != nil {
-		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
-	}
-	decisionID := "DEC-" + stableShortHash(projectID+"|planning_scope|"+candidate.FeatureRequest.ID)
-	optionsJSON, err := json.Marshal([]DecisionOption{
-		{ID: "promote_task_group_proposal", Label: "Promote task group proposal"},
-		{ID: "request_changes", Label: "Request planning changes"},
-		{ID: "cancel", Label: "Cancel request"},
-	})
-	if err != nil {
-		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
-	}
-	evidenceJSON, err := json.Marshal(map[string]any{
-		"feature_request_id":         candidate.FeatureRequest.ID,
-		"task_group_id":              groupID,
-		"task_id":                    taskID,
-		"planning_artifact_id":       candidate.Artifact.ID,
-		"recommended_option":         "promote_task_group_proposal",
-		"verification_command_count": len(verificationCommands),
-	})
-	if err != nil {
-		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO decisions(
-  id, project_id, task_id, status, title, options_json, evidence_json, created_at, updated_at
-) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-  status = 'open',
-  options_json = excluded.options_json,
-  evidence_json = excluded.evidence_json,
-  updated_at = excluded.updated_at,
-  resolved_at = NULL,
-  selected_option = NULL`,
-		decisionID, projectID, taskID, "Confirm task group scope for "+candidate.FeatureRequest.Title, string(optionsJSON), string(evidenceJSON), now, now); err != nil {
-		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
-	}
-	inboxID := "INBOX-" + stableShortHash(projectID+"|decision|"+decisionID)
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO inbox_items(
-  id, project_id, task_id, item_type, status, source_type, source_id,
-  dedupe_key, batch_key, priority, title, body, created_at, updated_at
-) VALUES (?, ?, ?, 'human_decision', 'open', 'decision', ?, ?, ?, 70, ?, ?, ?, ?)
-ON CONFLICT(project_id, dedupe_key, status) DO UPDATE SET
-  title = excluded.title,
-  body = excluded.body,
-  updated_at = excluded.updated_at`,
-		inboxID, projectID, taskID, decisionID, "decision:"+decisionID, projectID+":planning_scope",
-		"Confirm task group scope", "Review the proposed feature chunk before it becomes ready work.", now, now); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
 	canonicalCommitQueueID := "WQ-" + stableShortHash(projectID+"|canonical_commit|"+candidate.FeatureRequest.ID+"|"+groupID)
@@ -911,12 +974,24 @@ INSERT INTO work_queue_items(
 	); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
+	if autoReady {
+		if _, err := enqueueTaskImplementationWorkItem(ctx, tx, projectID, taskID, now); err != nil {
+			return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+		}
+	} else if packet.Status == "open" {
+		if err := upsertApprovalPacketInboxItem(ctx, tx, packet, now); err != nil {
+			return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
+		}
+	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "planning_consolidated", map[string]any{
 		"task_group_id":             groupID,
 		"task_id":                   taskID,
 		"planning_artifact_id":      candidate.Artifact.ID,
 		"feature_request_id":        candidate.FeatureRequest.ID,
 		"canonical_commit_queue_id": canonicalCommitQueueID,
+		"approval_packet_id":        packet.ID,
+		"risk_level":                understanding.Risk.Level,
+		"auto_go":                   autoReady,
 	}, now); err != nil {
 		return TaskGroupRecord{}, TaskRecord{}, PlanningArtifactRecord{}, err
 	}
@@ -932,16 +1007,35 @@ INSERT INTO work_queue_items(
 	return TaskGroupRecord{
 			ID:               groupID,
 			FeatureRequestID: &featureRequestID,
-			Status:           "proposed",
+			Status:           groupStatus,
 			Title:            candidate.FeatureRequest.Title,
 			PlanningUnit:     "feature_chunk",
 			CreatedAt:        now,
 			UpdatedAt:        now,
 		}, TaskRecord{
 			ID:     taskID,
-			Status: "proposed",
+			Status: taskStatus,
 			Title:  taskTitle,
 		}, acceptedArtifact, nil
+}
+
+func acceptPlanningArtifactsForFeature(ctx context.Context, tx *sql.Tx, projectID string, featureRequestID string, now string) error {
+	if _, err := tx.ExecContext(ctx, `
+UPDATE planning_artifacts
+SET status = 'accepted', updated_at = ?
+WHERE project_id = ? AND feature_request_id = ? AND status = 'proposed'
+  AND artifact_type IN ('feature_detail_report', 'impact_analysis_report', 'task_group_proposal', 'risk_report')`,
+		now, projectID, featureRequestID,
+	); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+UPDATE decision_report_drafts
+SET status = 'batched', updated_at = ?
+WHERE project_id = ? AND feature_request_id = ? AND status = 'draft'`,
+		now, projectID, featureRequestID,
+	)
+	return err
 }
 
 func (db *DB) buildRollingCheckpointData(ctx context.Context, projectID string, taskID string) (RollingCheckpointData, TaskRecord, *string, *string, error) {

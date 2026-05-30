@@ -16,6 +16,13 @@ async function createProjectFromUI(page: Page, testInfo: TestInfo, name: string,
   return projectRoot;
 }
 
+async function approveUnderstanding(page: Page) {
+  await expect(page.getByRole("heading", { name: "Understanding Review" })).toBeVisible();
+  await page.getByRole("button", { name: "Approve understanding" }).click();
+  await expect(page.getByText("Understanding packet approved.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("4 waiting for review")).toBeVisible();
+}
+
 async function moveToQueuedImplementation(page: Page, testInfo: TestInfo, name: string) {
   const projectRoot = await createProjectFromUI(
     page,
@@ -23,6 +30,7 @@ async function moveToQueuedImplementation(page: Page, testInfo: TestInfo, name: 
     name,
     "A tiny app used to exercise every visible workflow transition button."
   );
+  await approveUnderstanding(page);
   await page.getByRole("button", { name: "Approve all generated plan" }).click();
   await expect(page.getByText("4 artifact(s) approved. Next: create an implementation task.")).toBeVisible();
   await page.getByRole("button", { name: "Create implementation task" }).click();
@@ -57,9 +65,14 @@ test("creating a project selects it and replaces the creation form with its dash
   await expect(page.getByRole("heading", { name: "Project Activity" })).toBeVisible();
   const activityPanel = page.locator("section", { has: page.getByRole("heading", { name: "Project Activity" }) });
   await expect(activityPanel.getByText(projectRoot)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Understanding Review" })).toBeVisible();
+  const understandingPanel = page.locator(".understanding-panel");
+  await expect(understandingPanel.getByText("Initial Product Understanding")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve understanding" })).toBeVisible();
+  await expect(page.getByText("Run fake workflow")).toHaveCount(0);
+  await approveUnderstanding(page);
   await expect(page.getByRole("heading", { name: "Artifacts", exact: true })).toBeVisible();
   await expect(page.getByText("4 waiting for review")).toBeVisible();
-  await expect(page.getByText("Run fake workflow")).toHaveCount(0);
   const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
   await expect(prdCard).toContainText("PRD");
   await prdCard.getByRole("button", { name: "Review content" }).click();
@@ -78,6 +91,7 @@ test("artifact review supports revision requests and manual edits", async ({ pag
   await page.getByPlaceholder("What do you want this project to become?").fill("A project used to review generated markdown artifacts.");
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByText("UI Review Project was created and selected.")).toBeVisible({ timeout: 30_000 });
+  await approveUnderstanding(page);
 
   const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
   await prdCard.getByRole("button", { name: "Review content" }).click();
@@ -135,6 +149,7 @@ test("project setup actions execute from the UI after creation", async ({ page }
   await page.getByPlaceholder("What do you want this project to become?").fill("A project that exercises artifact approval, materialization, and real Codex execution wiring.");
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByText("UI Execution Project was created and selected.")).toBeVisible({ timeout: 30_000 });
+  await approveUnderstanding(page);
 
   await page.getByRole("button", { name: "Approve all generated plan" }).click();
   await expect(page.getByText("4 artifact(s) approved. Next: create an implementation task.")).toBeVisible();
@@ -210,6 +225,7 @@ test("artifact review buttons toggle without creating duplicate workflow actions
     "UI Artifact Buttons Project",
     "A tiny app used to exercise artifact review controls."
   );
+  await approveUnderstanding(page);
 
   const prdCard = page.locator(".artifact-review-card", { hasText: "prd" });
   await expect(prdCard.getByRole("button", { name: "Review content" })).toBeVisible();

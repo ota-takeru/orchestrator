@@ -49,8 +49,11 @@ type WorkQueueItemRecord struct {
 }
 
 type FeatureRequestCreateResult struct {
-	FeatureRequest FeatureRequestRecord `json:"feature_request"`
-	QueueItem      WorkQueueItemRecord  `json:"queue_item"`
+	FeatureRequest        FeatureRequestRecord        `json:"feature_request"`
+	QueueItem             WorkQueueItemRecord         `json:"queue_item"`
+	IntentItem            IntentItemRecord            `json:"intent_item,omitempty"`
+	UnderstandingSnapshot UnderstandingSnapshotRecord `json:"understanding_snapshot,omitempty"`
+	ApprovalPacket        ApprovalPacketRecord        `json:"approval_packet,omitempty"`
 }
 
 func (db *DB) CreateFeatureRequest(ctx context.Context, projectID string, text string) (FeatureRequestCreateResult, error) {
@@ -95,10 +98,21 @@ INSERT INTO work_queue_items(
 	); err != nil {
 		return FeatureRequestCreateResult{}, err
 	}
+	understanding, err := createUnderstandingIntakeTx(ctx, tx, understandingIntakeInput{
+		ProjectID:  projectID,
+		SourceType: "feature_request",
+		SourceID:   requestID,
+		RawText:    body,
+		Title:      body,
+	}, now)
+	if err != nil {
+		return FeatureRequestCreateResult{}, err
+	}
 	if err := insertWorkflowEvent(ctx, tx, projectID, "feature_request_queued", map[string]any{
 		"feature_request_id": requestID,
 		"work_queue_item_id": queueID,
 		"lane":               "planning",
+		"intent_item_id":     understanding.IntentItem.ID,
 	}, now); err != nil {
 		return FeatureRequestCreateResult{}, err
 	}
@@ -131,6 +145,9 @@ INSERT INTO work_queue_items(
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		},
+		IntentItem:            understanding.IntentItem,
+		UnderstandingSnapshot: understanding.UnderstandingSnapshot,
+		ApprovalPacket:        understanding.ApprovalPacket,
 	}, nil
 }
 

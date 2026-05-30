@@ -26,6 +26,7 @@ Local Web UI / CLI
 ```text
 Local UI
   - Concept Chat
+  - Understanding Review
   - Human Inbox
   - Autonomous Run Monitor
   - Decision Report View
@@ -45,6 +46,8 @@ Orchestrator API
   - run profile resolver
   - context builder
   - request intake
+  - understanding generator
+  - approval packet service
   - planner
   - planning lane
   - planning consolidator
@@ -68,6 +71,7 @@ Orchestrator API
 
 Project State
   - SQLite
+  - Intent / Understanding Snapshot / Approval Packet
   - Markdown artifacts
   - YAML task definitions
   - JSONL run logs
@@ -98,6 +102,12 @@ projectは必ず1つのprimary environmentを持ち、canonical Git / merge / ar
 ## Runner Architecture
 
 Runner Protocolの正は [runner-protocol.md](runner-protocol.md) です。Coreは `RunCommandRequest` を作り、Platform Managerが対象environmentのrunnerへdispatchします。command evidenceは `command_events` と `run_artifacts` に保存し、1つのverification runが複数environmentのcommand resultを持てます。
+
+## Understanding First Intake
+
+新規project作成とFeature Request受付は、canonical artifactやTaskを即生成せず、まず `IntentItem -> UnderstandingSnapshot -> ApprovalPacket` を保存します。Understanding generatorは決定論的な初期解釈としてgoal、user value、non-goals、assumptions、open questions、affected context、riskを構造化します。
+
+Approval Packet serviceはrisk gateを適用します。`L0/L1` は証跡保存後にauto-go、`L2/L3` はHuman Inboxで承認待ち、`L4` はhard gateとしてready workを作りません。Approval Packet承認後だけ、初期project artifact生成またはTask Group / Task ready化へ進みます。
 
 ## Recommended Stack
 

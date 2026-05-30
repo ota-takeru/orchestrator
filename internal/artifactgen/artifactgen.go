@@ -56,19 +56,19 @@ func BuildPRDArtifact(concept string, commands []VerificationCommand) []byte {
 	title := conceptTitle(concept)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# PRD\n\n## Product Concept\n\n%s\n\n", markdownParagraph(concept))
-	fmt.Fprintf(&b, "## Goal\n\nDeliver a functional local-first application increment for: %s.\n\n", title)
+	fmt.Fprintf(&b, "## Goal\n\nDeliver a functional first version of: %s.\n\n", title)
 	b.WriteString("## Users\n\n- Primary user: the person or team described by the product concept.\n")
 	b.WriteString("- Reviewer: the project owner who confirms the generated scope before implementation.\n\n")
 	b.WriteString("## Core Workflow\n\n")
 	b.WriteString("1. Open the application and understand the current state quickly.\n")
 	b.WriteString("2. Complete the primary user action described by the concept.\n")
 	b.WriteString("3. See clear feedback for success, failure, and next steps.\n")
-	b.WriteString("4. Return later without losing important local state.\n\n")
+	b.WriteString("4. Return later without losing important progress when persistence is part of the concept.\n\n")
 	b.WriteString("## Acceptance Criteria\n\n")
 	b.WriteString("- The application presents the product concept as a usable first workflow, not a placeholder page.\n")
-	b.WriteString("- The primary user can complete the main action without reading implementation instructions.\n")
+	b.WriteString("- The primary user can complete the main action without needing technical instructions.\n")
 	b.WriteString("- Important states such as empty, loading, success, and error are visible and understandable.\n")
-	b.WriteString("- Local data and generated files stay within the selected project root.\n")
+	b.WriteString("- Data handling follows the concept and does not assume external services, accounts, or integrations unless requested.\n")
 	for _, command := range commands {
 		fmt.Fprintf(&b, "- Verification `%s` passes: `%s`.\n", command.ID, strings.Join(command.Argv, " "))
 	}
@@ -78,15 +78,15 @@ func BuildPRDArtifact(concept string, commands []VerificationCommand) []byte {
 func buildArchitectureArtifact(concept string, commands []VerificationCommand) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Architecture\n\n## Scope\n\n%s\n\n", markdownParagraph(concept))
-	b.WriteString("## Runtime Shape\n\n")
-	b.WriteString("- Backend behavior is implemented in Go when the concept needs server-side logic, local storage, or background work.\n")
-	b.WriteString("- UI behavior is implemented in React and TypeScript when the concept needs an interactive interface.\n")
-	b.WriteString("- Local files and state are kept inside the selected project root unless the user explicitly chooses another location.\n")
-	b.WriteString("- Markdown and YAML planning files remain human-readable project context.\n\n")
-	b.WriteString("## Execution Boundaries\n\n")
-	b.WriteString("- Generated implementation should be scoped to the selected project and avoid unrelated repository changes.\n")
-	b.WriteString("- Verification commands should run from the project root and be reproducible by the project owner.\n")
-	b.WriteString("- Configuration and secrets must not be committed to source control.\n\n")
+	b.WriteString("## Technical Direction\n\n")
+	b.WriteString("- Do not assume a specific framework, language, database, backend, or deployment target unless the concept or existing project files require it.\n")
+	b.WriteString("- Prefer the smallest structure that makes the requested workflow complete, understandable, and easy to change.\n")
+	b.WriteString("- Keep user-facing behavior, state, and data model choices directly tied to the product concept.\n")
+	b.WriteString("- Introduce persistence, networking, background work, or configuration only when needed for the concept.\n\n")
+	b.WriteString("## Boundaries\n\n")
+	b.WriteString("- Generated implementation should stay focused on the requested application behavior.\n")
+	b.WriteString("- Avoid unrelated project changes, generated filler, and assumptions about future features.\n")
+	b.WriteString("- Configuration and secrets should not be committed to source control.\n\n")
 	b.WriteString("## Verification Plan\n\n")
 	for _, command := range commands {
 		fmt.Fprintf(&b, "- `%s`: `%s` from `%s`, required_for_merge=%t.\n", command.ID, strings.Join(command.Argv, " "), command.WorkingDir, command.RequiredForMerge)
@@ -128,6 +128,7 @@ func buildTaskYAMLArtifact(concept string, commands []VerificationCommand) []byt
 	b.WriteString("acceptance_criteria:\n")
 	b.WriteString("  - The first usable workflow from the concept is implemented end to end.\n")
 	b.WriteString("  - The interface exposes clear empty, loading, success, and error states where relevant.\n")
+	b.WriteString("  - The implementation avoids unrelated features and technology assumptions not present in the concept.\n")
 	b.WriteString("  - Required verification commands pass before review.\n")
 	b.WriteString("verification_commands:\n")
 	for _, command := range commands {
@@ -163,7 +164,7 @@ func DefaultSmokeVerificationCommands() []VerificationCommand {
 		{
 			ID:               "implementation-files-present",
 			WorkingDir:       "project_root",
-			Argv:             []string{"node", "-e", "const fs=require('fs'); const dataDir=['orches','trator-data'].join(''); const ignored=new Set(['.git','.devagent','.devagent-worktrees',dataDir]); const entries=fs.readdirSync('.').filter((name)=>!ignored.has(name)); if(entries.length===0){console.error('no implementation files generated'); process.exit(1)} console.log(entries.join('\\n'));"},
+			Argv:             []string{"node", "-e", "const fs=require('fs'); const entries=fs.readdirSync('.', {withFileTypes:true}).filter((entry)=>!entry.name.startsWith('.') && !(entry.isDirectory() && entry.name.endsWith('-data'))).map((entry)=>entry.name); if(entries.length===0){console.error('no implementation files generated'); process.exit(1)} console.log(entries.join('\\n'));"},
 			RequiredForMerge: true,
 		},
 	}
@@ -191,7 +192,7 @@ func conceptSummary(concept string) string {
 	trimmed = strings.TrimPrefix(trimmed, "# Concept")
 	trimmed = strings.TrimSpace(trimmed)
 	if trimmed == "" {
-		return "Build the initial local-first application workflow."
+		return "Build the initial application workflow."
 	}
 	lines := strings.Split(trimmed, "\n")
 	for _, line := range lines {
@@ -200,13 +201,13 @@ func conceptSummary(concept string) string {
 			return line
 		}
 	}
-	return "Build the initial local-first application workflow."
+	return "Build the initial application workflow."
 }
 
 func markdownParagraph(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "Build the initial local-first application workflow."
+		return "Build the initial application workflow."
 	}
 	return value
 }

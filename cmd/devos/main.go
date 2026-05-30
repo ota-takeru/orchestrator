@@ -298,21 +298,19 @@ func buildPRDArtifact(concept string, commands []generatedVerificationCommand) [
 	title := conceptTitle(concept)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# PRD\n\n## Product Concept\n\n%s\n\n", markdownParagraph(concept))
-	fmt.Fprintf(&b, "## Goal\n\nDeliver a functional local-first application increment for: %s.\n\n", title)
-	b.WriteString("## Users\n\n- Primary user: local developer operating DevOS from CLI or the local web UI.\n")
-	b.WriteString("- Reviewer: human approver who needs concise evidence, diffs, and merge readiness.\n\n")
+	fmt.Fprintf(&b, "## Goal\n\nDeliver a functional first version of: %s.\n\n", title)
+	b.WriteString("## Users\n\n- Primary user: the person or team described by the product concept.\n")
+	b.WriteString("- Reviewer: the project owner who confirms the generated scope before implementation.\n\n")
 	b.WriteString("## Core Workflow\n\n")
-	b.WriteString("1. Capture the concept as canonical project context.\n")
-	b.WriteString("2. Generate approved PRD, architecture, roadmap, and task artifacts.\n")
-	b.WriteString("3. Materialize implementation tasks only from approved artifacts.\n")
-	b.WriteString("4. Run implementation in an isolated task worktree.\n")
-	b.WriteString("5. Verify with Orchestrator-owned commands and evidence.\n")
-	b.WriteString("6. Require Human Inbox approval before merge or manual application.\n\n")
+	b.WriteString("1. Open the application and understand the current state quickly.\n")
+	b.WriteString("2. Complete the primary user action described by the concept.\n")
+	b.WriteString("3. See clear feedback for success, failure, and next steps.\n")
+	b.WriteString("4. Return later without losing important progress when persistence is part of the concept.\n\n")
 	b.WriteString("## Acceptance Criteria\n\n")
-	b.WriteString("- The generated task can be materialized only after PRD, architecture, roadmap, and task YAML approval.\n")
-	b.WriteString("- Implementation evidence includes run logs, diff, summary, verification results, and gate results.\n")
-	b.WriteString("- Required verification commands are recorded in Task YAML and reused for merge reverify.\n")
-	b.WriteString("- Human approval is blocked when required verification or gate evidence is missing.\n")
+	b.WriteString("- The application presents the product concept as a usable first workflow, not a placeholder page.\n")
+	b.WriteString("- The primary user can complete the main action without needing technical instructions.\n")
+	b.WriteString("- Important states such as empty, loading, success, and error are visible and understandable.\n")
+	b.WriteString("- Data handling follows the concept and does not assume external services, accounts, or integrations unless requested.\n")
 	for _, command := range commands {
 		fmt.Fprintf(&b, "- Verification `%s` passes: `%s`.\n", command.ID, strings.Join(command.Argv, " "))
 	}
@@ -322,15 +320,15 @@ func buildPRDArtifact(concept string, commands []generatedVerificationCommand) [
 func buildArchitectureArtifact(concept string, commands []generatedVerificationCommand) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Architecture\n\n## Scope\n\n%s\n\n", markdownParagraph(concept))
-	b.WriteString("## Runtime Shape\n\n")
-	b.WriteString("- Backend, CLI, worker, state machine, and evidence storage are implemented in Go.\n")
-	b.WriteString("- UI is implemented in React and TypeScript, served by the local DevOS API when requested.\n")
-	b.WriteString("- SQLite stores canonical state, approvals, runs, command events, verification results, and merge queue records.\n")
-	b.WriteString("- Markdown/YAML artifacts remain human-readable project context and are versioned through the artifact repository.\n\n")
-	b.WriteString("## Execution Boundaries\n\n")
-	b.WriteString("- Coding runs execute in task worktrees, not directly in the canonical worktree.\n")
-	b.WriteString("- Verification commands are executed by Orchestrator runners and are the source of truth for test results.\n")
-	b.WriteString("- Human Inbox items are projections; decisions, approvals, and patch applications remain the source of truth.\n\n")
+	b.WriteString("## Technical Direction\n\n")
+	b.WriteString("- Do not assume a specific framework, language, database, backend, or deployment target unless the concept or existing project files require it.\n")
+	b.WriteString("- Prefer the smallest structure that makes the requested workflow complete, understandable, and easy to change.\n")
+	b.WriteString("- Keep user-facing behavior, state, and data model choices directly tied to the product concept.\n")
+	b.WriteString("- Introduce persistence, networking, background work, or configuration only when needed for the concept.\n\n")
+	b.WriteString("## Boundaries\n\n")
+	b.WriteString("- Generated implementation should stay focused on the requested application behavior.\n")
+	b.WriteString("- Avoid unrelated project changes, generated filler, and assumptions about future features.\n")
+	b.WriteString("- Configuration and secrets should not be committed to source control.\n\n")
 	b.WriteString("## Verification Plan\n\n")
 	for _, command := range commands {
 		fmt.Fprintf(&b, "- `%s`: `%s` from `%s`, required_for_merge=%t.\n", command.ID, strings.Join(command.Argv, " "), command.WorkingDir, command.RequiredForMerge)
@@ -367,9 +365,10 @@ func buildTaskYAMLArtifact(concept string, commands []generatedVerificationComma
 	b.WriteString(yamlQuote(conceptSummary(concept)))
 	b.WriteString("\n")
 	b.WriteString("acceptance_criteria:\n")
-	b.WriteString("  - Implementation diff is captured as an Orchestrator-owned artifact.\n")
-	b.WriteString("  - Required verification commands pass before human review or merge.\n")
-	b.WriteString("  - Decision Gate results are stored before approval.\n")
+	b.WriteString("  - The first usable workflow from the concept is implemented end to end.\n")
+	b.WriteString("  - The interface exposes clear empty, loading, success, and error states where relevant.\n")
+	b.WriteString("  - The implementation avoids unrelated features and technology assumptions not present in the concept.\n")
+	b.WriteString("  - Required verification commands pass before review.\n")
 	b.WriteString("verification_commands:\n")
 	for _, command := range commands {
 		fmt.Fprintf(&b, "  - id: %s\n", yamlQuote(command.ID))
@@ -404,7 +403,7 @@ func defaultSmokeVerificationCommands() []generatedVerificationCommand {
 		{
 			ID:               "implementation-files-present",
 			WorkingDir:       "project_root",
-			Argv:             []string{"node", "-e", "const fs=require('fs'); const dataDir=['orches','trator-data'].join(''); const ignored=new Set(['.git','.devagent','.devagent-worktrees',dataDir]); const entries=fs.readdirSync('.').filter((name)=>!ignored.has(name)); if(entries.length===0){console.error('no implementation files generated'); process.exit(1)} console.log(entries.join('\\n'));"},
+			Argv:             []string{"node", "-e", "const fs=require('fs'); const entries=fs.readdirSync('.', {withFileTypes:true}).filter((entry)=>!entry.name.startsWith('.') && !(entry.isDirectory() && entry.name.endsWith('-data'))).map((entry)=>entry.name); if(entries.length===0){console.error('no implementation files generated'); process.exit(1)} console.log(entries.join('\\n'));"},
 			RequiredForMerge: true,
 		},
 	}
@@ -432,7 +431,7 @@ func conceptSummary(concept string) string {
 	trimmed = strings.TrimPrefix(trimmed, "# Concept")
 	trimmed = strings.TrimSpace(trimmed)
 	if trimmed == "" {
-		return "Build the initial local-first application workflow."
+		return "Build the initial application workflow."
 	}
 	lines := strings.Split(trimmed, "\n")
 	for _, line := range lines {
@@ -441,13 +440,13 @@ func conceptSummary(concept string) string {
 			return line
 		}
 	}
-	return "Build the initial local-first application workflow."
+	return "Build the initial application workflow."
 }
 
 func markdownParagraph(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "Build the initial local-first application workflow."
+		return "Build the initial application workflow."
 	}
 	return value
 }

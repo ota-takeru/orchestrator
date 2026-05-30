@@ -154,6 +154,32 @@ func TestArtifactsListCLI(t *testing.T) {
 	}
 }
 
+func TestCLIPlanArtifactsStayProductNeutral(t *testing.T) {
+	projectRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	initGitRepo(t, projectRoot)
+
+	runCLI(t, "init", "--project-root", projectRoot, "--data-root", dataRoot, "--json", "A tiny habit tracker for students.")
+	runCLI(t, "spec", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	runCLI(t, "plan", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	out := runCLI(t, "artifacts", "--project-root", projectRoot, "--data-root", dataRoot, "--json")
+	var result struct {
+		Artifacts []storage.ArtifactRecord `json:"artifacts"`
+	}
+	decodeJSON(t, out, &result)
+	if len(result.Artifacts) != 4 {
+		t.Fatalf("artifact count = %d", len(result.Artifacts))
+	}
+	for _, artifact := range result.Artifacts {
+		content := strings.ToLower(artifact.Content)
+		for _, disallowed := range []string{"devos", "orchestrator", "human inbox", "implemented in go", "react", "typescript", "sqlite"} {
+			if strings.Contains(content, disallowed) {
+				t.Fatalf("%s leaked into %s:\n%s", disallowed, artifact.Path, artifact.Content)
+			}
+		}
+	}
+}
+
 func TestRequestQueueCLIWorkflow(t *testing.T) {
 	projectRoot := t.TempDir()
 	dataRoot := t.TempDir()

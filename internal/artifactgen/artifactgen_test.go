@@ -12,7 +12,7 @@ func TestInitialArtifactsDescribeUserProductNotOrchestrator(t *testing.T) {
 	}
 	for _, artifact := range artifacts {
 		content := strings.ToLower(string(artifact.Content))
-		for _, disallowed := range []string{"devos", "orchestrator", "human inbox"} {
+		for _, disallowed := range []string{"devos", "orchestrator", "human inbox", "implemented in go", "react", "typescript", "sqlite"} {
 			if strings.Contains(content, disallowed) {
 				t.Fatalf("%s leaked into %s:\n%s", disallowed, artifact.Path, string(artifact.Content))
 			}
